@@ -1,0 +1,84 @@
+.space-item,
+.new-space-button,
+.primary-button,
+.secondary-button,
+.filter-button,
+.connect-agent-button,
+.text-button,
+.job-chip,
+.repo-picker-row,
+.icon-button,
+.filter-control {
+  border: 1px solid #dde3ee;
+  background: #ffffff;
+  color: #172033;
+}
+
+.space-item {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.space-item.active {
+  border-color: #eee9ff;
+  background: #f0edff;
+  color: #4f2ff0;
+}
+
+.new-space-button,
+.primary-button,
+.secondary-button,
+.filter-button,
+.connect-agent-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.new-space-button {
+  margin-top: auto;
+  border-color: #b8aaff;
+  color: #4f2ff0;
+}
+
+.primary-button {
+  border-color: #5b35f5;
+  background: #5b35f5;
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgb(91 53 245 / 20%);
+}
+
+.secondary-button,
+.filter-button {
+  background: #ffffff;
+}
+
+.secondary-button.danger {
+  border-color: #facaca;
+  color: #c82121;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.connect-agent-button:disabled,
+.new-space-button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.connect-agent-button {
+  justify-self: end;
+}

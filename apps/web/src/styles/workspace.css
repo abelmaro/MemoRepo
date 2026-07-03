@@ -1,0 +1,64 @@
+.workspace {
+  min-width: 0;
+  padding: 36px 48px 28px;
+}
+
+.workspace-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 28px;
+}
+
+.workspace-header h1 {
+  margin: 0 0 8px;
+  font-size: 34px;
+  line-height: 1.1;
+}
+
+.workspace-header p {
+  margin: 0;
+  color: #667085;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: flex-end;
+}
+
+.status-strip {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(300px, 1fr) auto;
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 20px;
+}
+
+.status-panel {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 88px;
+  padding: 18px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.status-panel svg {
+  color: #5b35f5;
+}
+
+.status-panel div {
+  display: grid;
+  gap: 5px;
+}
+
+.status-panel span {
+  color: #667085;
+  font-size: 14px;
+}

@@ -1,0 +1,20 @@
+.removed-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+  padding: 12px 14px;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+
+.removed-row > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.removed-row span {
+  color: #667085;
+  font-size: 13px;
+}

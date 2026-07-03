@@ -1,0 +1,30 @@
+{
+  "name": "@memorepo/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "memorepo-mcp": "dist/cli/mcp.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "mcp": "node dist/cli/mcp.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.1",
+    "better-sqlite3": "^12.2.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.5.0",
+    "zod": "^4.0.17"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.17.2",
+    "tsx": "^4.20.4",
+    "typescript": "^5.9.2"
+  }
+}

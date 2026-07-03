@@ -1,0 +1,53 @@
+.mcp-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 18px 22px 0;
+}
+
+.mcp-tabs button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  text-transform: capitalize;
+}
+
+.mcp-tabs button.active {
+  border-color: #5b35f5;
+  color: #4f2ff0;
+}
+
+.mcp-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mcp-config-state {
+  color: #667085;
+  font-size: 13px;
+}
+
+.mcp-test-result {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #d9eadf;
+  border-radius: 8px;
+  background: #f6fbf7;
+  color: #17623d;
+}
+
+.mcp-test-result.error {
+  border-color: #facaca;
+  background: #fffafa;
+  color: #b42318;
+}
+
+.mcp-test-result span {
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.8;
+}

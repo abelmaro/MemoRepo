@@ -1,0 +1,47 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: 288px 1fr;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  height: 100vh;
+  padding: 32px 18px;
+  border-right: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px 24px;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.brand-mark {
+  display: flex;
+  color: #5b35f5;
+}
+
+.sidebar-section-title {
+  padding: 0 10px;
+  font-size: 14px;
+  color: #475569;
+}
+
+.space-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}

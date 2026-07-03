@@ -1,0 +1,132 @@
+@media (max-width: 1120px) and (min-width: 981px) {
+  .repo-row {
+    grid-template-columns: minmax(260px, 1fr) minmax(170px, 190px);
+  }
+
+  .repo-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .repo-badges {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .branch-select {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .repo-actions {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+  }
+
+  .workspace {
+    padding: 24px;
+  }
+
+  .workspace-header,
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+  }
+
+  .header-actions .primary-button,
+  .header-actions .secondary-button {
+    width: 100%;
+    min-width: 0;
+    padding: 0 12px;
+  }
+
+  .search-box {
+    flex: none;
+    width: 100%;
+  }
+
+  .filter-control {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .filter-control button {
+    flex: 1 1 auto;
+  }
+
+  .toolbar > .secondary-button,
+  .connect-agent-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .status-strip,
+  .preflight-grid,
+  .diagnostics-grid,
+  .lifecycle-grid,
+  .repo-row,
+  .removed-row,
+  .connection-row {
+    grid-template-columns: 1fr;
+  }
+
+  .repo-actions {
+    align-self: start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .lifecycle-card-wide {
+    grid-row: auto;
+  }
+
+  .lifecycle-card-header,
+  .compact-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compact-controls input,
+  .compact-controls .secondary-button {
+    width: 100%;
+  }
+
+  .mcp-action-row .secondary-button {
+    width: 100%;
+  }
+
+  .job-terminal-row {
+    grid-template-columns: 70px 80px minmax(0, 1fr);
+  }
+
+  .job-terminal-error {
+    grid-column: 3;
+  }
+}
+
+@media (max-width: 440px) {
+  .header-actions {
+    grid-template-columns: 1fr;
+  }
+}

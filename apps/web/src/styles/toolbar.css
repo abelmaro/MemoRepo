@@ -1,0 +1,67 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.search-box {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 280px;
+  width: min(420px, 100%);
+  min-height: 52px;
+  padding: 0 18px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #667085;
+}
+
+.filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 52px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+
+.filter-control svg {
+  color: #667085;
+}
+
+.filter-control button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  font-weight: 800;
+}
+
+.filter-control button.active {
+  background: #f0edff;
+  color: #4f2ff0;
+}
+
+.filter-control.compact {
+  width: max-content;
+  min-height: 42px;
+  padding: 4px 6px;
+}
+
+.search-box input,
+.form-stack input,
+.inline-form input,
+.branch-select select {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: #111827;
+  background: transparent;
+}

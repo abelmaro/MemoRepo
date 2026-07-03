@@ -1,0 +1,73 @@
+.preflight-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preflight-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.preflight-header h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.preflight-header span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.preflight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preflight-check {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preflight-check-pass svg {
+  color: #16823a;
+}
+
+.preflight-check-warn svg {
+  color: #986800;
+}
+
+.preflight-check-fail svg {
+  color: #c82121;
+}
+
+.preflight-check div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.preflight-check span,
+.preflight-check small {
+  color: #667085;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.preflight-check small {
+  color: #7a5200;
+}

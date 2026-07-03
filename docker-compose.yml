@@ -1,0 +1,46 @@
+services:
+  api:
+    container_name: memorepo-api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        CODEBASE_MEMORY_MCP_VERSION: ${CODEBASE_MEMORY_MCP_VERSION:-v0.8.1}
+    environment:
+      NODE_ENV: development
+      API_HOST: 0.0.0.0
+      API_PORT: 8787
+      GH_TOKEN: ${GH_TOKEN:?Set GH_TOKEN in .env}
+      MEMOREPO_HOME: /var/lib/memorepo
+      MEMOREPO_API_CONTAINER_NAME: ${MEMOREPO_API_CONTAINER_NAME:-memorepo-api}
+      MEMOREPO_PUBLIC_API_URL: http://127.0.0.1:${API_PORT:-8787}
+      FRONTEND_ORIGIN: http://127.0.0.1:${WEB_PORT:-5173}
+    volumes:
+      - ${MEMOREPO_HOME:-./.memorepo}:/var/lib/memorepo
+    ports:
+      - "127.0.0.1:${API_PORT:-8787}:8787"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  web:
+    container_name: memorepo-web
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: http://127.0.0.1:${API_PORT:-8787}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
+    depends_on:
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

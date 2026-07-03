@@ -1,0 +1,23 @@
+.text-button {
+  border: 0;
+  color: #4f2ff0;
+  font-weight: 700;
+}
+
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-toggle > svg {
+  flex-shrink: 0;
+  color: #667085;
+}

@@ -1,0 +1,110 @@
+.jobs-panel,
+.removed-panel {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.jobs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.jobs-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.jobs-terminal {
+  display: grid;
+  gap: 2px;
+  max-height: 136px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.job-terminal-row {
+  display: grid;
+  grid-template-columns: 74px 84px minmax(160px, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #d1d5db;
+  text-align: left;
+}
+
+.job-terminal-row:hover {
+  background: #1f2937;
+}
+
+.job-terminal-time {
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.job-terminal-status {
+  overflow: hidden;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.job-terminal-status-succeeded {
+  color: #86efac;
+}
+
+.job-terminal-status-running {
+  color: #facc15;
+}
+
+.job-terminal-status-failed {
+  color: #fca5a5;
+}
+
+.job-terminal-status-cancelled,
+.job-terminal-status-pending,
+.job-terminal-status-skipped {
+  color: #cbd5e1;
+}
+
+.job-terminal-type {
+  overflow: hidden;
+  color: #e5e7eb;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-terminal-error {
+  overflow: hidden;
+  color: #fca5a5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-terminal-empty {
+  padding: 6px 8px;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.removed-list {
+  display: grid;
+  gap: 10px;
+}

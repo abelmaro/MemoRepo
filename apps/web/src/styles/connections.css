@@ -1,0 +1,27 @@
+.connection-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 22px 22px;
+}
+
+.connection-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 14px;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+
+.connection-row > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.connection-row span,
+.empty-inline {
+  color: #667085;
+  font-size: 13px;
+}

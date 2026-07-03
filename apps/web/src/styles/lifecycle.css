@@ -1,0 +1,121 @@
+.lifecycle-panel {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.lifecycle-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.4fr) minmax(260px, 0.8fr);
+  gap: 12px;
+}
+
+.lifecycle-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+
+.lifecycle-card-wide {
+  grid-row: span 2;
+}
+
+.lifecycle-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.lifecycle-card-header h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.lifecycle-card-header span,
+.snapshot-row span,
+.snapshot-row small,
+.maintenance-metrics span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.snapshot-list {
+  display: grid;
+  gap: 8px;
+  max-height: 256px;
+  overflow: auto;
+}
+
+.snapshot-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+
+.snapshot-row > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.snapshot-row small {
+  color: #9f1d1d;
+  overflow-wrap: anywhere;
+}
+
+.compact-controls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+
+.compact-controls label {
+  display: grid;
+  gap: 5px;
+  min-width: 72px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.compact-controls input {
+  width: 78px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #dde3ee;
+  border-radius: 8px;
+}
+
+.maintenance-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.maintenance-metrics span {
+  min-height: 34px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f7f8fb;
+}
+
+.lifecycle-actions {
+  justify-content: space-between;
+}
+
+.danger-zone {
+  border-color: #facaca;
+  background: #fffafa;
+}

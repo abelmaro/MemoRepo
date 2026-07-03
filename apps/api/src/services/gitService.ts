@@ -1,0 +1,124 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { AppConfig } from "../config.js";
+import { assertInside } from "../domain/paths.js";
+import { runProcess } from "./process.js";
+
+export interface GitCommandContext {
+  cwd?: string | undefined;
+  onOutput?: ((line: string) => void) | undefined;
+  timeoutMs?: number | undefined;
+}
+
+export class GitService {
+  private askPassPath: string | null = null;
+
+  constructor(private readonly config: AppConfig) {}
+
+  async cloneRepository(remoteUrl: string, targetPath: string, context: GitCommandContext = {}): Promise<void> {
+    const safeTarget = assertInside(this.config.memorepoHome, targetPath);
+
+    if (fs.existsSync(path.join(safeTarget, ".git"))) {
+      context.onOutput?.("Repository already cloned; keeping existing clone.");
+      return;
+    }
+
+    if (fs.existsSync(safeTarget) && fs.readdirSync(safeTarget).length > 0) {
+      throw new Error(`Target directory exists and is not a Git clone: ${safeTarget}`);
+    }
+
+    fs.mkdirSync(path.dirname(safeTarget), { recursive: true });
+    await this.git(["clone", remoteUrl, safeTarget], { onOutput: context.onOutput, timeoutMs: context.timeoutMs ?? 30 * 60_000 });
+  }
+
+  async fetchBranches(repoPath: string, context: GitCommandContext = {}): Promise<string[]> {
+    await this.git(["fetch", "--prune", "origin"], { ...context, cwd: repoPath, timeoutMs: context.timeoutMs ?? 10 * 60_000 });
+    const result = await this.git(
+      ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
+      { ...context, cwd: repoPath, timeoutMs: context.timeoutMs ?? 60_000 }
+    );
+
+    return result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && line !== "origin/HEAD")
+      .map((line) => line.replace(/^origin\//, ""))
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  async checkoutRemoteBranch(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<string> {
+    if (branch.includes("..") || branch.startsWith("-") || branch.trim().length === 0) {
+      throw new Error("Invalid branch name");
+    }
+
+    await this.fetchBranches(repoPath, context);
+    await this.git(["checkout", "-B", branch, `origin/${branch}`], {
+      ...context,
+      cwd: repoPath,
+      timeoutMs: context.timeoutMs ?? 10 * 60_000
+    });
+    await this.git(["reset", "--hard", `origin/${branch}`], {
+      ...context,
+      cwd: repoPath,
+      timeoutMs: context.timeoutMs ?? 5 * 60_000
+    });
+    await this.git(["clean", "-fd"], {
+      ...context,
+      cwd: repoPath,
+      timeoutMs: context.timeoutMs ?? 5 * 60_000
+    });
+    const result = await this.git(["rev-parse", "HEAD"], { ...context, cwd: repoPath, timeoutMs: 60_000 });
+    return result.stdout.trim();
+  }
+
+  async currentCommit(repoPath: string, context: GitCommandContext = {}): Promise<string> {
+    const result = await this.git(["rev-parse", "HEAD"], { ...context, cwd: repoPath, timeoutMs: 60_000 });
+    return result.stdout.trim();
+  }
+
+  private async git(args: string[], context: GitCommandContext) {
+    const askPassPath = this.ensureAskPass();
+    const result = await runProcess({
+      command: "git",
+      args,
+      cwd: context.cwd,
+      timeoutMs: context.timeoutMs,
+      sensitiveValues: [this.config.githubToken],
+      onOutput: context.onOutput,
+      env: {
+        GIT_ASKPASS: askPassPath,
+        GIT_TERMINAL_PROMPT: "0",
+        GH_TOKEN: this.config.githubToken
+      }
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`);
+    }
+
+    return result;
+  }
+
+  private ensureAskPass(): string {
+    if (this.askPassPath) {
+      return this.askPassPath;
+    }
+
+    const scriptPath = path.join(this.config.binDir, "git-askpass.sh");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "#!/bin/sh",
+        "case \"$1\" in",
+        "  *Username*) printf '%s\\n' 'x-access-token' ;;",
+        "  *) printf '%s\\n' \"$GH_TOKEN\" ;;",
+        "esac",
+        ""
+      ].join("\n"),
+      { mode: 0o700 }
+    );
+    fs.chmodSync(scriptPath, 0o700);
+    this.askPassPath = scriptPath;
+    return scriptPath;
+  }
+}
