@@ -12,10 +12,23 @@ Create an environment file:
 cp .env.example .env
 ```
 
-Edit `.env` and set:
+Generate a random control token, for example:
+
+```bash
+openssl rand -hex 32
+```
+
+PowerShell 7:
+
+```powershell
+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+```
+
+Edit `.env` and set both secrets:
 
 ```bash
 GH_TOKEN=your-github-token
+MEMOREPO_CONTROL_TOKEN=your-random-control-token
 ```
 
 For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
@@ -35,6 +48,8 @@ Open:
 ```text
 http://127.0.0.1:5173
 ```
+
+Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it only in `sessionStorage` for that browser tab.
 
 The dashboard preflight panel should show the local runtime checks. Fix failed checks before adding repositories.
 
@@ -138,6 +153,7 @@ MemoRepo supports:
 - retrying failed, skipped, or cancelled jobs;
 - cancelling pending jobs before they start;
 - automatically marking abandoned running jobs as failed after an API restart;
+- returning the existing active job when the submitted job type, scope, dependency, and canonical payload match exactly;
 - configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`.
 
 Running jobs are not interrupted in place. If a Git or indexing command is already executing, let it finish and retry if needed.

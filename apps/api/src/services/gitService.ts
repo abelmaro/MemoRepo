@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import { assertInside } from "../domain/paths.js";
-import { runProcess } from "./process.js";
+import { createSafeProcessEnvironment, runProcess } from "./process.js";
 
 export interface GitCommandContext {
   cwd?: string | undefined;
@@ -86,10 +86,12 @@ export class GitService {
       sensitiveValues: [this.config.githubToken],
       onOutput: context.onOutput,
       env: {
+        ...createSafeProcessEnvironment(),
         GIT_ASKPASS: askPassPath,
         GIT_TERMINAL_PROMPT: "0",
         GH_TOKEN: this.config.githubToken
-      }
+      },
+      inheritEnv: false
     });
 
     if (result.exitCode !== 0) {

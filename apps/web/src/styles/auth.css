@@ -1,0 +1,102 @@
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  color: #475569;
+  background:
+    radial-gradient(circle at top left, rgb(99 102 241 / 12%), transparent 35rem),
+    #f7f8fb;
+}
+
+.auth-card {
+  width: min(100%, 29rem);
+  display: grid;
+  gap: 1.25rem;
+  padding: 2rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 1.5rem 4rem rgb(15 23 42 / 10%);
+}
+
+.auth-icon {
+  width: 3rem;
+  height: 3rem;
+  display: grid;
+  place-items: center;
+  border-radius: 0.8rem;
+  color: #4338ca;
+  background: #eef2ff;
+}
+
+.auth-eyebrow {
+  margin: 0 0 0.35rem;
+  color: #6366f1;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.75rem;
+}
+
+.auth-copy {
+  margin: 0.75rem 0 0;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.auth-copy code {
+  color: #334155;
+  font-size: 0.86em;
+}
+
+.auth-field {
+  display: grid;
+  gap: 0.45rem;
+  color: #334155;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.auth-field input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.65rem;
+  color: #0f172a;
+  background: #fff;
+}
+
+.auth-field input:focus {
+  outline: 3px solid rgb(99 102 241 / 18%);
+  border-color: #6366f1;
+}
+
+.auth-submit {
+  justify-content: center;
+}
+
+.auth-error {
+  margin: -0.35rem 0 0;
+  color: #b91c1c;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.auth-spinner {
+  animation: auth-spin 0.9s linear infinite;
+}
+
+@keyframes auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -1,4 +1,12 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8787";
+const CONTROL_TOKEN_STORAGE_KEY = "memorepo.control-token";
+const CONTROL_UNAUTHORIZED_EVENT = "memorepo:control-unauthorized";
+const CSRF_HEADER = "x-memorepo-csrf";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const DEFAULT_EVENT_STREAM_RETRY_MS = 1_000;
+const MIN_EVENT_STREAM_RETRY_MS = 1_000;
+const MAX_EVENT_STREAM_RETRY_MS = 60_000;
+let inMemoryControlToken: string | null = null;
 
 export interface Space {
   id: string;
@@ -169,9 +177,19 @@ export interface MaintenanceResult {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const controlToken = getControlToken();
+  if (!controlToken) {
+    notifyControlUnauthorized();
+    throw new Error("MemoRepo control authentication is required");
+  }
+
   const headers = new Headers(init?.headers);
+  headers.set("authorization", `Bearer ${controlToken}`);
   if (init?.body != null && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (!SAFE_METHODS.has((init?.method ?? "GET").toUpperCase())) {
+    headers.set(CSRF_HEADER, "1");
   }
 
   const response = await fetch(`${API_URL}${path}`, {
@@ -179,12 +197,69 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers
   });
 
+  if (response.status === 401) {
+    clearControlToken();
+    notifyControlUnauthorized();
+  }
+
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${response.status}`);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return response.json() as Promise<T>;
+}
+
+export function getControlToken(): string | null {
+  try {
+    const storedToken = window.sessionStorage.getItem(CONTROL_TOKEN_STORAGE_KEY);
+    if (storedToken !== null) {
+      inMemoryControlToken = storedToken;
+    }
+    return storedToken ?? inMemoryControlToken;
+  } catch {
+    return inMemoryControlToken;
+  }
+}
+
+export function setControlToken(token: string): void {
+  inMemoryControlToken = token;
+  try {
+    window.sessionStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // The in-memory copy keeps the current tab usable when storage is unavailable.
+  }
+}
+
+export function clearControlToken(): void {
+  inMemoryControlToken = null;
+  try {
+    window.sessionStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in hardened browser modes.
+  }
+}
+
+export async function validateControlToken(token: string): Promise<boolean> {
+  const response = await fetch(`${API_URL}/api/auth/status`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (response.status === 401) {
+    return false;
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(typeof body.error === "string" ? body.error : `Authentication check failed: ${response.status}`);
+  }
+  return true;
+}
+
+export function onControlUnauthorized(listener: () => void): () => void {
+  window.addEventListener(CONTROL_UNAUTHORIZED_EVENT, listener);
+  return () => window.removeEventListener(CONTROL_UNAUTHORIZED_EVENT, listener);
 }
 
 export async function mcpJsonRpc<T>(spaceSlug: string, token: string, body: Record<string, unknown>): Promise<McpJsonRpcResponse<T>> {
@@ -210,8 +285,10 @@ export async function mcpJsonRpc<T>(spaceSlug: string, token: string, body: Reco
   return payload;
 }
 
-export function eventSourceUrl(path: string): string {
-  return `${API_URL}${path}`;
+export function subscribeToJobEvents(path: string, onEvent: (event: JobEvent) => void, onError?: (error: Error) => void): () => void {
+  const controller = new AbortController();
+  void streamJobEvents(path, onEvent, onError, controller.signal);
+  return () => controller.abort();
 }
 
 export function fullName(repository: GitHubRepository): string {
@@ -238,4 +315,131 @@ export interface McpToolsListResult {
     description?: string;
     inputSchema?: Record<string, unknown>;
   }>;
+}
+
+async function streamJobEvents(
+  path: string,
+  onEvent: (event: JobEvent) => void,
+  onError: ((error: Error) => void) | undefined,
+  signal: AbortSignal
+): Promise<void> {
+  while (!signal.aborted) {
+    let retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+
+    try {
+      const controlToken = getControlToken();
+      if (!controlToken) {
+        notifyControlUnauthorized();
+        return;
+      }
+
+      const response = await fetch(`${API_URL}${path}`, {
+        headers: {
+          accept: "text/event-stream",
+          authorization: `Bearer ${controlToken}`
+        },
+        signal
+      });
+
+      if (response.status === 401) {
+        clearControlToken();
+        notifyControlUnauthorized();
+        return;
+      }
+      if (response.status === 429) {
+        retryDelayMs = retryAfterDelayMs(response.headers.get("retry-after"));
+        throw new Error(`Job event stream rate limited; retrying in ${Math.ceil(retryDelayMs / 1_000)} seconds`);
+      }
+      if (!response.ok || !response.body) {
+        throw new Error(`Job event stream failed: ${response.status}`);
+      }
+
+      await consumeEventStream(response.body, onEvent, signal);
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+
+    await waitForRetry(retryDelayMs, signal);
+  }
+}
+
+function retryAfterDelayMs(value: string | null, nowMs = Date.now()): number {
+  const retryAfter = value?.trim();
+  let delayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+
+  if (retryAfter && /^\d+$/.test(retryAfter)) {
+    const seconds = Number(retryAfter);
+    delayMs = Number.isFinite(seconds) ? seconds * 1_000 : MAX_EVENT_STREAM_RETRY_MS;
+  } else if (retryAfter) {
+    const retryAtMs = Date.parse(retryAfter);
+    if (Number.isFinite(retryAtMs)) {
+      delayMs = retryAtMs - nowMs;
+    }
+  }
+
+  return Math.min(MAX_EVENT_STREAM_RETRY_MS, Math.max(MIN_EVENT_STREAM_RETRY_MS, Math.ceil(delayMs)));
+}
+
+function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const finish = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(finish, delayMs);
+    const onAbort = () => {
+      window.clearTimeout(timeoutId);
+      finish();
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function consumeEventStream(
+  stream: ReadableStream<Uint8Array>,
+  onEvent: (event: JobEvent) => void,
+  signal: AbortSignal
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (!signal.aborted) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        return;
+      }
+      buffer += decoder.decode(chunk.value, { stream: true });
+
+      let separator = /\r?\n\r?\n/.exec(buffer);
+      while (separator) {
+        const block = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator[0].length);
+        const data = block
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (data) {
+          onEvent(JSON.parse(data) as JobEvent);
+        }
+        separator = /\r?\n\r?\n/.exec(buffer);
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+function notifyControlUnauthorized(): void {
+  window.dispatchEvent(new Event(CONTROL_UNAUTHORIZED_EVENT));
 }

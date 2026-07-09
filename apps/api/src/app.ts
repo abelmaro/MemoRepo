@@ -3,7 +3,13 @@ import cors from "@fastify/cors";
 import { ZodError } from "zod";
 import { corsOrigins } from "./config.js";
 import { NotFoundError } from "./domain/errors.js";
-import { registerHttpBoundary } from "./httpBoundary.js";
+import { registerHttpBoundary, registerHttpContentBoundary } from "./httpBoundary.js";
+import {
+  loadHttpSecurityConfig,
+  registerControlAccessBoundary,
+  registerRateLimiting,
+  type HttpSecurityConfig
+} from "./httpSecurity.js";
 import { decorateServices, type AppServices } from "./services/appServices.js";
 import { githubRoutes } from "./routes/githubRoutes.js";
 import { jobRoutes } from "./routes/jobRoutes.js";
@@ -11,19 +17,25 @@ import { mcpRoutes } from "./routes/mcpRoutes.js";
 import { spaceRoutes } from "./routes/spaceRoutes.js";
 import { systemRoutes } from "./routes/systemRoutes.js";
 
-export async function createApp(services: AppServices) {
-  const app = Fastify({ logger: true });
+export async function createApp(services: AppServices, securityConfig: HttpSecurityConfig = loadHttpSecurityConfig()) {
+  const app = Fastify({
+    trustProxy: false,
+    logger: {
+      redact: ["req.headers.authorization", "req.headers.x-memorepo-csrf"]
+    }
+  });
   app.setErrorHandler((error: unknown, _request, reply) => {
     const { statusCode, message } = mapRouteError(error);
     if (statusCode >= 500) {
       app.log.error({ err: error }, message);
-    } else {
+    } else if (statusCode !== 429) {
       app.log.warn({ err: error }, message);
     }
     reply.code(statusCode).send({ error: message });
   });
 
   await decorateServices(app, services);
+  // Reject hostile browser and Host traffic before shared per-IP budgets so another origin cannot exhaust the local quota.
   registerHttpBoundary(app, services.config);
   app.addHook("onClose", async () => {
     await services.cbm.close();
@@ -32,8 +44,13 @@ export async function createApp(services: AppServices) {
   await app.register(cors, {
     origin: corsOrigins(services.config),
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["content-type", "authorization"]
+    allowedHeaders: ["content-type", "authorization", "x-memorepo-csrf"],
+    exposedHeaders: ["retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"]
   });
+
+  await registerRateLimiting(app, securityConfig);
+  registerControlAccessBoundary(app, securityConfig);
+  registerHttpContentBoundary(app);
 
   await app.register(systemRoutes);
   await app.register(githubRoutes);

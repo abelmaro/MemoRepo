@@ -20,6 +20,39 @@ export interface RunProcessOptions {
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000;
+const SAFE_PROCESS_ENVIRONMENT_ALLOWLIST = [
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ"
+] as const;
+
+export function createSafeProcessEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  const sourceEntries = Object.entries(source);
+
+  for (const allowedName of SAFE_PROCESS_ENVIRONMENT_ALLOWLIST) {
+    const entry = sourceEntries.find(([name]) => name.toUpperCase() === allowedName);
+    if (entry?.[1] !== undefined) {
+      environment[allowedName] = entry[1];
+    }
+  }
+
+  return environment;
+}
 
 export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
   const sensitiveValues = options.sensitiveValues ?? [];

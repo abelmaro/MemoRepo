@@ -5,6 +5,7 @@ import { z } from "zod";
 
 export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/health", async () => ({ ok: true }));
+  app.get("/api/auth/status", async (_request, reply) => reply.code(204).send());
 
   app.get("/api/system", async () => {
     const github = await app.services.github

@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AppDatabase } from "../db/connection.js";
+import { publicJobSelectColumns } from "../db/jobProjection.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
 import { createId } from "../domain/ids.js";
@@ -62,35 +64,78 @@ export class JobRunner {
 
   enqueue(input: EnqueueJobInput) {
     const timestamp = nowIso();
-    const record = {
+    const payloadJson = stableJsonStringify(input.payload ?? {});
+    const record: JobRecord = {
       id: createId("job"),
       type: input.type,
       status: "pending",
       spaceId: input.spaceId ?? null,
       spaceRepositoryId: input.spaceRepositoryId ?? null,
       dependsOnJobId: input.dependsOnJobId ?? null,
-      payloadJson: JSON.stringify(input.payload ?? {}),
+      payloadJson,
       error: null,
       createdAt: timestamp,
       startedAt: null,
       finishedAt: null
     };
 
-    insertRecord(this.database, "jobs", record);
-    this.writeEvent(record.id, "status", "pending");
+    const deduplicationKey = createJobDeduplicationKey(record);
+    const enqueueTransaction = this.database.sqlite.transaction(() => {
+      const existing = this.findActiveDuplicate(record);
+      if (existing) {
+        return { created: false, job: toEnqueuedJob(existing) };
+      }
+
+      insertRecord(this.database, "jobs", { ...record, deduplicationKey });
+      return { created: true, job: record };
+    });
+    const result = enqueueTransaction.immediate();
+
+    if (result.created) {
+      this.writeEvent(result.job.id, "status", "pending");
+    }
     void this.tick();
-    return record;
+    return result.job;
+  }
+
+  private findActiveDuplicate(record: JobRecord): JobRow | null {
+    const candidates = this.database.sqlite
+      .prepare(
+        `
+        SELECT *
+        FROM jobs
+        WHERE status IN ('pending', 'running')
+          AND type = @type
+          AND space_id IS @spaceId
+          AND space_repository_id IS @spaceRepositoryId
+          AND depends_on_job_id IS @dependsOnJobId
+        ORDER BY created_at ASC, id ASC
+      `
+      )
+      .all(record) as JobRow[];
+
+    return candidates.find((candidate) => payloadsMatch(candidate.payload_json, record.payloadJson)) ?? null;
   }
 
   getJob(jobId: string) {
-    return this.database.sqlite.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId);
+    return this.database.sqlite
+      .prepare(
+        `
+        SELECT
+          ${publicJobSelectColumns()}
+        FROM jobs
+        WHERE id = ?
+      `
+      )
+      .get(jobId);
   }
 
   getJobDependency(jobId: string) {
     return this.database.sqlite
       .prepare(
         `
-        SELECT d.*
+        SELECT
+          ${publicJobSelectColumns("d")}
         FROM jobs j
         JOIN jobs d ON d.id = j.depends_on_job_id
         WHERE j.id = ?
@@ -100,7 +145,17 @@ export class JobRunner {
   }
 
   getJobDependents(jobId: string) {
-    return this.database.sqlite.prepare("SELECT * FROM jobs WHERE depends_on_job_id = ? ORDER BY created_at ASC").all(jobId);
+    return this.database.sqlite
+      .prepare(
+        `
+        SELECT
+          ${publicJobSelectColumns()}
+        FROM jobs
+        WHERE depends_on_job_id = ?
+        ORDER BY created_at ASC
+      `
+      )
+      .all(jobId);
   }
 
   getJobEvents(jobId: string) {
@@ -322,4 +377,76 @@ interface JobRow {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+interface JobRecord {
+  id: string;
+  type: string;
+  status: JobStatus;
+  spaceId: string | null;
+  spaceRepositoryId: string | null;
+  dependsOnJobId: string | null;
+  payloadJson: string;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+function createJobDeduplicationKey(job: JobRecord): string {
+  return createHash("sha256")
+    .update(JSON.stringify([job.type, job.spaceId, job.spaceRepositoryId, job.dependsOnJobId, job.payloadJson]))
+    .digest("hex");
+}
+
+function payloadsMatch(storedPayloadJson: string, canonicalPayloadJson: string): boolean {
+  if (storedPayloadJson === canonicalPayloadJson) {
+    return true;
+  }
+
+  try {
+    return stableJsonStringify(JSON.parse(storedPayloadJson)) === canonicalPayloadJson;
+  } catch {
+    return false;
+  }
+}
+
+function stableJsonStringify(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new TypeError("Job payload must be JSON serializable");
+  }
+  return JSON.stringify(sortJsonValue(JSON.parse(serialized)));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, item]) => [key, sortJsonValue(item)])
+  );
+}
+
+function toEnqueuedJob(row: JobRow): JobRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    spaceId: row.space_id,
+    spaceRepositoryId: row.space_repository_id,
+    dependsOnJobId: row.depends_on_job_id,
+    payloadJson: row.payload_json,
+    error: row.error,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at
+  };
 }

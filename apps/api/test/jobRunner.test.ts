@@ -1,0 +1,163 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import type { AppDatabase } from "../src/db/connection.js";
+import { migrate } from "../src/db/migrate.js";
+import { schema } from "../src/db/schema.js";
+import { JobRunner } from "../src/services/jobRunner.js";
+import { SpaceService } from "../src/services/spaceService.js";
+
+test("enqueue returns the existing active logical job and releases the key for terminal jobs", () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 0);
+
+  try {
+    const input = {
+      type: "index_space_repository",
+      spaceId: "spc_test",
+      spaceRepositoryId: "spr_test",
+      payload: { spaceRepositoryId: "spr_test", options: { mode: "fast", force: false } }
+    };
+
+    const first = jobs.enqueue(input);
+    const duplicatePending = jobs.enqueue({
+      ...input,
+      payload: { options: { force: false, mode: "fast" }, spaceRepositoryId: "spr_test" }
+    });
+    assert.equal(duplicatePending.id, first.id);
+    assert.equal(countJobs(database), 1);
+    assert.equal(countEvents(database), 1);
+
+    database.sqlite
+      .prepare("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), first.id);
+    const duplicateRunning = jobs.enqueue(input);
+    assert.equal(duplicateRunning.id, first.id);
+    assert.equal(duplicateRunning.status, "running");
+    assert.ok(duplicateRunning.startedAt);
+    assert.equal(countJobs(database), 1);
+
+    database.sqlite
+      .prepare("UPDATE jobs SET status = 'succeeded', finished_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), first.id);
+    const afterSuccess = jobs.enqueue(input);
+    assert.notEqual(afterSuccess.id, first.id);
+    assert.equal(countJobs(database), 2);
+
+    database.sqlite
+      .prepare("UPDATE jobs SET status = 'failed', finished_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), afterSuccess.id);
+    const afterFailure = jobs.enqueue(input);
+    assert.notEqual(afterFailure.id, afterSuccess.id);
+    assert.equal(countJobs(database), 3);
+  } finally {
+    database.sqlite.close();
+  }
+});
+
+test("logical job identity includes payload and dependency", () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 0);
+
+  try {
+    const base = {
+      type: "rebuild_space_snapshot",
+      spaceId: "spc_test",
+      payload: { spaceId: "spc_test" }
+    };
+    const first = jobs.enqueue({ ...base, dependsOnJobId: "job_index_one" });
+    const differentDependency = jobs.enqueue({ ...base, dependsOnJobId: "job_index_two" });
+    const differentPayload = jobs.enqueue({
+      ...base,
+      dependsOnJobId: "job_index_one",
+      payload: { spaceId: "spc_test", force: true }
+    });
+
+    assert.notEqual(differentDependency.id, first.id);
+    assert.notEqual(differentPayload.id, first.id);
+    assert.equal(countJobs(database), 3);
+  } finally {
+    database.sqlite.close();
+  }
+});
+
+test("public job projections exclude the internal deduplication key", () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 0);
+
+  try {
+    const parent = jobs.enqueue({ type: "parent_job", payload: { value: 1 } });
+    const child = jobs.enqueue({ type: "child_job", dependsOnJobId: parent.id, payload: { value: 2 } });
+    const rawParent = database.sqlite.prepare("SELECT deduplication_key FROM jobs WHERE id = ?").get(parent.id) as {
+      deduplication_key: string | null;
+    };
+    assert.ok(rawParent.deduplication_key);
+
+    assertNoDeduplicationKey(jobs.getJob(parent.id));
+    assertNoDeduplicationKey(jobs.getJobDependency(child.id));
+    for (const dependent of jobs.getJobDependents(parent.id)) {
+      assertNoDeduplicationKey(dependent);
+    }
+
+    const spaces = new SpaceService(database, {} as never, {} as never);
+    const latestChild = (spaces.latestJobs() as Array<Record<string, unknown>>).find((job) => job.id === child.id);
+    assertNoDeduplicationKey(latestChild);
+    assert.equal(latestChild?.dependency_status, "pending");
+  } finally {
+    database.sqlite.close();
+  }
+});
+
+test("migration upgrades existing job tables before creating the active deduplication index", () => {
+  const sqlite = new Database(":memory:");
+
+  try {
+    sqlite.exec(`
+      CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        space_id TEXT,
+        space_repository_id TEXT,
+        depends_on_job_id TEXT,
+        payload_json TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+    `);
+
+    migrate(sqlite);
+
+    const columns = sqlite.pragma("table_info(jobs)") as Array<{ name: string }>;
+    assert.ok(columns.some((column) => column.name === "deduplication_key"));
+    const index = sqlite
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'jobs_active_deduplication_unique'")
+      .get() as { sql: string } | undefined;
+    assert.match(index?.sql ?? "", /UNIQUE INDEX/);
+    assert.match(index?.sql ?? "", /status IN \('pending', 'running'\)/);
+  } finally {
+    sqlite.close();
+  }
+});
+
+function createTestDatabase(): AppDatabase {
+  const sqlite = new Database(":memory:");
+  migrate(sqlite);
+  return { sqlite, db: drizzle(sqlite, { schema }) };
+}
+
+function countJobs(database: AppDatabase): number {
+  return (database.sqlite.prepare("SELECT COUNT(*) AS count FROM jobs").get() as { count: number }).count;
+}
+
+function countEvents(database: AppDatabase): number {
+  return (database.sqlite.prepare("SELECT COUNT(*) AS count FROM job_events").get() as { count: number }).count;
+}
+
+function assertNoDeduplicationKey(row: unknown): asserts row is Record<string, unknown> {
+  assert.ok(row && typeof row === "object");
+  assert.equal(Object.prototype.hasOwnProperty.call(row, "deduplication_key"), false);
+}

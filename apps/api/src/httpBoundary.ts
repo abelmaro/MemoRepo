@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { corsOrigins, type AppConfig } from "./config.js";
+import { normalizedRequestPathname } from "./httpPath.js";
 
 const JSON_METHODS = new Set(["POST", "PUT", "PATCH"]);
 const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost", "::1"];
@@ -10,6 +11,11 @@ export function registerHttpBoundary(app: FastifyInstance, config: AppConfig): v
   const allowedOrigins = new Set(corsOrigins(config).map(normalizedOrigin).filter((origin): origin is string => Boolean(origin)));
 
   app.addHook("onRequest", async (request, reply) => {
+    const pathname = normalizedRequestPathname(request.url);
+    if (!pathname) {
+      return reply.code(400).send({ error: "Request path is malformed" });
+    }
+
     const hostname = hostnameFromHeader(request.headers.host);
     if (!hostname || !allowedHostnames.has(hostname)) {
       return reply.code(403).send({ error: "Request host is not allowed" });
@@ -24,9 +30,18 @@ export function registerHttpBoundary(app: FastifyInstance, config: AppConfig): v
       return reply.code(403).send({ error: "Cross-site requests are not allowed" });
     }
 
+  });
+}
+
+export function registerHttpContentBoundary(app: FastifyInstance): void {
+  app.addHook("onRequest", async (request, reply) => {
+    const pathname = normalizedRequestPathname(request.url);
+    if (!pathname) {
+      return reply.code(400).send({ error: "Request path is malformed" });
+    }
     if (
       JSON_METHODS.has(request.method) &&
-      isMemoRepoRoute(request.url) &&
+      isMemoRepoRoute(pathname) &&
       !isJsonContentType(singleHeader(request.headers["content-type"]))
     ) {
       return reply.code(415).send({ error: "State-changing requests require application/json" });
@@ -83,13 +98,7 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return typeof value === "string" ? value : undefined;
 }
 
-function isMemoRepoRoute(url: string): boolean {
-  let pathname: string;
-  try {
-    pathname = new URL(url, "http://localhost").pathname;
-  } catch {
-    return false;
-  }
+function isMemoRepoRoute(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/") || pathname === "/mcp" || pathname.startsWith("/mcp/");
 }
 

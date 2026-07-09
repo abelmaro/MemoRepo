@@ -99,6 +99,7 @@ export function migrate(sqlite: Database.Database): void {
       space_repository_id TEXT,
       depends_on_job_id TEXT,
       payload_json TEXT NOT NULL,
+      deduplication_key TEXT,
       error TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
@@ -142,4 +143,19 @@ export function migrate(sqlite: Database.Database): void {
       PRIMARY KEY (space_id, tool_name)
     );
   `);
+
+  const addJobDeduplication = sqlite.transaction(() => {
+    const jobColumns = sqlite.pragma("table_info(jobs)") as Array<{ name: string }>;
+    if (!jobColumns.some((column) => column.name === "deduplication_key")) {
+      sqlite.exec("ALTER TABLE jobs ADD COLUMN deduplication_key TEXT");
+    }
+
+    sqlite.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_deduplication_unique
+        ON jobs(deduplication_key)
+        WHERE deduplication_key IS NOT NULL
+          AND status IN ('pending', 'running');
+    `);
+  });
+  addJobDeduplication.immediate();
 }

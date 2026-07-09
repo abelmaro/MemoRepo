@@ -23,6 +23,7 @@ The Node workspaces can be run directly for development, but productive local us
 MemoRepo expects these runtime inputs:
 
 - `GH_TOKEN`: a GitHub personal access token used by the API container.
+- `MEMOREPO_CONTROL_TOKEN`: a 43-128-character URL-safe value generated from at least 32 random bytes, used to authenticate the local control API and unlock the dashboard.
 - `MEMOREPO_HOME`: the local state root for SQLite data, managed clones, indexes, logs, temporary files, and helper scripts.
 - `API_PORT`: the local API port, defaulting to `8787`.
 - `MEMOREPO_PUBLIC_API_URL`: the base URL agents on the host use in generated HTTP MCP configs. Docker Compose derives it from `API_PORT`; set it manually only for unusual setups.
@@ -33,6 +34,7 @@ MemoRepo expects these runtime inputs:
 - `MEMOREPO_SNAPSHOT_RETENTION`: the default number of latest snapshots to keep when pruning a space, defaulting to `3`.
 - `MEMOREPO_JOB_RETENTION_DAYS`: the default age threshold for deleting terminal jobs during garbage collection, defaulting to `30`.
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
+- `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
 
 `MEMOREPO_HOME` defaults to `./.memorepo` for a simple first run. For regular use, place it outside the repository source tree.
 
@@ -114,7 +116,7 @@ Maintenance:
 MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, and delete old terminal jobs. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs.
 
 Jobs:
-MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. Pending jobs can be cancelled before they start. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. Running jobs are not interrupted because Git and indexing commands do not yet support cooperative cancellation. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
+MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. Running jobs are not interrupted because Git and indexing commands do not yet support cooperative cancellation. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
 
 ## MCP Gateway Contract
 
@@ -169,9 +171,11 @@ Deleting a space through the managed-data flow removes that space's managed clon
 
 MemoRepo is designed for trusted local use. It binds services to localhost through Docker Compose by default.
 
-The API validates the HTTP hostname and browser origin before routing requests. Browser origins must match the configured dashboard origin, cross-site browser requests are rejected, and POST/PUT/PATCH calls to MemoRepo routes must use a JSON content type. Local non-browser clients may omit `Origin`, but still need to use an allowed API hostname.
+The API validates the HTTP hostname and browser origin before routing requests. Browser origins must match the configured dashboard origin, cross-site browser requests are rejected, and POST/PUT/PATCH calls to MemoRepo routes must use a JSON content type. Except for health checks and CORS preflight, `/api` requires `MEMOREPO_CONTROL_TOKEN` as a bearer credential. State-changing `/api` methods also require `X-MemoRepo-CSRF: 1`. Local non-browser clients may omit `Origin`, but still need an allowed API hostname, the bearer credential, and the CSRF header for mutations.
 
-`GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations. CBM child processes receive a minimal allowlisted environment that excludes `GH_TOKEN`, Git credential environment variables, and unrelated application secrets.
+The dashboard stores the control token only in the current tab's `sessionStorage`. It does not place it in URLs, build arguments, generated MCP configs, or API responses, and it does not send it to `/mcp`. That endpoint accepts separate per-connection bearer tokens. Authentication checks, control reads, mutations, SSE handshakes, and MCP calls have separate per-IP rate limits; forwarded IP headers are not trusted.
+
+`GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus the Git credential variables required for that operation. CBM child processes use the same system allowlist without `GH_TOKEN`, Git credential environment variables, or unrelated application secrets.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
 

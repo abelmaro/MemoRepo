@@ -4,7 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AppConfig } from "../config.js";
 import { ensureInsideDir } from "../domain/paths.js";
 import { redactSensitive } from "../domain/sanitize.js";
-import { runProcess } from "./process.js";
+import { createSafeProcessEnvironment, runProcess } from "./process.js";
 
 export interface CbmCommandOptions {
   cacheDir: string;
@@ -12,39 +12,11 @@ export interface CbmCommandOptions {
   onOutput?: ((line: string) => void) | undefined;
 }
 
-const CBM_ENVIRONMENT_ALLOWLIST = [
-  "PATH",
-  "PATHEXT",
-  "SYSTEMROOT",
-  "WINDIR",
-  "COMSPEC",
-  "TEMP",
-  "TMP",
-  "TMPDIR",
-  "HOME",
-  "USERPROFILE",
-  "XDG_CONFIG_HOME",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ"
-] as const;
-
 export function createCbmEnvironment(
   cacheDir?: string,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  const sourceEntries = Object.entries(source);
-
-  for (const allowedName of CBM_ENVIRONMENT_ALLOWLIST) {
-    const entry = sourceEntries.find(([name]) => name.toUpperCase() === allowedName);
-    if (entry?.[1] !== undefined) {
-      environment[allowedName] = entry[1];
-    }
-  }
+  const environment = createSafeProcessEnvironment(source);
 
   environment.CBM_LOG_LEVEL = "warn";
   if (cacheDir !== undefined) {

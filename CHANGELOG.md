@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-09
+
+### Added
+
+- Deduplicate pending and running jobs only when their job type, scope, dependency, and canonical payload match exactly, using an atomic SQLite queue key.
+
+### Security
+
+- Require a strong local bearer token for the control API while keeping MCP connection credentials separate.
+- Require an explicit CSRF header for state-changing control requests, including deletes.
+- Add separate per-IP rate limits for authentication checks, control reads, mutations, SSE handshakes, and MCP calls.
+- Keep the dashboard control token in tab-scoped session storage and stream job events without putting credentials in URLs.
+- Restrict Git child processes to an allowlisted environment plus the credentials required for the current Git operation.
+
+### Fixed
+
+- Allow a valid control token to unlock the dashboard immediately after failed authentication attempts have exhausted the invalid-token rate-limit bucket.
+
 ## [0.1.2] - 2026-07-09
 
 ### Security
@@ -42,7 +60,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/abelmaro/MemoRepo/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/abelmaro/MemoRepo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/abelmaro/MemoRepo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/abelmaro/MemoRepo/tree/v0.1.0

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const spaces = sqliteTable("spaces", {
@@ -106,6 +107,7 @@ export const jobs = sqliteTable(
     spaceRepositoryId: text("space_repository_id"),
     dependsOnJobId: text("depends_on_job_id"),
     payloadJson: text("payload_json").notNull(),
+    deduplicationKey: text("deduplication_key"),
     error: text("error"),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
@@ -113,7 +115,10 @@ export const jobs = sqliteTable(
   },
   (table) => [
     index("jobs_status_created_idx").on(table.status, table.createdAt),
-    index("jobs_space_repository_idx").on(table.spaceRepositoryId, table.status)
+    index("jobs_space_repository_idx").on(table.spaceRepositoryId, table.status),
+    uniqueIndex("jobs_active_deduplication_unique")
+      .on(table.deduplicationKey)
+      .where(sql`${table.deduplicationKey} IS NOT NULL AND ${table.status} IN ('pending', 'running')`)
   ]
 );
 

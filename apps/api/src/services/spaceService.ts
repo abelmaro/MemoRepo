@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
+import { publicJobSelectColumns } from "../db/jobProjection.js";
 import { insertRecord, type SqlValue, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
 import { removeManagedPath } from "../domain/files.js";
@@ -499,7 +500,7 @@ export class SpaceService {
       .prepare(
         `
         SELECT
-          j.*,
+          ${publicJobSelectColumns("j")},
           d.status AS dependency_status,
           d.type AS dependency_type
         FROM jobs j

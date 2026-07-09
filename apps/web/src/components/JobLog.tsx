@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, eventSourceUrl, type Job, type JobEvent } from "../lib/api";
+import { api, subscribeToJobEvents, type Job, type JobEvent } from "../lib/api";
 
 interface JobLogProps {
   jobId: string;
@@ -35,17 +35,14 @@ export function JobLog({ jobId, onJob }: JobLogProps) {
   }, [jobQuery.data?.events]);
 
   useEffect(() => {
-    const source = new EventSource(eventSourceUrl(`/api/jobs/${jobId}/events`));
-    source.onmessage = (event) => {
+    return subscribeToJobEvents(`/api/jobs/${jobId}/events`, (parsed) => {
       setEvents((current) => {
-        const parsed = JSON.parse(event.data) as JobEvent;
         if (current.some((existing) => existing.id === parsed.id)) {
           return current;
         }
         return [...current, parsed];
       });
-    };
-    return () => source.close();
+    });
   }, [jobId]);
 
   const mutationError = retryMutation.error ?? cancelMutation.error;

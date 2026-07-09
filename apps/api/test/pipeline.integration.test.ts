@@ -14,6 +14,8 @@ import { createId } from "../src/domain/ids.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const testsRoot = path.join(repoRoot, ".tmp-memorepo-tests");
+const TEST_CONTROL_TOKEN = "test-control-token-0123456789abcdef0123456789abcdef";
+process.env.MEMOREPO_CONTROL_TOKEN = TEST_CONTROL_TOKEN;
 
 test("database exposes a Drizzle client over the SQLite source of truth", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
@@ -189,13 +191,15 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
       headers: {
         origin: "http://127.0.0.1:5173",
         "access-control-request-method": "DELETE",
-        "access-control-request-headers": "content-type"
+        "access-control-request-headers": "authorization, content-type, x-memorepo-csrf"
       }
     });
     assert.equal(deletePreflightResponse.statusCode, 204);
     assert.equal(deletePreflightResponse.headers["access-control-allow-origin"], "http://127.0.0.1:5173");
     assert.match(String(deletePreflightResponse.headers["access-control-allow-methods"]), /DELETE/);
     assert.match(String(deletePreflightResponse.headers["access-control-allow-headers"]), /content-type/i);
+    assert.match(String(deletePreflightResponse.headers["access-control-allow-headers"]), /authorization/i);
+    assert.match(String(deletePreflightResponse.headers["access-control-allow-headers"]), /x-memorepo-csrf/i);
 
     const initializeResponse = await app.inject({
       method: "POST",
@@ -273,7 +277,7 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
       assert.equal(callResponse.json<{ error?: unknown }>().error, undefined);
     }
 
-    const statsResponse = await app.inject({
+    const statsResponse = await injectControlApi(app, {
       method: "GET",
       url: `/api/spaces/${space.id}/mcp-tool-stats`
     });
@@ -300,14 +304,14 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
     const revokedPayload = revokedResponse.json<{ error?: { message: string } }>();
     assert.match(revokedPayload.error?.message ?? "", /Invalid or revoked MCP token/);
 
-    const deleteRevokedResponse = await app.inject({
+    const deleteRevokedResponse = await injectControlApi(app, {
       method: "DELETE",
       url: `/api/mcp-connections/${connection.connection.id}`
     });
     assert.equal(deleteRevokedResponse.statusCode, 200);
 
     const activeConnection = services.mcp.createConnection(space.id, "Delete Active Agent", "generic");
-    const deleteActiveResponse = await app.inject({
+    const deleteActiveResponse = await injectControlApi(app, {
       method: "DELETE",
       url: `/api/mcp-connections/${activeConnection.connection.id}`
     });
@@ -531,7 +535,7 @@ test("GitHub diagnostics reports scopes, visible repos, and organization access"
         )
       },
       async () => {
-        const response = await app.inject({ method: "GET", url: "/api/github/diagnostics" });
+        const response = await injectControlApi(app, { method: "GET", url: "/api/github/diagnostics" });
         assert.equal(response.statusCode, 200);
         const payload = response.json<{
           connected: boolean;
@@ -599,7 +603,7 @@ test("preflight reports local runtime checks without leaking secrets", async () 
         "https://api.github.com/user/orgs?per_page=100": []
       },
       async () => {
-        const response = await app.inject({ method: "GET", url: "/api/preflight" });
+        const response = await injectControlApi(app, { method: "GET", url: "/api/preflight" });
         assert.equal(response.statusCode, 200);
         assert.doesNotMatch(response.body, /test-token/);
 
@@ -673,14 +677,14 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
       finishedAt: null
     });
 
-    const cancelResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/cancel`, payload: {} });
+    const cancelResponse = await injectControlApi(app, { method: "POST", url: `/api/jobs/${parentId}/cancel`, payload: {} });
     assert.equal(cancelResponse.statusCode, 200);
     assert.equal((services.jobs.getJob(parentId) as { status: string }).status, "cancelled");
     const child = services.jobs.getJob(childId) as { status: string; error: string };
     assert.equal(child.status, "skipped");
     assert.match(child.error, /Dependency did not succeed/);
 
-    const retryResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/retry`, payload: {} });
+    const retryResponse = await injectControlApi(app, { method: "POST", url: `/api/jobs/${parentId}/retry`, payload: {} });
     assert.equal(retryResponse.statusCode, 200);
     const retryPayload = retryResponse.json<{ job: { id: string; type: string; status: string } }>();
     assert.equal(retryPayload.job.type, "manual_job");
@@ -701,7 +705,7 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
       startedAt: createdAt,
       finishedAt: null
     });
-    const runningCancel = await app.inject({ method: "POST", url: `/api/jobs/${runningId}/cancel`, payload: {} });
+    const runningCancel = await injectControlApi(app, { method: "POST", url: `/api/jobs/${runningId}/cancel`, payload: {} });
     assert.equal(runningCancel.statusCode, 400);
     assert.match(runningCancel.json<{ error: string }>().error, /Running jobs cannot be cancelled/);
   } finally {
@@ -1036,7 +1040,7 @@ test("space snapshots can be listed and pruned by retention", async () => {
       fs.writeFileSync(path.join(row.artifactPath, "marker.txt"), row.id);
     }
 
-    const listResponse = await app.inject({ method: "GET", url: `/api/spaces/${space.id}/snapshots` });
+    const listResponse = await injectControlApi(app, { method: "GET", url: `/api/spaces/${space.id}/snapshots` });
     assert.equal(listResponse.statusCode, 200);
     const listPayload = listResponse.json<{ snapshots: Array<{ active: boolean; sizeBytes: number }>; defaultRetention: number }>();
     assert.equal(listPayload.snapshots.length, 3);
@@ -1044,7 +1048,7 @@ test("space snapshots can be listed and pruned by retention", async () => {
     assert.equal(listPayload.snapshots.filter((snapshot) => snapshot.active).length, 1);
     assert.ok(listPayload.snapshots.every((snapshot) => snapshot.sizeBytes > 0));
 
-    const pruneResponse = await app.inject({
+    const pruneResponse = await injectControlApi(app, {
       method: "POST",
       url: `/api/spaces/${space.id}/snapshots/prune`,
       payload: { keepLatest: 1 }
@@ -1562,11 +1566,11 @@ test("space API responses do not expose managed filesystem paths", async () => {
     });
     services.spaces.addRepositoryToSpace(space.id, repositoryId);
 
-    const spacesResponse = await app.inject({ method: "GET", url: "/api/spaces" });
+    const spacesResponse = await injectControlApi(app, { method: "GET", url: "/api/spaces" });
     assert.equal(spacesResponse.statusCode, 200);
     assertNoInternalPathLeak(spacesResponse.body, testRoot);
 
-    const detailResponse = await app.inject({ method: "GET", url: `/api/spaces/${space.id}` });
+    const detailResponse = await injectControlApi(app, { method: "GET", url: `/api/spaces/${space.id}` });
     assert.equal(detailResponse.statusCode, 200);
     assertNoInternalPathLeak(detailResponse.body, testRoot);
   } finally {
@@ -1621,20 +1625,121 @@ test("HTTP boundary rejects untrusted browser requests before mutations run", as
     const missingJson = await app.inject({
       method: "POST",
       url: "/api/github/sync",
-      headers: { host: allowedHost, origin: allowedOrigin }
+      headers: {
+        host: allowedHost,
+        origin: allowedOrigin,
+        authorization: `Bearer ${TEST_CONTROL_TOKEN}`,
+        "x-memorepo-csrf": "1"
+      }
     });
     assert.equal(missingJson.statusCode, 415);
     assert.equal(mutationCalls, 0);
 
+    const encodedMissingJson = await app.inject({
+      method: "POST",
+      url: "/%61pi/github/sync",
+      headers: {
+        host: allowedHost,
+        origin: allowedOrigin,
+        authorization: `Bearer ${TEST_CONTROL_TOKEN}`,
+        "x-memorepo-csrf": "1"
+      }
+    });
+    assert.equal(encodedMissingJson.statusCode, 415);
+    assert.equal(mutationCalls, 0);
+
+    const missingAuthentication = await app.inject({
+      method: "GET",
+      url: "/api/auth/status",
+      headers: { host: allowedHost, origin: allowedOrigin }
+    });
+    assert.equal(missingAuthentication.statusCode, 401);
+    assert.equal(missingAuthentication.headers["access-control-allow-origin"], allowedOrigin);
+
+    const wrongAuthentication = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: {
+        host: allowedHost,
+        origin: allowedOrigin,
+        authorization: "Bearer wrong-control-token",
+        "x-memorepo-csrf": "1"
+      },
+      payload: {}
+    });
+    assert.equal(wrongAuthentication.statusCode, 401);
+
+    const missingCsrf = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: allowedHost, origin: allowedOrigin, authorization: `Bearer ${TEST_CONTROL_TOKEN}` },
+      payload: {}
+    });
+    assert.equal(missingCsrf.statusCode, 403);
+    assert.equal(mutationCalls, 0);
+
+    const missingDeleteCsrf = await app.inject({
+      method: "DELETE",
+      url: "/api/mcp-connections/mcp_missing",
+      headers: { host: allowedHost, origin: allowedOrigin, authorization: `Bearer ${TEST_CONTROL_TOKEN}` }
+    });
+    assert.equal(missingDeleteCsrf.statusCode, 403);
+
     const allowed = await app.inject({
       method: "POST",
       url: "/api/github/sync",
-      headers: { host: allowedHost, origin: allowedOrigin },
+      headers: {
+        host: allowedHost,
+        origin: allowedOrigin,
+        authorization: `Bearer ${TEST_CONTROL_TOKEN}`,
+        "x-memorepo-csrf": "1"
+      },
       payload: {}
     });
     assert.equal(allowed.statusCode, 200);
     assert.equal(allowed.headers["access-control-allow-origin"], allowedOrigin);
     assert.equal(mutationCalls, 1);
+  } finally {
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("HTTP rate limits run before authentication and preserve CORS error details", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "http-rate-limit-"));
+  process.env.GH_TOKEN = "test-token";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  const app = await createApp(services, {
+    controlToken: TEST_CONTROL_TOKEN,
+    rateLimitWindowMs: 60_000,
+    authRateLimitMax: 2,
+    apiReadRateLimitMax: 10,
+    apiWriteRateLimitMax: 10,
+    apiSseRateLimitMax: 10,
+    mcpRateLimitMax: 10
+  });
+  const origin = "http://127.0.0.1:5173";
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await app.inject({ method: "GET", url: "/api/auth/status", headers: { origin } });
+      assert.equal(response.statusCode, 401);
+    }
+
+    const limited = await app.inject({ method: "GET", url: "/api/auth/status", headers: { origin } });
+    assert.equal(limited.statusCode, 429);
+    assert.ok(limited.headers["retry-after"]);
+    assert.equal(limited.headers["access-control-allow-origin"], origin);
+    assert.match(limited.json<{ error: string }>().error, /Rate limit exceeded/);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      assert.equal((await app.inject({ method: "GET", url: "/api/health" })).statusCode, 200);
+    }
   } finally {
     await app.close();
     services.database.sqlite.close();
@@ -1661,7 +1766,7 @@ test("route errors return actionable messages", async () => {
     });
     services.spaces.addRepositoryToSpace(space.id, repositoryId);
 
-    const response = await app.inject({ method: "DELETE", url: `/api/spaces/${space.id}` });
+    const response = await injectControlApi(app, { method: "DELETE", url: `/api/spaces/${space.id}` });
     assert.equal(response.statusCode, 400);
     assert.match(response.json<{ error: string }>().error, /Space must not have repositories, snapshots, or jobs/);
   } finally {
@@ -1682,25 +1787,25 @@ test("unknown resources return 404 and invalid payloads return readable 400 mess
   const app = await createApp(services);
 
   try {
-    const missingSpace = await app.inject({ method: "GET", url: "/api/spaces/spc_missing" });
+    const missingSpace = await injectControlApi(app, { method: "GET", url: "/api/spaces/spc_missing" });
     assert.equal(missingSpace.statusCode, 404);
     assert.match(missingSpace.json<{ error: string }>().error, /Space not found/);
 
-    const missingJob = await app.inject({ method: "GET", url: "/api/jobs/job_missing" });
+    const missingJob = await injectControlApi(app, { method: "GET", url: "/api/jobs/job_missing" });
     assert.equal(missingJob.statusCode, 404);
     assert.match(missingJob.json<{ error: string }>().error, /Job not found/);
 
-    const missingJobRetry = await app.inject({ method: "POST", url: "/api/jobs/job_missing/retry", payload: {} });
+    const missingJobRetry = await injectControlApi(app, { method: "POST", url: "/api/jobs/job_missing/retry", payload: {} });
     assert.equal(missingJobRetry.statusCode, 404);
 
-    const missingJobEvents = await app.inject({ method: "GET", url: "/api/jobs/job_missing/events" });
+    const missingJobEvents = await injectControlApi(app, { method: "GET", url: "/api/jobs/job_missing/events" });
     assert.equal(missingJobEvents.statusCode, 404);
 
-    const missingConnection = await app.inject({ method: "DELETE", url: "/api/mcp-connections/mcp_missing" });
+    const missingConnection = await injectControlApi(app, { method: "DELETE", url: "/api/mcp-connections/mcp_missing" });
     assert.equal(missingConnection.statusCode, 404);
     assert.match(missingConnection.json<{ error: string }>().error, /MCP connection not found/);
 
-    const invalidBody = await app.inject({ method: "POST", url: "/api/spaces", payload: {} });
+    const invalidBody = await injectControlApi(app, { method: "POST", url: "/api/spaces", payload: {} });
     assert.equal(invalidBody.statusCode, 400);
     const invalidMessage = invalidBody.json<{ error: string }>().error;
     assert.match(invalidMessage, /Invalid request: name/);
@@ -1731,7 +1836,7 @@ test("job event stream replays events over SSE with CORS headers for the dashboa
     const origin = "http://127.0.0.1:5173";
 
     const response = await fetch(`http://127.0.0.1:${address.port}/api/jobs/${job.id}/events`, {
-      headers: { origin, accept: "text/event-stream" },
+      headers: { origin, accept: "text/event-stream", authorization: `Bearer ${TEST_CONTROL_TOKEN}` },
       signal: controller.signal
     });
 
@@ -1769,7 +1874,7 @@ test("GitHub status route reports invalid credentials without failing the reques
         "https://api.github.com/user": githubErrorResponse(401, "Bad credentials")
       },
       async () => {
-        const response = await app.inject({ method: "GET", url: "/api/github/status" });
+        const response = await injectControlApi(app, { method: "GET", url: "/api/github/status" });
         assert.equal(response.statusCode, 200);
         const payload = response.json<{ connected: boolean; error: string }>();
         assert.equal(payload.connected, false);
@@ -1937,6 +2042,21 @@ function stubCbmSnapshots(services: ReturnType<typeof createServices>, failingRe
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type TestApp = Awaited<ReturnType<typeof createApp>>;
+type TestInjectOptions = Exclude<Parameters<TestApp["inject"]>[0], string>;
+
+function injectControlApi(app: TestApp, options: TestInjectOptions) {
+  const method = String(options.method).toUpperCase();
+  return app.inject({
+    ...options,
+    headers: {
+      authorization: `Bearer ${TEST_CONTROL_TOKEN}`,
+      ...(!["GET", "HEAD", "OPTIONS"].includes(method) ? { "x-memorepo-csrf": "1" } : {}),
+      ...(options.headers ?? {})
+    }
+  });
 }
 
 function assertNoInternalPathLeak(value: string, internalRoot: string): void {

@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runProcess } from "../src/services/process.js";
+import { createSafeProcessEnvironment, runProcess } from "../src/services/process.js";
+
+test("safe process environments preserve runtime paths without application secrets", () => {
+  const environment = createSafeProcessEnvironment({
+    Path: "/usr/local/bin:/usr/bin",
+    HOME: "/home/memorepo",
+    MEMOREPO_CONTROL_TOKEN: "control-secret",
+    MEMOREPO_MCP_TOKEN: "mcp-secret",
+    AWS_SECRET_ACCESS_KEY: "cloud-secret"
+  });
+
+  assert.deepEqual(environment, {
+    PATH: "/usr/local/bin:/usr/bin",
+    HOME: "/home/memorepo"
+  });
+});
 
 test("runProcess resolves with captured, line-split output", async () => {
   const lines: string[] = [];
