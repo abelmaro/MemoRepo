@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import { ZodError } from "zod";
 import { corsOrigins } from "./config.js";
 import { NotFoundError } from "./domain/errors.js";
+import { registerHttpBoundary } from "./httpBoundary.js";
 import { decorateServices, type AppServices } from "./services/appServices.js";
 import { githubRoutes } from "./routes/githubRoutes.js";
 import { jobRoutes } from "./routes/jobRoutes.js";
@@ -23,6 +24,7 @@ export async function createApp(services: AppServices) {
   });
 
   await decorateServices(app, services);
+  registerHttpBoundary(app, services.config);
   app.addHook("onClose", async () => {
     await services.cbm.close();
   });

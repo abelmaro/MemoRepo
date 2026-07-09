@@ -89,7 +89,9 @@ export class SpaceService {
 
     const deletedAt = nowIso();
     let connectionsDeleted = 0;
+    let toolStatsDeleted = 0;
     this.database.sqlite.transaction(() => {
+      toolStatsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_tool_stats WHERE space_id = ?").run(id).changes;
       connectionsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id).changes;
       this.database.sqlite.prepare("DELETE FROM spaces WHERE id = ?").run(id);
     })();
@@ -99,7 +101,7 @@ export class SpaceService {
       fs.rmSync(safeRootPath, { recursive: true, force: true });
     }
 
-    return { deletedAt, spaceId: id, connectionsDeleted, filesExisted };
+    return { deletedAt, spaceId: id, connectionsDeleted, toolStatsDeleted, filesExisted };
   }
 
   async deleteSpaceWithManagedData(id: string) {
@@ -131,15 +133,11 @@ export class SpaceService {
       await this.cbm.closeSession(snapshot.artifactPath);
     }
 
-    const removedPaths = [
-      ...removeUniqueManagedPaths(repoIndexes.map((row) => row.cachePath), this.config.memorepoHome),
-      ...removeUniqueManagedPaths(snapshots.map((row) => row.artifactPath), this.config.memorepoHome),
-      removeManagedPath(this.config.memorepoHome, space.rootPath)
-    ];
-    const deletedBytes = removedPaths.reduce((total, item) => total + item.sizeBytes, 0);
     const deletedAt = nowIso();
 
     const jobIds = jobs.map((job) => job.id);
+    let connectionsDeleted = 0;
+    let toolStatsDeleted = 0;
     const transaction = this.database.sqlite.transaction(() => {
       for (const jobId of jobIds) {
         this.database.sqlite.prepare("DELETE FROM job_events WHERE job_id = ?").run(jobId);
@@ -147,7 +145,8 @@ export class SpaceService {
       for (const jobId of jobIds) {
         this.database.sqlite.prepare("DELETE FROM jobs WHERE id = ?").run(jobId);
       }
-      this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id);
+      toolStatsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_tool_stats WHERE space_id = ?").run(id).changes;
+      connectionsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id).changes;
       this.database.sqlite
         .prepare(
           `
@@ -164,6 +163,13 @@ export class SpaceService {
     });
     transaction();
 
+    const removedPaths = [
+      ...removeUniqueManagedPaths(repoIndexes.map((row) => row.cachePath), this.config.memorepoHome),
+      ...removeUniqueManagedPaths(snapshots.map((row) => row.artifactPath), this.config.memorepoHome),
+      removeManagedPath(this.config.memorepoHome, space.rootPath)
+    ];
+    const deletedBytes = removedPaths.reduce((total, item) => total + item.sizeBytes, 0);
+
     return {
       deletedAt,
       spaceId: id,
@@ -172,7 +178,9 @@ export class SpaceService {
       repositoriesDeleted: repositoryIds.length,
       snapshotsDeleted: snapshots.length,
       repoIndexPathsDeleted: new Set(repoIndexes.map((row) => row.cachePath)).size,
-      jobsDeleted: jobIds.length
+      jobsDeleted: jobIds.length,
+      connectionsDeleted,
+      toolStatsDeleted
     };
   }
 

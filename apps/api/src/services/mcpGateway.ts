@@ -124,7 +124,7 @@ export class McpGateway {
           result: {
             protocolVersion: protocolVersionFrom(request.params),
             capabilities: { tools: {} },
-            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.0" },
+            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.1" },
             instructions: await this.buildInstructions(spaceSlug, token)
           }
         };
