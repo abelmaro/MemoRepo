@@ -12,6 +12,48 @@ export interface CbmCommandOptions {
   onOutput?: ((line: string) => void) | undefined;
 }
 
+const CBM_ENVIRONMENT_ALLOWLIST = [
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ"
+] as const;
+
+export function createCbmEnvironment(
+  cacheDir?: string,
+  source: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  const sourceEntries = Object.entries(source);
+
+  for (const allowedName of CBM_ENVIRONMENT_ALLOWLIST) {
+    const entry = sourceEntries.find(([name]) => name.toUpperCase() === allowedName);
+    if (entry?.[1] !== undefined) {
+      environment[allowedName] = entry[1];
+    }
+  }
+
+  environment.CBM_LOG_LEVEL = "warn";
+  if (cacheDir !== undefined) {
+    environment.CBM_CACHE_DIR = cacheDir;
+  }
+
+  return environment;
+}
+
 export class CbmService {
   private readonly sessions = new Map<string, CbmMcpSession>();
 
@@ -21,6 +63,8 @@ export class CbmService {
     const result = await runProcess({
       command: "codebase-memory-mcp",
       args: ["--version"],
+      env: createCbmEnvironment(),
+      inheritEnv: false,
       timeoutMs: 30_000,
       sensitiveValues: [this.config.githubToken]
     });
@@ -105,10 +149,8 @@ export class CbmService {
     const result = await runProcess({
       command: "codebase-memory-mcp",
       args: ["cli", tool, JSON.stringify(input)],
-      env: {
-        CBM_CACHE_DIR: cacheDir,
-        CBM_LOG_LEVEL: "warn"
-      },
+      env: createCbmEnvironment(cacheDir),
+      inheritEnv: false,
       timeoutMs: options.timeoutMs,
       sensitiveValues: [this.config.githubToken],
       onOutput: options.onOutput
@@ -151,11 +193,7 @@ class CbmMcpSession {
     private readonly onClose: () => void
   ) {
     this.child = spawn("codebase-memory-mcp", [], {
-      env: {
-        ...process.env,
-        CBM_CACHE_DIR: cacheDir,
-        CBM_LOG_LEVEL: "warn"
-      },
+      env: createCbmEnvironment(cacheDir),
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -174,7 +212,7 @@ class CbmMcpSession {
     this.ready = this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "memorepo-api", version: "0.1.1" }
+      clientInfo: { name: "memorepo-api", version: "0.1.2" }
     }, 30_000).then(() => {
       this.write({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     });

@@ -12,6 +12,7 @@ export interface RunProcessOptions {
   args: string[];
   cwd?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
+  inheritEnv?: boolean | undefined;
   timeoutMs?: number | undefined;
   killGraceMs?: number | undefined;
   sensitiveValues?: string[] | undefined;
@@ -26,10 +27,13 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(options.command, options.args, {
       cwd: options.cwd,
-      env: {
-        ...process.env,
-        ...options.env
-      },
+      env:
+        options.inheritEnv === false
+          ? { ...(options.env ?? {}) }
+          : {
+              ...process.env,
+              ...options.env
+            },
       stdio: ["ignore", "pipe", "pipe"]
     });
 

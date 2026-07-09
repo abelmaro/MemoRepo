@@ -79,7 +79,7 @@ MemoRepo is a single-user local tool. It intentionally has no authentication, us
 - The API and dashboard bind to `127.0.0.1` only. Do not map these ports to other interfaces, expose them through a reverse proxy, or run MemoRepo on a shared or public host.
 - The API rejects unrecognized HTTP hostnames, browser origins outside the dashboard allowlist, cross-site browser requests, and non-JSON POST/PUT/PATCH calls. These checks protect the local browser boundary; they are not multi-user authentication.
 - The per-connection MCP token is the only credential boundary for agents. Treat generated MCP configs as secrets and revoke connections you no longer use.
-- `GH_TOKEN` stays inside the API container; API responses and logs redact it, and generated MCP configs never include it.
+- `GH_TOKEN` stays inside the API container; API responses and logs redact it, generated MCP configs never include it, and CBM child processes receive an allowlisted environment without GitHub or unrelated credentials.
 - The MCP gateway is read-only, scoped to one space's immutable snapshot, rejects filesystem path arguments, and sanitizes internal paths out of responses.
 
 If you need multi-user access, network exposure, or tenant isolation, MemoRepo is not the right tool as-is.
