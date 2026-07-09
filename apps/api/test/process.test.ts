@@ -16,6 +16,34 @@ test("runProcess resolves with captured, line-split output", async () => {
   assert.deepEqual(lines, ["first", "second"]);
 });
 
+test("runProcess can replace the inherited environment", async () => {
+  const secretName = "MEMOREPO_TEST_PARENT_SECRET";
+  const previousSecret = process.env[secretName];
+  process.env[secretName] = "must-not-be-inherited";
+
+  try {
+    const result = await runProcess({
+      command: process.execPath,
+      args: [
+        "-e",
+        `process.stdout.write(JSON.stringify({ secret: process.env.${secretName}, visible: process.env.MEMOREPO_TEST_CHILD_VALUE }))`
+      ],
+      env: { MEMOREPO_TEST_CHILD_VALUE: "available" },
+      inheritEnv: false,
+      timeoutMs: 30_000
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { visible: "available" });
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env[secretName];
+    } else {
+      process.env[secretName] = previousSecret;
+    }
+  }
+});
+
 test("runProcess escalates to SIGKILL when a timed out process ignores SIGTERM", async () => {
   await assert.rejects(
     runProcess({

@@ -29,6 +29,7 @@ MemoRepo expects these runtime inputs:
 - `WEB_PORT`: the local dashboard port, defaulting to `5173`.
 - `MEMOREPO_API_CONTAINER_NAME`: the Docker container name used by generated stdio MCP configs, defaulting to `memorepo-api`.
 - `CODEBASE_MEMORY_MCP_VERSION`: the `codebase-memory-mcp` release used by the API Docker image.
+- `CODEBASE_MEMORY_MCP_SHA256_AMD64` and `CODEBASE_MEMORY_MCP_SHA256_ARM64`: trusted hashes for the portable CBM release archives. Update them together with the CBM version.
 - `MEMOREPO_SNAPSHOT_RETENTION`: the default number of latest snapshots to keep when pruning a space, defaulting to `3`.
 - `MEMOREPO_JOB_RETENTION_DAYS`: the default age threshold for deleting terminal jobs during garbage collection, defaulting to `30`.
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
@@ -170,7 +171,7 @@ MemoRepo is designed for trusted local use. It binds services to localhost throu
 
 The API validates the HTTP hostname and browser origin before routing requests. Browser origins must match the configured dashboard origin, cross-site browser requests are rejected, and POST/PUT/PATCH calls to MemoRepo routes must use a JSON content type. Local non-browser clients may omit `Origin`, but still need to use an allowed API hostname.
 
-`GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations.
+`GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations. CBM child processes receive a minimal allowlisted environment that excludes `GH_TOKEN`, Git credential environment variables, and unrelated application secrets.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
 
