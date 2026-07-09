@@ -673,14 +673,14 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
       finishedAt: null
     });
 
-    const cancelResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/cancel` });
+    const cancelResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/cancel`, payload: {} });
     assert.equal(cancelResponse.statusCode, 200);
     assert.equal((services.jobs.getJob(parentId) as { status: string }).status, "cancelled");
     const child = services.jobs.getJob(childId) as { status: string; error: string };
     assert.equal(child.status, "skipped");
     assert.match(child.error, /Dependency did not succeed/);
 
-    const retryResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/retry` });
+    const retryResponse = await app.inject({ method: "POST", url: `/api/jobs/${parentId}/retry`, payload: {} });
     assert.equal(retryResponse.statusCode, 200);
     const retryPayload = retryResponse.json<{ job: { id: string; type: string; status: string } }>();
     assert.equal(retryPayload.job.type, "manual_job");
@@ -701,7 +701,7 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
       startedAt: createdAt,
       finishedAt: null
     });
-    const runningCancel = await app.inject({ method: "POST", url: `/api/jobs/${runningId}/cancel` });
+    const runningCancel = await app.inject({ method: "POST", url: `/api/jobs/${runningId}/cancel`, payload: {} });
     assert.equal(runningCancel.statusCode, 400);
     assert.match(runningCancel.json<{ error: string }>().error, /Running jobs cannot be cancelled/);
   } finally {
@@ -1141,18 +1141,56 @@ test("managed space deletion removes local artifacts and database records", asyn
       message: "succeeded",
       createdAt: timestamp
     });
-    services.mcp.createConnection(space.id, "Delete Agent", "generic");
+    const connection = services.mcp.createConnection(space.id, "Delete Agent", "generic");
+    await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {});
+    assert.equal(
+      (services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM mcp_tool_stats WHERE space_id = ?").get(space.id) as { count: number })
+        .count,
+      1
+    );
 
     const result = await services.spaces.deleteSpaceWithManagedData(space.id);
     assert.equal(result.repositoriesDeleted, 1);
     assert.equal(result.snapshotsDeleted, 1);
     assert.equal(result.jobsDeleted, 1);
+    assert.equal(result.toolStatsDeleted, 1);
     assert.equal(fs.existsSync(spaceRepository.localPath), false);
     assert.equal(fs.existsSync(repoIndexPath), false);
     assert.equal(fs.existsSync(snapshotPath), false);
     assert.throws(() => services.spaces.getSpaceById(space.id), /Space not found/);
     assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM job_events").get() as { count: number }).count, 0);
     assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM mcp_connections").get() as { count: number }).count, 0);
+    assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM mcp_tool_stats").get() as { count: number }).count, 0);
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("managed space deletion keeps files when its database transaction fails", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "delete-managed-space-rollback-"));
+  process.env.GH_TOKEN = "test-token";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Delete Rollback Space");
+    const markerPath = path.join(space.rootPath, "keep-on-failure.txt");
+    fs.writeFileSync(markerPath, "keep");
+    services.database.sqlite.exec(`
+      CREATE TRIGGER block_space_delete
+      BEFORE DELETE ON spaces
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked deletion');
+      END;
+    `);
+
+    await assert.rejects(() => services.spaces.deleteSpaceWithManagedData(space.id), /blocked deletion/);
+    assert.equal(fs.existsSync(markerPath), true);
+    assert.equal(services.spaces.getSpaceById(space.id).id, space.id);
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -1458,7 +1496,7 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
   }
 });
 
-test("empty spaces can be deleted with local MCP connections", () => {
+test("empty spaces can be deleted with local MCP connections and tool stats", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "delete-space-"));
   process.env.GH_TOKEN = "test-token";
@@ -1470,10 +1508,19 @@ test("empty spaces can be deleted with local MCP connections", () => {
   try {
     const emptySpace = services.spaces.createSpace("Delete Me");
     services.mcp.createConnection(emptySpace.id, "Local agent", "generic");
+    insertRecord(services.database, "mcp_tool_stats", {
+      spaceId: emptySpace.id,
+      toolName: "list_projects",
+      callCount: 1,
+      totalResponseBytes: 100,
+      maxResponseBytes: 100,
+      lastCalledAt: nowIso()
+    });
     assert.equal(fs.existsSync(emptySpace.rootPath), true);
 
     const deleted = services.spaces.deleteSpace(emptySpace.id);
     assert.equal(deleted.connectionsDeleted, 1);
+    assert.equal(deleted.toolStatsDeleted, 1);
     assert.equal(fs.existsSync(emptySpace.rootPath), false);
     assert.throws(() => services.spaces.getSpaceById(emptySpace.id), /Space not found/);
 
@@ -1529,6 +1576,72 @@ test("space API responses do not expose managed filesystem paths", async () => {
   }
 });
 
+test("HTTP boundary rejects untrusted browser requests before mutations run", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "http-boundary-"));
+  process.env.GH_TOKEN = "test-token";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  let mutationCalls = 0;
+  (services.operations as unknown as { enqueueGitHubSync: () => { id: string } }).enqueueGitHubSync = () => {
+    mutationCalls += 1;
+    return { id: "job_http_boundary" };
+  };
+  const app = await createApp(services);
+  const allowedHost = "127.0.0.1:8787";
+  const allowedOrigin = "http://127.0.0.1:5173";
+
+  try {
+    const untrustedHost = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: "rebind.example:8787", origin: allowedOrigin },
+      payload: {}
+    });
+    assert.equal(untrustedHost.statusCode, 403);
+
+    const untrustedOrigin = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: allowedHost, origin: "https://evil.example" },
+      payload: {}
+    });
+    assert.equal(untrustedOrigin.statusCode, 403);
+
+    const crossSite = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: allowedHost, origin: allowedOrigin, "sec-fetch-site": "cross-site" },
+      payload: {}
+    });
+    assert.equal(crossSite.statusCode, 403);
+
+    const missingJson = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: allowedHost, origin: allowedOrigin }
+    });
+    assert.equal(missingJson.statusCode, 415);
+    assert.equal(mutationCalls, 0);
+
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/api/github/sync",
+      headers: { host: allowedHost, origin: allowedOrigin },
+      payload: {}
+    });
+    assert.equal(allowed.statusCode, 200);
+    assert.equal(allowed.headers["access-control-allow-origin"], allowedOrigin);
+    assert.equal(mutationCalls, 1);
+  } finally {
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
 test("route errors return actionable messages", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "route-errors-"));
@@ -1577,7 +1690,7 @@ test("unknown resources return 404 and invalid payloads return readable 400 mess
     assert.equal(missingJob.statusCode, 404);
     assert.match(missingJob.json<{ error: string }>().error, /Job not found/);
 
-    const missingJobRetry = await app.inject({ method: "POST", url: "/api/jobs/job_missing/retry" });
+    const missingJobRetry = await app.inject({ method: "POST", url: "/api/jobs/job_missing/retry", payload: {} });
     assert.equal(missingJobRetry.statusCode, 404);
 
     const missingJobEvents = await app.inject({ method: "GET", url: "/api/jobs/job_missing/events" });

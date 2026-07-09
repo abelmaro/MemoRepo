@@ -168,6 +168,8 @@ Deleting a space through the managed-data flow removes that space's managed clon
 
 MemoRepo is designed for trusted local use. It binds services to localhost through Docker Compose by default.
 
+The API validates the HTTP hostname and browser origin before routing requests. Browser origins must match the configured dashboard origin, cross-site browser requests are rejected, and POST/PUT/PATCH calls to MemoRepo routes must use a JSON content type. Local non-browser clients may omit `Origin`, but still need to use an allowed API hostname.
+
 `GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
