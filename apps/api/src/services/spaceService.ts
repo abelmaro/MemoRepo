@@ -348,10 +348,17 @@ export class SpaceService {
   }
 
   listRemovedSpaceRepositories(spaceId: string) {
-    return this.listSpaceRepositoriesByRemovalState(spaceId, true);
+    return this.listSpaceRepositoriesByRemovalState(spaceId, true, { pendingCleanupOnly: true });
   }
 
-  private listSpaceRepositoriesByRemovalState(spaceId: string, removed: boolean) {
+  private listSpaceRepositoriesByRemovalState(
+    spaceId: string,
+    removed: boolean,
+    options: { pendingCleanupOnly?: boolean } = {}
+  ) {
+    const pendingCleanupClause = options.pendingCleanupOnly
+      ? "AND NOT (sr.clone_status = 'cleaned' AND sr.index_status = 'not_indexed')"
+      : "";
     return this.database.sqlite
       .prepare(
         `
@@ -373,6 +380,7 @@ export class SpaceService {
         JOIN github_repositories gr ON gr.id = sr.github_repository_id
         WHERE sr.space_id = ?
           AND sr.removed_at IS ${removed ? "NOT NULL" : "NULL"}
+          ${pendingCleanupClause}
         ORDER BY ${removed ? "sr.removed_at DESC" : "gr.full_name ASC"}
       `
       )

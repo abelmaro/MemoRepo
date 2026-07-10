@@ -30,6 +30,7 @@ export function App() {
   const [repoKindFilter, setRepoKindFilter] = useState<RepositoryKindFilter>("all");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [managementView, setManagementView] = useState<ManagementView | null>(null);
+  const [updateConfirmationOpen, setUpdateConfirmationOpen] = useState(false);
   const filterMenuRef = useRef<HTMLDivElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -64,6 +65,7 @@ export function App() {
   const updateSpaceMutation = useMutation({
     mutationFn: (spaceId: string) => api<{ job: Job }>(`/api/spaces/${spaceId}/reindex`, { method: "POST", body: "{}" }),
     onSuccess: ({ job }) => {
+      setUpdateConfirmationOpen(false);
       setActiveJobId(job.id);
       setManagementView("activity");
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -116,10 +118,18 @@ export function App() {
     if (!selectedSpace) {
       return;
     }
-    if (repositories.length >= 5 && !window.confirm(`Check and update ${repositories.length} repositories in this Space?`)) {
+    if (repositories.length >= 5) {
+      updateSpaceMutation.reset();
+      setUpdateConfirmationOpen(true);
       return;
     }
     updateSpaceMutation.mutate(selectedSpace.id);
+  }
+
+  function confirmCheckForUpdates() {
+    if (selectedSpace) {
+      updateSpaceMutation.mutate(selectedSpace.id);
+    }
   }
 
   function clearRepositoryFilters() {
@@ -423,6 +433,29 @@ export function App() {
         />
       ) : null}
       {mcpOpen && selectedSpace ? <McpModal space={selectedSpace} onClose={() => setMcpOpen(false)} /> : null}
+      {updateConfirmationOpen && selectedSpace ? (
+        <Modal title="Check repositories for updates" onClose={() => !updateSpaceMutation.isPending && setUpdateConfirmationOpen(false)}>
+          <div className="confirmation-dialog">
+            <p>
+              Check and update all <strong>{repositories.length} repositories</strong> in {selectedSpace.name}? MemoRepo will rebuild the Space snapshot when needed.
+            </p>
+            {updateSpaceMutation.error ? (
+              <div className="inline-alert error" role="alert">
+                {updateSpaceMutation.error instanceof Error ? updateSpaceMutation.error.message : "Repositories could not be updated."}
+              </div>
+            ) : null}
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => setUpdateConfirmationOpen(false)} disabled={updateSpaceMutation.isPending}>
+                Cancel
+              </button>
+              <button className="primary-button" type="button" onClick={confirmCheckForUpdates} disabled={updateSpaceMutation.isPending}>
+                {updateSpaceMutation.isPending ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                <span>Check for updates</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {activeJobId ? (
         <Modal title="Job details" onClose={() => setActiveJobId(null)} wide>
           <JobLog jobId={activeJobId} onJob={(jobId) => setActiveJobId(jobId)} />

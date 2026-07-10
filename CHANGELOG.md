@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-10
+
+### Changed
+
+- Replace native browser alerts, confirmations, and prompts with accessible application modals or inline operation feedback.
+
+### Fixed
+
+- Distinguish snapshot updates, failed builds, and required rebuilds so completed failures no longer appear as indefinitely pending.
+- Remove cleaned repository clones from the pending-cleanup list while retaining their internal history for job and index references.
+
 ## [0.1.5] - 2026-07-10
 
 ### Added
@@ -88,7 +99,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/abelmaro/MemoRepo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/abelmaro/MemoRepo/compare/v0.1.2...v0.1.3
