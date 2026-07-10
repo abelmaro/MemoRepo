@@ -9,12 +9,16 @@ import {
   type SnapshotPruneResult,
   type Space
 } from "../lib/api";
+import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
 
 export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; onChanged: () => void; onDeleted: () => void }) {
   const queryClient = useQueryClient();
   const [snapshotRetention, setSnapshotRetention] = useState<number | null>(null);
   const [jobRetentionDays, setJobRetentionDays] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   const snapshotsQuery = useQuery({
     queryKey: ["space-snapshots", space.id],
@@ -36,12 +40,12 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
         body: JSON.stringify({ keepLatest: effectiveSnapshotRetention })
       }),
     onSuccess: (result) => {
-      window.alert(`Deleted ${result.deletedCount} snapshots and freed ${formatBytes(result.deletedBytes)}.`);
+      setFeedback({ tone: "success", message: `Deleted ${result.deletedCount} snapshots and freed ${formatBytes(result.deletedBytes)}.` });
       void queryClient.invalidateQueries({ queryKey: ["space-snapshots", space.id] });
       void queryClient.invalidateQueries({ queryKey: ["maintenance-summary"] });
       onChanged();
     },
-    onError: (error) => window.alert(error instanceof Error ? error.message : "Snapshots could not be pruned")
+    onError: (error) => setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Snapshots could not be pruned" })
   });
 
   const gcMutation = useMutation({
@@ -51,18 +55,18 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
         body: JSON.stringify({ jobRetentionDays: effectiveJobRetentionDays })
       }),
     onSuccess: (result) => {
-      window.alert(`Garbage collection finished. Freed ${formatBytes(maintenanceResultBytes(result))}.`);
+      setFeedback({ tone: "success", message: `Garbage collection finished. Freed ${formatBytes(maintenanceResultBytes(result))}.` });
       void queryClient.invalidateQueries({ queryKey: ["maintenance-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["space-snapshots", space.id] });
       onChanged();
     },
-    onError: (error) => window.alert(error instanceof Error ? error.message : "Garbage collection failed")
+    onError: (error) => setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Garbage collection failed" })
   });
 
   const deleteManagedMutation = useMutation({
     mutationFn: () => api(`/api/spaces/${space.id}/managed-data`, { method: "DELETE" }),
     onSuccess: () => onDeleted(),
-    onError: (error) => window.alert(error instanceof Error ? error.message : "Space could not be deleted")
+    onError: () => undefined
   });
 
   const snapshots = snapshotsQuery.data?.snapshots ?? [];
@@ -71,15 +75,12 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
   const gcBytes = maintenance ? maintenanceCandidateBytes(maintenance) : 0;
 
   function deleteManagedSpace() {
-    const confirmation = window.prompt(`Delete "${space.name}" and all MemoRepo-managed data? Type DELETE ${space.name} to confirm.`);
-    if (confirmation !== `DELETE ${space.name}`) {
-      return;
-    }
     deleteManagedMutation.mutate();
   }
 
   return (
-    <section className="lifecycle-panel management-panel" aria-labelledby="lifecycle-title">
+    <>
+      <section className="lifecycle-panel management-panel" aria-labelledby="lifecycle-title">
       <div className="panel-heading with-icon">
         <Database size={20} />
         <div>
@@ -88,6 +89,11 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
         </div>
       </div>
       <div className="lifecycle-grid">
+        {feedback ? (
+          <div className={`inline-alert ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>
+            {feedback.message}
+          </div>
+        ) : null}
         <div className="lifecycle-card lifecycle-card-wide">
           <div className="lifecycle-card-header">
             <div>
@@ -105,7 +111,7 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
                   onChange={(event) => setSnapshotRetention(Number(event.target.value))}
                 />
               </label>
-              <button className="secondary-button" type="button" onClick={() => pruneMutation.mutate()} disabled={pruneMutation.isPending}>
+              <button className="secondary-button" type="button" onClick={() => { setFeedback(null); pruneMutation.mutate(); }} disabled={pruneMutation.isPending}>
                 {pruneMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
                 <span>Prune</span>
               </button>
@@ -152,7 +158,7 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
                 onChange={(event) => setJobRetentionDays(Number(event.target.value))}
               />
             </label>
-            <button className="secondary-button" type="button" onClick={() => gcMutation.mutate()} disabled={gcMutation.isPending}>
+            <button className="secondary-button" type="button" onClick={() => { setFeedback(null); gcMutation.mutate(); }} disabled={gcMutation.isPending}>
               {gcMutation.isPending ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
               <span>Run GC</span>
             </button>
@@ -166,13 +172,52 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
               <span>Removes managed clones, indexes, snapshots, jobs, and local MCP connections.</span>
             </div>
           </div>
-          <button className="secondary-button danger" type="button" onClick={deleteManagedSpace} disabled={deleteManagedMutation.isPending}>
-            {deleteManagedMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+          <button className="secondary-button danger" type="button" onClick={() => { deleteManagedMutation.reset(); setDeleteConfirmation(""); setDeleteOpen(true); }}>
+            <Trash2 size={18} />
             <span>Delete managed data</span>
           </button>
         </div>
       </div>
-    </section>
+      </section>
+
+      {deleteOpen ? (
+        <Modal title="Delete Space data" onClose={() => !deleteManagedMutation.isPending && setDeleteOpen(false)}>
+          <div className="confirmation-dialog">
+            <p>
+              Delete <strong>{space.name}</strong> and all MemoRepo-managed clones, indexes, snapshots, jobs, and local MCP connections?
+            </p>
+            <label className="form-stack">
+              <span>Type <strong>DELETE {space.name}</strong> to confirm.</span>
+              <input
+                data-modal-autofocus
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                disabled={deleteManagedMutation.isPending}
+              />
+            </label>
+            {deleteManagedMutation.error ? (
+              <div className="inline-alert error" role="alert">
+                {deleteManagedMutation.error instanceof Error ? deleteManagedMutation.error.message : "Space could not be deleted."}
+              </div>
+            ) : null}
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => setDeleteOpen(false)} disabled={deleteManagedMutation.isPending}>
+                Cancel
+              </button>
+              <button
+                className="secondary-button danger"
+                type="button"
+                onClick={deleteManagedSpace}
+                disabled={deleteConfirmation !== `DELETE ${space.name}` || deleteManagedMutation.isPending}
+              >
+                {deleteManagedMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                <span>Delete managed data</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+    </>
   );
 }
 

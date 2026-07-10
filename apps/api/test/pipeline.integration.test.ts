@@ -184,6 +184,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     const cleanedRepository = services.spaces.getSpaceRepository(added.spaceRepository.id);
     assert.equal(cleanedRepository.clone_status, "cleaned");
     assert.equal(cleanedRepository.index_status, "not_indexed");
+    assert.equal(services.spaces.listRemovedSpaceRepositories(space.id).length, 0);
 
     services.mcp.revokeConnection(connection.connection.id);
     await assert.rejects(

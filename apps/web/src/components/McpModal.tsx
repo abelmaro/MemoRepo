@@ -20,6 +20,8 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
   const [copyState, setCopyState] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<McpConnectionTestResult | null>(null);
   const [deletingConnectionId, setDeletingConnectionId] = useState<string | null>(null);
+  const [connectionToDelete, setConnectionToDelete] = useState<McpConnection | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const connectionsQuery = useQuery({
     queryKey: ["mcp-connections", space.id],
     queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`),
@@ -86,11 +88,13 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
       setDeletingConnectionId(connectionId);
     },
     onSuccess: () => {
+      setConnectionToDelete(null);
+      setDeleteError(null);
       void queryClient.invalidateQueries({ queryKey: ["mcp-connections", space.id] });
       void queryClient.invalidateQueries({ queryKey: ["space", space.id] });
     },
     onError: (error) => {
-      window.alert(error instanceof Error ? error.message : "MCP connection could not be deleted");
+      setDeleteError(error instanceof Error ? error.message : "MCP connection could not be deleted");
     },
     onSettled: () => {
       setDeletingConnectionId(null);
@@ -125,15 +129,51 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
   }
 
   function deleteConnection(connection: McpConnection) {
-    const activeWarning = connection.revoked_at ? "" : " Active agents using this config will stop working.";
-    if (!window.confirm(`Delete MCP connection ${connection.name}?${activeWarning}`)) {
-      return;
-    }
-    deleteConnectionMutation.mutate(connection.id);
+    deleteConnectionMutation.reset();
+    setDeleteError(null);
+    setConnectionToDelete(connection);
   }
 
   return (
-    <Modal title="Connect agent" onClose={onClose} wide>
+    <Modal
+      title={connectionToDelete ? "Delete MCP connection" : "Connect agent"}
+      onClose={() => {
+        if (deleteConnectionMutation.isPending) {
+          return;
+        }
+        if (connectionToDelete) {
+          setConnectionToDelete(null);
+          setDeleteError(null);
+        } else {
+          onClose();
+        }
+      }}
+      wide={!connectionToDelete}
+    >
+      {connectionToDelete ? (
+        <div className="confirmation-dialog">
+          <p>
+            Delete the <strong>{connectionToDelete.name}</strong> MCP connection?
+            {!connectionToDelete.revoked_at ? " Active agents using this configuration will stop working." : ""}
+          </p>
+          {deleteError ? <div className="inline-alert error" role="alert">{deleteError}</div> : null}
+          <div className="dialog-actions">
+            <button className="secondary-button" type="button" onClick={() => setConnectionToDelete(null)} disabled={deleteConnectionMutation.isPending}>
+              Cancel
+            </button>
+            <button
+              className="secondary-button danger"
+              type="button"
+              onClick={() => deleteConnectionMutation.mutate(connectionToDelete.id)}
+              disabled={deleteConnectionMutation.isPending}
+            >
+              {deleteConnectionMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>Delete connection</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="mcp-intro">
         <p>Create a named, read-only connection for an agent. Each connection can be revoked independently without affecting this Space.</p>
       </div>
@@ -218,6 +258,8 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
           <div className="empty-inline">No MCP connections yet.</div>
         )}
       </div>
+        </>
+      )}
     </Modal>
   );
 }
