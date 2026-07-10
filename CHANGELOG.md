@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Make the space-level check and update workflow fetch selected remote branches, reindex only repositories whose commit or index state changed, and rebuild the snapshot only when needed.
 
+### Fixed
+
+- Keep exactly one snapshot active per space and avoid rendering duplicate active status badges.
+
 ## [0.1.3] - 2026-07-09
 
 ### Added

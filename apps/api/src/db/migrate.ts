@@ -144,6 +144,20 @@ export function migrate(sqlite: Database.Database): void {
     );
   `);
 
+  const normalizeSnapshotStatuses = sqlite.transaction(() => {
+    sqlite.exec(`
+      UPDATE space_snapshots
+      SET status = 'inactive'
+      WHERE status = 'active'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM spaces
+          WHERE spaces.active_snapshot_id = space_snapshots.id
+        );
+    `);
+  });
+  normalizeSnapshotStatuses.immediate();
+
   const addJobDeduplication = sqlite.transaction(() => {
     const jobColumns = sqlite.pragma("table_info(jobs)") as Array<{ name: string }>;
     if (!jobColumns.some((column) => column.name === "deduplication_key")) {

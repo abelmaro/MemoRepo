@@ -129,8 +129,7 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
                   {snapshot.error ? <small>{snapshot.error}</small> : null}
                 </div>
                 <div className="repo-badges">
-                  {snapshot.active ? <StatusBadge status="active" tone="green" /> : null}
-                  <StatusBadge status={snapshot.status} />
+                  {snapshot.active ? <StatusBadge status="active" tone="green" /> : <StatusBadge status={snapshot.status} />}
                 </div>
               </article>
             ))}

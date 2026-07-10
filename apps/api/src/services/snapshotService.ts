@@ -104,6 +104,10 @@ export class SnapshotService {
       const activatedAt = nowIso();
 
       this.database.sqlite.transaction(() => {
+        this.database.sqlite
+          .prepare("UPDATE space_snapshots SET status = 'inactive' WHERE space_id = ? AND id <> ? AND status = 'active'")
+          .run(spaceId, snapshotId);
+
         updateRecord(
           this.database,
           "space_snapshots",

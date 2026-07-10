@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.js";
+import { migrate } from "../src/db/migrate.js";
 import { createServices } from "../src/services/appServices.js";
 import { insertRecord, updateRecord } from "../src/db/sql.js";
 import { spaces } from "../src/db/schema.js";
@@ -1060,6 +1061,22 @@ test("space snapshots can be listed and pruned by retention", async () => {
     await services.snapshots.buildSpaceSnapshot(space.id);
     await services.snapshots.buildSpaceSnapshot(space.id);
 
+    const activatedStatuses = services.database.sqlite
+      .prepare("SELECT version, status FROM space_snapshots WHERE space_id = ? ORDER BY version ASC")
+      .all(space.id);
+    assert.deepEqual(activatedStatuses, [
+      { version: 1, status: "inactive" },
+      { version: 2, status: "inactive" },
+      { version: 3, status: "active" }
+    ]);
+
+    services.database.sqlite.prepare("UPDATE space_snapshots SET status = 'active' WHERE space_id = ?").run(space.id);
+    migrate(services.database.sqlite);
+    const normalizedStatuses = services.database.sqlite
+      .prepare("SELECT version, status FROM space_snapshots WHERE space_id = ? ORDER BY version ASC")
+      .all(space.id);
+    assert.deepEqual(normalizedStatuses, activatedStatuses);
+
     const snapshotRows = services.database.sqlite
       .prepare("SELECT id, artifact_path AS artifactPath FROM space_snapshots WHERE space_id = ? ORDER BY version ASC")
       .all(space.id) as Array<{ id: string; artifactPath: string }>;
@@ -1069,10 +1086,14 @@ test("space snapshots can be listed and pruned by retention", async () => {
 
     const listResponse = await injectControlApi(app, { method: "GET", url: `/api/spaces/${space.id}/snapshots` });
     assert.equal(listResponse.statusCode, 200);
-    const listPayload = listResponse.json<{ snapshots: Array<{ active: boolean; sizeBytes: number }>; defaultRetention: number }>();
+    const listPayload = listResponse.json<{
+      snapshots: Array<{ active: boolean; status: string; sizeBytes: number }>;
+      defaultRetention: number;
+    }>();
     assert.equal(listPayload.snapshots.length, 3);
     assert.equal(listPayload.defaultRetention, 2);
     assert.equal(listPayload.snapshots.filter((snapshot) => snapshot.active).length, 1);
+    assert.deepEqual(listPayload.snapshots.map((snapshot) => snapshot.status), ["active", "inactive", "inactive"]);
     assert.ok(listPayload.snapshots.every((snapshot) => snapshot.sizeBytes > 0));
 
     const pruneResponse = await injectControlApi(app, {
