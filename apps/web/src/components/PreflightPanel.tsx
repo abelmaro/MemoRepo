@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ShieldCheck } from "lucide-react";
 import { api } from "../lib/api";
 import { StatusBadge } from "./StatusBadge";
 
@@ -21,48 +20,41 @@ interface PreflightCheck {
 }
 
 export function PreflightPanel() {
-  const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
   const preflightQuery = useQuery({
     queryKey: ["preflight"],
     queryFn: () => api<PreflightState>("/api/preflight"),
-    refetchInterval: open ? 30000 : false
+    refetchInterval: 30000
   });
 
   return (
-    <section className="preflight-panel">
+    <section className="preflight-panel management-panel" aria-labelledby="preflight-title">
       <div className="preflight-header">
-        <button className="panel-toggle" type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
-          {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+        <div className="panel-heading with-icon">
+          <ShieldCheck size={20} />
           <div>
-            <h2>Preflight</h2>
+            <h3 id="preflight-title">Runtime checks</h3>
             <span>
               {preflightQuery.data
                 ? `${formatPreflightStatus(preflightQuery.data.status)} · checked ${formatCheckedAt(preflightQuery.data.checkedAt)}`
                 : "Checking local runtime..."}
             </span>
           </div>
-        </button>
-        <button className="text-button" type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["preflight"] })}>
-          Refresh
-        </button>
-      </div>
-      {open ? (
-        <div className="preflight-grid">
-          {(preflightQuery.data?.checks ?? []).map((check) => (
-            <div className={`preflight-check preflight-check-${check.status}`} key={check.id}>
-              <ShieldCheck size={18} />
-              <div>
-                <strong>{check.label}</strong>
-                <span>{check.message}</span>
-                {check.detail ? <small>{check.detail}</small> : null}
-              </div>
-              <StatusBadge status={formatCheckStatus(check.status)} tone={checkStatusTone(check.status)} />
-            </div>
-          ))}
-          {!preflightQuery.data ? <div className="empty-inline">Checking runtime requirements...</div> : null}
         </div>
-      ) : null}
+      </div>
+      <div className="preflight-grid" aria-live="polite">
+        {(preflightQuery.data?.checks ?? []).map((check) => (
+          <div className={`preflight-check preflight-check-${check.status}`} key={check.id}>
+            <ShieldCheck size={18} />
+            <div>
+              <strong>{check.label}</strong>
+              <span>{check.message}</span>
+              {check.detail ? <small>{check.detail}</small> : null}
+            </div>
+            <StatusBadge status={formatCheckStatus(check.status)} tone={checkStatusTone(check.status)} />
+          </div>
+        ))}
+        {!preflightQuery.data ? <div className="empty-inline">Checking runtime requirements...</div> : null}
+      </div>
     </section>
   );
 }

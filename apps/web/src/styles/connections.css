@@ -4,6 +4,29 @@
   padding: 0 22px 22px;
 }
 
+.connection-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.connection-list-header > div {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.connection-list-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.connection-list-header span {
+  color: #667085;
+  font-size: 12px;
+}
+
 .connection-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto;

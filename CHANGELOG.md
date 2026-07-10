@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Make the space-level check and update workflow fetch selected remote branches, reindex only repositories whose commit or index state changed, and rebuild the snapshot only when needed.
+- Redesign the space dashboard around contextual agent readiness, consolidated repository actions, searchable branch selection, and clearer empty states.
+- Reorganize activity, system health, and lifecycle settings into one contained management surface with responsive layouts and accessible dialogs.
 
 ### Fixed
 

@@ -7,6 +7,11 @@
   background: #ffffff;
 }
 
+.jobs-panel > .panel-heading,
+.removed-panel > .panel-heading {
+  margin-bottom: 12px;
+}
+
 .jobs-header {
   display: flex;
   justify-content: space-between;

@@ -37,3 +37,13 @@ select {
 button {
   cursor: pointer;
 }
+
+:where(button, a, input, select, summary, [tabindex]):focus-visible {
+  outline: 3px solid #7357ff;
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #dcd5ff;
+  color: #111827;
+}

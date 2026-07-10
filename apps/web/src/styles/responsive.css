@@ -1,6 +1,194 @@
-@media (max-width: 1120px) and (min-width: 981px) {
+@media (max-width: 1100px) and (min-width: 901px) {
+  .workspace {
+    padding-inline: 30px;
+  }
+
+  .repo-table-header,
   .repo-row {
-    grid-template-columns: minmax(260px, 1fr) minmax(170px, 190px);
+    grid-template-columns: minmax(220px, 1.2fr) minmax(130px, 0.7fr) minmax(135px, 0.75fr) auto;
+  }
+
+  .repo-table-header > :nth-child(4),
+  .repo-indexed-cell {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: static;
+    display: grid;
+    grid-template-areas:
+      "brand heading"
+      "spaces spaces";
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 18px;
+    height: auto;
+    padding: 14px 20px;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .brand {
+    grid-area: brand;
+    padding: 0;
+    font-size: 18px;
+  }
+
+  .brand svg {
+    width: 22px;
+  }
+
+  .sidebar-section-heading {
+    grid-area: heading;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0;
+  }
+
+  .space-list {
+    grid-area: spaces;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .space-item {
+    flex: 0 0 auto;
+    width: min(230px, 75vw);
+  }
+
+  .workspace {
+    padding: 26px 24px 40px;
+  }
+
+  .repo-table-header,
+  .repo-row {
+    grid-template-columns: minmax(220px, 1.2fr) minmax(130px, 0.7fr) minmax(135px, 0.75fr) auto;
+  }
+
+  .repo-table-header > :nth-child(4),
+  .repo-indexed-cell {
+    display: none;
+  }
+
+  .preflight-grid,
+  .diagnostics-grid,
+  .lifecycle-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preflight-check,
+  .preflight-check:nth-child(even) {
+    padding-right: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .diagnostics-grid div,
+  .diagnostics-grid div:first-child,
+  .diagnostics-grid div:last-child {
+    padding-right: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .lifecycle-card-wide {
+    grid-row: auto;
+    padding-right: 0;
+  }
+
+  .lifecycle-grid > .lifecycle-card:not(.lifecycle-card-wide) {
+    margin-top: 18px;
+    padding-left: 0;
+    border-top: 1px solid #e2e7ef;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .workspace {
+    padding: 22px 16px 34px;
+  }
+
+  .workspace-header {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+
+  .workspace-header h1 {
+    font-size: 30px;
+  }
+
+  .workspace-header p {
+    font-size: 14px;
+  }
+
+  .header-actions,
+  .header-actions .primary-button {
+    width: 100%;
+  }
+
+  .space-status-callout {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 0;
+    padding: 15px;
+  }
+
+  .space-status-callout .primary-button,
+  .space-status-callout .secondary-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .repo-section-header,
+  .management-header,
+  .modal-intro,
+  .branch-confirmation {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .repo-section-header .secondary-button {
+    width: 100%;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    padding-inline: 16px;
+  }
+
+  .search-box {
+    min-width: 0;
+  }
+
+  .filter-menu .secondary-button {
+    min-width: 44px;
+    padding-inline: 12px;
+  }
+
+  .repo-table-header {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .repo-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 0;
+    padding: 14px 16px;
   }
 
   .repo-main {
@@ -8,97 +196,97 @@
     grid-row: 1;
   }
 
-  .repo-badges {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .branch-select {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
   .repo-actions {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 1;
     align-self: start;
-    flex-wrap: wrap;
-    justify-content: flex-start;
   }
-}
 
-@media (max-width: 980px) {
-  .app-shell {
+  .repo-status-cell {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .repo-status-cell > span:last-child {
+    display: none;
+  }
+
+  .repo-branch-cell {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .branch-button {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    min-height: 40px;
+    padding: 5px 9px;
+    border-color: #e1e6ee;
+  }
+
+  .branch-button svg {
+    grid-row: auto;
+  }
+
+  .branch-button small {
+    font-size: 11px;
+  }
+
+  .repo-error {
+    grid-row: 4;
+  }
+
+  .management-header {
+    gap: 14px;
+    padding: 18px 16px;
+  }
+
+  .management-switcher {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .management-switcher button {
+    justify-content: center;
+    padding-inline: 7px;
+    font-size: 12px;
+  }
+
+  .management-content {
+    padding: 20px 16px 22px;
+  }
+
+  .branch-results {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    position: static;
-    height: auto;
-  }
-
-  .workspace {
-    padding: 24px;
-  }
-
-  .workspace-header,
-  .toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .header-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+  .dialog-actions {
     width: 100%;
   }
 
-  .header-actions .primary-button,
-  .header-actions .secondary-button {
-    width: 100%;
-    min-width: 0;
-    padding: 0 12px;
-  }
-
-  .search-box {
-    flex: none;
-    width: 100%;
-  }
-
-  .filter-control {
-    flex-wrap: wrap;
-    width: 100%;
-  }
-
-  .filter-control button {
+  .dialog-actions .primary-button,
+  .dialog-actions .secondary-button {
     flex: 1 1 auto;
   }
 
-  .toolbar > .secondary-button,
-  .connect-agent-button {
-    width: 100%;
-    justify-self: stretch;
-  }
-
-  .status-strip,
-  .preflight-grid,
-  .diagnostics-grid,
-  .lifecycle-grid,
-  .repo-row,
-  .removed-row,
-  .connection-row {
+  .inline-form {
     grid-template-columns: 1fr;
   }
 
-  .repo-actions {
-    align-self: start;
-    justify-content: flex-start;
-    flex-wrap: wrap;
+  .inline-form .secondary-button {
+    width: 100%;
   }
 
-  .lifecycle-card-wide {
-    grid-row: auto;
+  .connection-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .connection-row > .secondary-button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .lifecycle-card-header,
@@ -112,12 +300,16 @@
     width: 100%;
   }
 
+  .mcp-tabs {
+    overflow-x: auto;
+  }
+
   .mcp-action-row .secondary-button {
     width: 100%;
   }
 
   .job-terminal-row {
-    grid-template-columns: 70px 80px minmax(0, 1fr);
+    grid-template-columns: 68px 76px minmax(0, 1fr);
   }
 
   .job-terminal-error {
@@ -126,7 +318,47 @@
 }
 
 @media (max-width: 440px) {
-  .header-actions {
-    grid-template-columns: 1fr;
+  .sidebar {
+    padding-inline: 16px;
+  }
+
+  .sidebar-section-heading > span {
+    display: none;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .management-switcher button {
+    min-height: 42px;
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+
+  .repo-name {
+    font-size: 14px;
+  }
+
+  .repo-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .modal,
+  .modal-wide {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 12px 12px 0 0;
+  }
+
+  .dialog-actions {
+    flex-direction: column-reverse;
   }
 }

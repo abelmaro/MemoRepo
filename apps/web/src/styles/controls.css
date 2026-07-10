@@ -1,11 +1,8 @@
 .space-item,
-.new-space-button,
 .primary-button,
 .secondary-button,
-.filter-button,
 .connect-agent-button,
 .text-button,
-.job-chip,
 .repo-picker-row,
 .icon-button,
 .filter-control {
@@ -16,14 +13,19 @@
 
 .space-item {
   display: grid;
-  grid-template-columns: 24px 1fr auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 48px;
-  padding: 0 14px;
+  min-height: 46px;
+  padding: 0 12px;
+  border-color: transparent;
   border-radius: 8px;
   text-align: left;
+}
+
+.space-item:hover {
+  background: #f7f8fb;
 }
 
 .space-item.active {
@@ -32,53 +34,80 @@
   color: #4f2ff0;
 }
 
-.new-space-button,
+.space-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-item strong {
+  font-size: 12px;
+}
+
 .primary-button,
 .secondary-button,
-.filter-button,
 .connect-agent-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 0 18px;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 16px;
   border-radius: 8px;
-  font-weight: 700;
-}
-
-.new-space-button {
-  margin-top: auto;
-  border-color: #b8aaff;
-  color: #4f2ff0;
+  font-weight: 750;
 }
 
 .primary-button {
   border-color: #5b35f5;
   background: #5b35f5;
   color: #ffffff;
-  box-shadow: 0 10px 24px rgb(91 53 245 / 20%);
+  box-shadow: 0 8px 20px rgb(91 53 245 / 18%);
 }
 
-.secondary-button,
-.filter-button {
-  background: #ffffff;
+.primary-button:hover:not(:disabled) {
+  border-color: #4725dc;
+  background: #4725dc;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #c9d0dc;
+  background: #f8f9fb;
 }
 
 .secondary-button.danger {
   border-color: #facaca;
-  color: #c82121;
+  color: #b42318;
+}
+
+.secondary-button.danger:hover:not(:disabled) {
+  border-color: #e9a8a8;
+  background: #fff3f3;
+}
+
+.compact-button {
+  min-height: 40px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.text-button {
+  border: 0;
+  color: #4f2ff0;
+  font-weight: 700;
+}
+
+.text-button.with-icon {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 7px 0;
 }
 
 .primary-button:disabled,
 .secondary-button:disabled,
 .connect-agent-button:disabled,
-.new-space-button:disabled,
-.icon-button:disabled {
+.icon-button:disabled,
+.repo-picker-row:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-.connect-agent-button {
-  justify-self: end;
 }

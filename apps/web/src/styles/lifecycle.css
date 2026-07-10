@@ -6,10 +6,15 @@
   background: #ffffff;
 }
 
+.lifecycle-panel > .panel-heading {
+  margin-bottom: 16px;
+}
+
 .lifecycle-grid {
   display: grid;
   grid-template-columns: minmax(360px, 1.4fr) minmax(260px, 0.8fr);
-  gap: 12px;
+  gap: 0;
+  border-top: 1px solid #e2e7ef;
 }
 
 .lifecycle-card {
@@ -17,13 +22,20 @@
   align-content: start;
   gap: 14px;
   min-width: 0;
-  padding: 14px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
+  padding: 18px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .lifecycle-card-wide {
   grid-row: span 2;
+  padding-right: 22px;
+}
+
+.lifecycle-grid > .lifecycle-card:not(.lifecycle-card-wide) {
+  padding-left: 22px;
+  border-left: 1px solid #e2e7ef;
 }
 
 .lifecycle-card-header {
@@ -48,9 +60,10 @@
 
 .snapshot-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
   max-height: 256px;
   overflow: auto;
+  border-top: 1px solid #e8edf4;
 }
 
 .snapshot-row {
@@ -59,9 +72,9 @@
   align-items: center;
   gap: 12px;
   min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
+  padding: 11px 0;
+  border: 0;
+  border-bottom: 1px solid #e8edf4;
 }
 
 .snapshot-row > div:first-child {
@@ -106,9 +119,10 @@
 
 .maintenance-metrics span {
   min-height: 34px;
-  padding: 8px;
-  border-radius: 8px;
-  background: #f7f8fb;
+  padding: 8px 0;
+  border-bottom: 1px solid #e8edf4;
+  border-radius: 0;
+  background: transparent;
 }
 
 .lifecycle-actions {
@@ -116,6 +130,11 @@
 }
 
 .danger-zone {
-  border-color: #facaca;
-  background: #fffafa;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #facaca;
+}
+
+.danger-zone h3 {
+  color: #b42318;
 }

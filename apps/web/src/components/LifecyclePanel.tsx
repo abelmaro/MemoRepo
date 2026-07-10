@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Database, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import {
   api,
   type MaintenanceResult,
@@ -13,19 +13,18 @@ import { StatusBadge } from "./StatusBadge";
 
 export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; onChanged: () => void; onDeleted: () => void }) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
   const [snapshotRetention, setSnapshotRetention] = useState<number | null>(null);
   const [jobRetentionDays, setJobRetentionDays] = useState<number | null>(null);
 
   const snapshotsQuery = useQuery({
     queryKey: ["space-snapshots", space.id],
     queryFn: () => api<SnapshotListResponse>(`/api/spaces/${space.id}/snapshots`),
-    refetchInterval: open ? 10000 : false
+    refetchInterval: 10000
   });
   const maintenanceQuery = useQuery({
     queryKey: ["maintenance-summary"],
     queryFn: () => api<MaintenanceSummary>("/api/maintenance/summary"),
-    refetchInterval: open ? 30000 : false
+    refetchInterval: 30000
   });
   const effectiveSnapshotRetention = snapshotRetention ?? snapshotsQuery.data?.defaultRetention ?? 3;
   const effectiveJobRetentionDays = jobRetentionDays ?? maintenanceQuery.data?.defaults.jobRetentionDays ?? 30;
@@ -71,11 +70,6 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
   const gcCandidateCount = maintenance ? maintenanceCandidateCount(maintenance) : 0;
   const gcBytes = maintenance ? maintenanceCandidateBytes(maintenance) : 0;
 
-  function refreshLifecycle() {
-    void queryClient.invalidateQueries({ queryKey: ["space-snapshots", space.id] });
-    void queryClient.invalidateQueries({ queryKey: ["maintenance-summary"] });
-  }
-
   function deleteManagedSpace() {
     const confirmation = window.prompt(`Delete "${space.name}" and all MemoRepo-managed data? Type DELETE ${space.name} to confirm.`);
     if (confirmation !== `DELETE ${space.name}`) {
@@ -85,17 +79,14 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
   }
 
   return (
-    <section className="lifecycle-panel">
-      <div className="jobs-header">
-        <button className="panel-toggle" type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
-          {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-          <h2>Data lifecycle</h2>
-        </button>
-        <button className="text-button" type="button" onClick={refreshLifecycle}>
-          Refresh
-        </button>
+    <section className="lifecycle-panel management-panel" aria-labelledby="lifecycle-title">
+      <div className="panel-heading with-icon">
+        <Database size={20} />
+        <div>
+          <h3 id="lifecycle-title">Data lifecycle</h3>
+          <p>Manage snapshots, retained jobs, and MemoRepo-owned local data.</p>
+        </div>
       </div>
-      {open ? (
       <div className="lifecycle-grid">
         <div className="lifecycle-card lifecycle-card-wide">
           <div className="lifecycle-card-header">
@@ -181,7 +172,6 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
           </button>
         </div>
       </div>
-      ) : null}
     </section>
   );
 }

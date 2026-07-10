@@ -1,11 +1,8 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Github } from "lucide-react";
 import { api, type GitHubDiagnostics } from "../lib/api";
 
 export function GithubDiagnosticsPanel() {
-  const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
   const githubDiagnosticsQuery = useQuery({
     queryKey: ["github-diagnostics"],
     queryFn: () => api<GitHubDiagnostics>("/api/github/diagnostics"),
@@ -13,49 +10,38 @@ export function GithubDiagnosticsPanel() {
   });
 
   return (
-    <section className="diagnostics-panel">
+    <section className="diagnostics-panel management-panel" aria-labelledby="github-access-title">
       <div className="diagnostics-header">
-        <button className="panel-toggle" type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
-          {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+        <div className="panel-heading with-icon">
+          <Github size={20} />
           <div>
-            <h2>GitHub access</h2>
+            <h3 id="github-access-title">GitHub access</h3>
             <span>
               {githubDiagnosticsQuery.data?.connected
                 ? `${githubDiagnosticsQuery.data.visibleRepositoryCount ?? 0} visible repos, ${githubDiagnosticsQuery.data.visibleOrganizationCount ?? 0} visible orgs`
                 : githubDiagnosticsQuery.data?.error ?? "Checking access..."}
             </span>
           </div>
-        </button>
-        <button
-          className="text-button"
-          type="button"
-          onClick={() => void queryClient.invalidateQueries({ queryKey: ["github-diagnostics"] })}
-        >
-          Refresh
-        </button>
+        </div>
       </div>
-      {open ? (
-        <>
-          <div className="diagnostics-grid">
-            <div>
-              <strong>Scopes</strong>
-              <span>{formatScopes(githubDiagnosticsQuery.data?.tokenScopes)}</span>
-            </div>
-            <div>
-              <strong>User repos</strong>
-              <span>{githubDiagnosticsQuery.data?.userRepositoryCount ?? 0}</span>
-            </div>
-            <div>
-              <strong>Organizations</strong>
-              <span>{formatOrganizations(githubDiagnosticsQuery.data)}</span>
-            </div>
-          </div>
-          {(githubDiagnosticsQuery.data?.warnings ?? []).length > 0 || githubDiagnosticsQuery.data?.error ? (
-            <div className="diagnostics-warning">
-              {(githubDiagnosticsQuery.data?.warnings ?? [githubDiagnosticsQuery.data?.error]).filter(Boolean).join(" ")}
-            </div>
-          ) : null}
-        </>
+      <div className="diagnostics-grid" aria-live="polite">
+        <div>
+          <strong>Scopes</strong>
+          <span>{formatScopes(githubDiagnosticsQuery.data?.tokenScopes)}</span>
+        </div>
+        <div>
+          <strong>User repos</strong>
+          <span>{githubDiagnosticsQuery.data?.userRepositoryCount ?? 0}</span>
+        </div>
+        <div>
+          <strong>Organizations</strong>
+          <span>{formatOrganizations(githubDiagnosticsQuery.data)}</span>
+        </div>
+      </div>
+      {(githubDiagnosticsQuery.data?.warnings ?? []).length > 0 || githubDiagnosticsQuery.data?.error ? (
+        <div className="diagnostics-warning" role="alert">
+          {(githubDiagnosticsQuery.data?.warnings ?? [githubDiagnosticsQuery.data?.error]).filter(Boolean).join(" ")}
+        </div>
       ) : null}
     </section>
   );

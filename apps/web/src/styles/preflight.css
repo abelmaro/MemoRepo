@@ -15,7 +15,7 @@
   align-items: center;
 }
 
-.preflight-header h2 {
+.preflight-header h3 {
   margin: 0 0 4px;
   font-size: 16px;
 }
@@ -28,7 +28,8 @@
 .preflight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 0;
+  border-top: 1px solid #e2e7ef;
 }
 
 .preflight-check {
@@ -37,10 +38,17 @@
   align-items: start;
   gap: 10px;
   min-height: 76px;
-  padding: 12px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
-  background: #ffffff;
+  padding: 14px 20px 14px 0;
+  border: 0;
+  border-bottom: 1px solid #e8edf4;
+  border-radius: 0;
+  background: transparent;
+}
+
+.preflight-check:nth-child(even) {
+  padding-right: 0;
+  padding-left: 20px;
+  border-left: 1px solid #e2e7ef;
 }
 
 .preflight-check-pass svg {

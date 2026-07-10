@@ -1,3 +1,13 @@
+.mcp-intro {
+  padding: 18px 22px 0;
+}
+
+.mcp-intro p {
+  margin: 0;
+  color: #526071;
+  line-height: 1.5;
+}
+
 .mcp-tabs {
   display: flex;
   gap: 8px;
@@ -15,6 +25,7 @@
 
 .mcp-tabs button.active {
   border-color: #5b35f5;
+  background: #f5f2ff;
   color: #4f2ff0;
 }
 

@@ -20,7 +20,7 @@ export function NewSpaceModal({ onClose }: { onClose: () => void }) {
       <form className="form-stack" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
         <label>
           <span>Name</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input data-modal-autofocus value={name} onChange={(event) => setName(event.target.value)} autoFocus />
         </label>
         <button className="primary-button" type="submit" disabled={!name.trim() || mutation.isPending}>
           <Plus size={18} />

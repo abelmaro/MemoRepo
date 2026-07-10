@@ -14,6 +14,7 @@ interface McpConnectionTestResult {
 export function McpModal({ space, onClose }: { space: Space; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [client, setClient] = useState("generic");
+  const [connectionName, setConnectionName] = useState("My agent");
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [connectionToken, setConnectionToken] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<string | null>(null);
@@ -28,7 +29,7 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
     mutationFn: () =>
       api<{ token: string; configs: Record<string, unknown> }>(`/api/spaces/${space.id}/mcp-connections`, {
         method: "POST",
-        body: JSON.stringify({ name: client, client })
+        body: JSON.stringify({ name: connectionName.trim(), client })
       }),
     onSuccess: (data) => {
       setConfig(data.configs);
@@ -133,12 +134,16 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
 
   return (
     <Modal title="Connect agent" onClose={onClose} wide>
-      <div className="mcp-tabs">
+      <div className="mcp-intro">
+        <p>Create a named, read-only connection for an agent. Each connection can be revoked independently without affecting this Space.</p>
+      </div>
+      <div className="mcp-tabs" aria-label="Agent client">
         {["generic", "codex", "claude", "gemini", "http"].map((item) => (
           <button
             key={item}
             type="button"
             className={client === item ? "active" : ""}
+            aria-pressed={client === item}
             onClick={() => {
               setClient(item);
               setCopyState(null);
@@ -149,9 +154,13 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
         ))}
       </div>
       <div className="form-stack">
-        <button className="primary-button" type="button" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+        <label>
+          <span>Connection name</span>
+          <input data-modal-autofocus value={connectionName} onChange={(event) => setConnectionName(event.target.value)} placeholder="My Codex workspace" />
+        </label>
+        <button className="primary-button" type="button" onClick={() => mutation.mutate()} disabled={!connectionName.trim() || mutation.isPending} aria-busy={mutation.isPending}>
           {mutation.isPending ? <Loader2 className="spin" size={18} /> : <GitBranch size={18} />}
-          <span>Create read-only token</span>
+          <span>Create connection</span>
         </button>
         <pre className="config-block">{selectedConfig ? JSON.stringify(selectedConfig, null, 2) : "Create a connection to generate config."}</pre>
         {selectedConfig ? (
@@ -170,7 +179,7 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
             </button>
           </div>
         ) : null}
-        {copyState ? <div className="mcp-config-state">{copyState}</div> : null}
+        {copyState ? <div className="mcp-config-state" role="status" aria-live="polite">{copyState}</div> : null}
         {testResult ? (
           <div className={`mcp-test-result ${testResult.status}`}>
             <strong>{testResult.message}</strong>
@@ -179,11 +188,11 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
         ) : null}
       </div>
       <div className="connection-list">
-        <div className="jobs-header">
-          <h2>Connections</h2>
-          <button className="text-button" type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["mcp-connections", space.id] })}>
-            Refresh
-          </button>
+        <div className="connection-list-header">
+          <div>
+            <h2>Active connections</h2>
+            <span>{connections.filter((connection) => !connection.revoked_at).length} active</span>
+          </div>
         </div>
         {connections.length > 0 ? (
           connections.map((connection) => (
@@ -194,13 +203,14 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
               </div>
               <StatusBadge status={connection.revoked_at ? "revoked" : "active"} tone={connection.revoked_at ? "gray" : "green"} />
               <button
-                className="icon-button danger"
+                className="secondary-button danger compact-button"
                 type="button"
                 onClick={() => deleteConnection(connection)}
                 disabled={deletingConnectionId === connection.id}
-                aria-label="Delete MCP connection"
+                aria-label={`Delete ${connection.name} connection`}
               >
                 {deletingConnectionId === connection.id ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                <span>Delete</span>
               </button>
             </article>
           ))

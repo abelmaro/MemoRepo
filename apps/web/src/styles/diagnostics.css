@@ -15,7 +15,7 @@
   align-items: center;
 }
 
-.diagnostics-header h2 {
+.diagnostics-header h3 {
   margin: 0 0 4px;
   font-size: 16px;
 }
@@ -29,16 +29,28 @@
 .diagnostics-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 0;
+  border-top: 1px solid #e2e7ef;
 }
 
 .diagnostics-grid div {
   display: grid;
   gap: 5px;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
+  padding: 14px 18px;
+  border: 0;
+  border-left: 1px solid #e2e7ef;
+  border-bottom: 1px solid #e8edf4;
+  border-radius: 0;
+}
+
+.diagnostics-grid div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.diagnostics-grid div:last-child {
+  padding-right: 0;
 }
 
 .diagnostics-grid span {
