@@ -268,14 +268,25 @@ export function RepositoryRow({ repository, onJob, onChanged }: RepositoryRowPro
               {branchResults.map((branch) => (
                 <button
                   key={branch}
-                  className={branch === currentBranch ? "branch-result current" : "branch-result"}
+                  className={[
+                    "branch-result",
+                    branch === currentBranch ? "current" : "",
+                    branch === branchCandidate ? "selected" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   type="button"
                   onClick={() => setBranchCandidate(branch)}
                   disabled={branch === currentBranch}
+                  aria-current={branch === currentBranch ? "true" : undefined}
+                  aria-pressed={branch !== currentBranch ? branch === branchCandidate : undefined}
                 >
                   <GitBranch size={16} />
-                  <span>{branch}</span>
-                  {branch === currentBranch ? <small>Current</small> : null}
+                  <span className="branch-result-label">
+                    <span>{branch}</span>
+                    {branch === currentBranch ? <small>Current</small> : null}
+                    {branch === branchCandidate ? <small>Selected</small> : null}
+                  </span>
                 </button>
               ))}
               {branchResults.length === 0 ? <div className="empty-inline">No branches match “{branchQuery}”.</div> : null}

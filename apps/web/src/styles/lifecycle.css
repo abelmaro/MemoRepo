@@ -1,127 +1,127 @@
 .lifecycle-panel {
-  margin-top: 18px;
-  padding: 18px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
+  margin-top: var(--space-18);
+  padding: var(--space-18);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
 }
 
 .lifecycle-panel > .panel-heading {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-16);
 }
 
 .lifecycle-grid {
   display: grid;
   grid-template-columns: minmax(360px, 1.4fr) minmax(260px, 0.8fr);
-  gap: 0;
-  border-top: 1px solid #e2e7ef;
+  gap: var(--space-0);
+  border-top: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .lifecycle-card {
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: var(--space-14);
   min-width: 0;
-  padding: 18px 0 0;
-  border: 0;
-  border-radius: 0;
+  padding: var(--space-18) var(--space-0) var(--space-0);
+  border: var(--border-width-none);
+  border-radius: var(--radius-none);
   background: transparent;
 }
 
 .lifecycle-card-wide {
   grid-row: span 2;
-  padding-right: 22px;
+  padding-right: var(--space-22);
 }
 
 .lifecycle-grid > .lifecycle-card:not(.lifecycle-card-wide) {
-  padding-left: 22px;
-  border-left: 1px solid #e2e7ef;
+  padding-left: var(--space-22);
+  border-left: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .lifecycle-card-header {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-12);
   align-items: flex-start;
 }
 
 .lifecycle-card-header h3 {
-  margin: 0 0 4px;
-  font-size: 15px;
+  margin: var(--space-0) var(--space-0) var(--space-4);
+  font-size: var(--font-size-body-lg);
 }
 
 .lifecycle-card-header span,
 .snapshot-row span,
 .snapshot-row small,
 .maintenance-metrics span {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }
 
 .snapshot-list {
   display: grid;
-  gap: 0;
+  gap: var(--space-0);
   max-height: 256px;
   overflow: auto;
-  border-top: 1px solid #e8edf4;
+  border-top: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .snapshot-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-12);
   min-height: 58px;
-  padding: 11px 0;
-  border: 0;
-  border-bottom: 1px solid #e8edf4;
+  padding: var(--space-11) var(--space-0);
+  border: var(--border-width-none);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .snapshot-row > div:first-child {
   display: grid;
-  gap: 3px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .snapshot-row small {
-  color: #9f1d1d;
+  color: var(--color-status-danger);
   overflow-wrap: anywhere;
 }
 
 .compact-controls {
   display: flex;
-  gap: 10px;
+  gap: var(--space-10);
   align-items: flex-end;
   justify-content: flex-end;
 }
 
 .compact-controls label {
   display: grid;
-  gap: 5px;
+  gap: var(--space-5);
   min-width: 72px;
-  color: #667085;
-  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
 }
 
 .compact-controls input {
   width: 78px;
   min-height: 38px;
-  padding: 0 10px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
+  padding: var(--space-0) var(--space-10);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 .maintenance-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .maintenance-metrics span {
   min-height: 34px;
-  padding: 8px 0;
-  border-bottom: 1px solid #e8edf4;
-  border-radius: 0;
+  padding: var(--space-8) var(--space-0);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-none);
   background: transparent;
 }
 
@@ -130,11 +130,11 @@
 }
 
 .danger-zone {
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid #facaca;
+  margin-top: var(--space-18);
+  padding-top: var(--space-18);
+  border-top: var(--border-width-default) solid var(--color-status-danger-border);
 }
 
 .danger-zone h3 {
-  color: #b42318;
+  color: var(--color-status-danger);
 }

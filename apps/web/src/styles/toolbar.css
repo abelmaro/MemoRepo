@@ -1,38 +1,38 @@
 .toolbar {
   display: flex;
-  gap: 10px;
+  gap: var(--space-10);
   align-items: center;
-  padding: 0 22px 18px;
+  padding: var(--space-0) var(--space-22) var(--space-18);
 }
 
 .search-box {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
   flex: 1 1 320px;
   min-height: 44px;
-  padding: 0 13px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #667085;
+  padding: var(--space-0) var(--space-13);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
+  color: var(--color-text-secondary);
 }
 
 .search-box:focus-within,
 .branch-search > div:focus-within,
 .catalog-search > div:focus-within {
-  border-color: #7357ff;
-  box-shadow: 0 0 0 3px rgb(115 87 255 / 12%);
+  border-color: var(--color-focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 
 .search-box input,
 .form-stack input,
 .inline-form input {
   width: 100%;
-  border: 0;
-  outline: 0;
-  color: #111827;
+  border: var(--border-width-none);
+  outline: var(--border-width-none);
+  color: var(--color-text-primary);
   background: transparent;
 }
 
@@ -52,56 +52,56 @@
   justify-content: space-between;
   align-items: center;
   min-height: 38px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
+  padding: var(--space-0) var(--space-10);
+  border: var(--border-width-none);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #364152;
+  color: var(--color-text-secondary);
   text-align: left;
-  font-weight: 700;
+  font-weight: var(--font-weight-semibold);
 }
 
 .filter-menu-popover button:hover,
 .filter-menu-popover button.active {
-  background: #f3f0ff;
-  color: #4f2ff0;
+  background: var(--color-brand-surface-subtle);
+  color: var(--color-link);
 }
 
 .filter-check {
-  color: #4f2ff0;
-  font-size: 14px;
+  color: var(--color-link);
+  font-size: var(--font-size-body);
 }
 
 .filter-control {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-height: 44px;
-  padding: 0 8px;
-  border-radius: 8px;
+  padding: var(--space-0) var(--space-8);
+  border-radius: var(--radius-md);
 }
 
 .filter-control svg {
-  color: #667085;
+  color: var(--color-text-secondary);
 }
 
 .filter-control button {
   min-height: 34px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
+  padding: var(--space-0) var(--space-10);
+  border: var(--border-width-none);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #475569;
-  font-weight: 800;
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-extrabold);
 }
 
 .filter-control button.active {
-  background: #f0edff;
-  color: #4f2ff0;
+  background: var(--color-brand-surface-selected);
+  color: var(--color-link);
 }
 
 .filter-control.compact {
   width: max-content;
   min-height: 40px;
-  padding: 3px 5px;
+  padding: var(--space-3) var(--space-5);
 }

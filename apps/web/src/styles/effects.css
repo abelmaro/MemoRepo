@@ -1,0 +1,29 @@
+:root {
+  --opacity-muted: 0.45;
+  --opacity-disabled: 0.55;
+  --opacity-strong: 0.8;
+  --opacity-full: 1;
+
+  --gradient-action-primary: linear-gradient(
+    135deg,
+    var(--color-action-primary-hover),
+    var(--color-action-primary-pressed)
+  );
+  --gradient-action-primary-hover: linear-gradient(
+    135deg,
+    var(--palette-violet-400),
+    var(--color-action-primary)
+  );
+  --gradient-brand-ambient: radial-gradient(
+    circle at top left,
+    rgb(var(--palette-violet-rgb) / 16%),
+    transparent 35rem
+  );
+
+  --shadow-focus: 0 0 0 var(--focus-ring-width) var(--color-focus-halo);
+  --shadow-selected-inset: inset 0 0 0 var(--border-width-default) var(--color-brand-border);
+  --shadow-brand: 0 10px 28px rgb(var(--palette-violet-rgb) / 24%);
+  --shadow-raised: 0 18px 40px rgb(var(--palette-black-rgb) / 32%);
+  --shadow-overlay: 0 24px 80px rgb(var(--palette-black-rgb) / 52%);
+  --shadow-selected: 0 1px 8px rgb(var(--palette-violet-rgb) / 24%);
+}

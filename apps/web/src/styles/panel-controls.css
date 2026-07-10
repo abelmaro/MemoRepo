@@ -1,15 +1,15 @@
 .text-button {
-  border: 0;
-  color: #4f2ff0;
-  font-weight: 700;
+  border: var(--border-width-none);
+  color: var(--color-link);
+  font-weight: var(--font-weight-semibold);
 }
 
 .panel-toggle {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0;
-  border: 0;
+  gap: var(--space-10);
+  padding: var(--space-0);
+  border: var(--border-width-none);
   background: none;
   color: inherit;
   font: inherit;
@@ -19,5 +19,5 @@
 
 .panel-toggle > svg {
   flex-shrink: 0;
-  color: #667085;
+  color: var(--color-text-secondary);
 }
