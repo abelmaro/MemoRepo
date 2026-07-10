@@ -1,50 +1,50 @@
 .connection-list {
   display: grid;
-  gap: 10px;
-  padding: 0 22px 22px;
+  gap: var(--space-10);
+  padding: var(--space-0) var(--space-22) var(--space-22);
 }
 
 .connection-list-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-top: 4px;
+  padding-top: var(--space-4);
 }
 
 .connection-list-header > div {
   display: flex;
-  gap: 10px;
+  gap: var(--space-10);
   align-items: baseline;
 }
 
 .connection-list-header h2 {
-  margin: 0;
-  font-size: 16px;
+  margin: var(--space-0);
+  font-size: var(--font-size-heading-sm);
 }
 
 .connection-list-header span {
-  color: #667085;
-  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
 }
 
 .connection-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-12);
   min-height: 58px;
-  padding: 12px 14px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
+  padding: var(--space-12) var(--space-14);
+  border: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
 }
 
 .connection-row > div:first-child {
   display: grid;
-  gap: 4px;
+  gap: var(--space-4);
 }
 
 .connection-row span,
 .empty-inline {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }

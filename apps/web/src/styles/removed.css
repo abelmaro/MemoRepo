@@ -2,19 +2,19 @@
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-14);
   min-height: 58px;
-  padding: 12px 14px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
+  padding: var(--space-12) var(--space-14);
+  border: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
 }
 
 .removed-row > div:first-child {
   display: grid;
-  gap: 4px;
+  gap: var(--space-4);
 }
 
 .removed-row span {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }

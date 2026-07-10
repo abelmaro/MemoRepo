@@ -1,56 +1,56 @@
 .diagnostics-panel {
   display: grid;
-  gap: 14px;
-  margin-bottom: 20px;
-  padding: 18px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
+  gap: var(--space-14);
+  margin-bottom: var(--space-20);
+  padding: var(--space-18);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
 }
 
 .diagnostics-header {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: var(--space-14);
   align-items: center;
 }
 
 .diagnostics-header h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: var(--space-0) var(--space-0) var(--space-4);
+  font-size: var(--font-size-heading-sm);
 }
 
 .diagnostics-header span,
 .diagnostics-grid span {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }
 
 .diagnostics-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0;
-  border-top: 1px solid #e2e7ef;
+  gap: var(--space-0);
+  border-top: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .diagnostics-grid div {
   display: grid;
-  gap: 5px;
+  gap: var(--space-5);
   min-width: 0;
-  padding: 14px 18px;
-  border: 0;
-  border-left: 1px solid #e2e7ef;
-  border-bottom: 1px solid #e8edf4;
-  border-radius: 0;
+  padding: var(--space-14) var(--space-18);
+  border: var(--border-width-none);
+  border-left: var(--border-width-default) solid var(--color-border-subtle);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-none);
 }
 
 .diagnostics-grid div:first-child {
-  padding-left: 0;
-  border-left: 0;
+  padding-left: var(--space-0);
+  border-left: var(--border-width-none);
 }
 
 .diagnostics-grid div:last-child {
-  padding-right: 0;
+  padding-right: var(--space-0);
 }
 
 .diagnostics-grid span {
@@ -58,9 +58,9 @@
 }
 
 .diagnostics-warning {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #fff7df;
-  color: #7a5200;
-  font-size: 13px;
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-status-warning-surface);
+  color: var(--color-status-warning);
+  font-size: var(--font-size-body-sm);
 }

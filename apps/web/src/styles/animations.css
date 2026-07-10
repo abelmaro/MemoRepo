@@ -1,5 +1,13 @@
 .spin {
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--duration-spin-fast) var(--ease-linear) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .auth-spinner {
+    animation-duration: var(--duration-motion-reduced);
+    animation-iteration-count: var(--iteration-motion-reduced);
+  }
 }
 
 @keyframes spin {

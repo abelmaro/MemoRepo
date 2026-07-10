@@ -1,0 +1,100 @@
+:root {
+  color-scheme: dark;
+
+  /* Brand and neutral primitives. Components must consume semantic tokens below. */
+  --palette-black-rgb: 0 0 0;
+  --palette-neutral-1000: #090b0d;
+  --palette-neutral-975: #0b0e12;
+  --palette-neutral-950: #0d1014;
+  --palette-neutral-900: #11151a;
+  --palette-neutral-850: #171c24;
+  --palette-neutral-800: #1d2430;
+  --palette-neutral-700: #2b323e;
+  --palette-neutral-600: #3a4351;
+  --palette-neutral-500: #5b6577;
+  --palette-neutral-400: #8a93a3;
+  --palette-neutral-300: #a7afbc;
+  --palette-neutral-100: #f5f7fa;
+  --palette-white: #ffffff;
+
+  --palette-violet-rgb: 124 58 237;
+  --palette-violet-700: #6d28d9;
+  --palette-violet-600: #7c3aed;
+  --palette-violet-500: #8b5cf6;
+  --palette-violet-400: #a78bfa;
+  --palette-violet-300: #c4b5fd;
+
+  --palette-cyan-rgb: 34 211 238;
+  --palette-cyan-400: #22d3ee;
+
+  --palette-green-rgb: 74 222 128;
+  --palette-green-400: #4ade80;
+  --palette-amber-rgb: 251 191 36;
+  --palette-amber-400: #fbbf24;
+  --palette-red-rgb: 251 113 133;
+  --palette-red-400: #fb7185;
+
+  /* Page and layer aliases. */
+  --color-background-canvas: var(--palette-neutral-1000);
+  --color-background-shell: var(--palette-neutral-950);
+  --color-surface-sunken: var(--palette-neutral-975);
+  --color-surface-primary: var(--palette-neutral-900);
+  --color-surface-secondary: var(--palette-neutral-850);
+  --color-surface-tertiary: var(--palette-neutral-800);
+  --color-surface-translucent: rgb(17 21 26 / 94%);
+
+  /* Text and icon aliases. */
+  --color-text-primary: var(--palette-neutral-100);
+  --color-text-secondary: var(--palette-neutral-300);
+  --color-text-muted: var(--palette-neutral-400);
+  --color-text-on-brand: var(--palette-white);
+
+  /* Borders and controls. */
+  --color-border-subtle: var(--palette-neutral-700);
+  --color-border-default: var(--palette-neutral-600);
+  --color-control-background: var(--palette-neutral-850);
+  --color-control-background-hover: var(--palette-neutral-800);
+  --color-control-border: var(--palette-neutral-600);
+  --color-control-border-hover: var(--palette-neutral-500);
+
+  /* Brand and interaction aliases. */
+  --color-action-primary: var(--palette-violet-600);
+  --color-action-primary-hover: var(--palette-violet-500);
+  --color-action-primary-pressed: var(--palette-violet-700);
+  --color-action-on-primary: var(--color-text-on-brand);
+  --color-link: var(--palette-violet-400);
+  --color-link-hover: var(--palette-violet-300);
+  --color-brand-surface-subtle: rgb(var(--palette-violet-rgb) / 12%);
+  --color-brand-surface-hover: rgb(var(--palette-violet-rgb) / 18%);
+  --color-brand-surface-selected: rgb(var(--palette-violet-rgb) / 24%);
+  --color-brand-border: rgb(var(--palette-violet-rgb) / 52%);
+  --color-focus-ring: var(--palette-cyan-400);
+  --color-focus-halo: rgb(var(--palette-cyan-rgb) / 18%);
+  --color-selection-background: rgb(var(--palette-violet-rgb) / 36%);
+  --color-selection-text: var(--palette-white);
+
+  /* Semantic status aliases. */
+  --color-status-info: var(--palette-cyan-400);
+  --color-status-info-surface: rgb(var(--palette-cyan-rgb) / 10%);
+  --color-status-success: var(--palette-green-400);
+  --color-status-success-surface: rgb(var(--palette-green-rgb) / 10%);
+  --color-status-success-border: rgb(var(--palette-green-rgb) / 32%);
+  --color-status-warning: var(--palette-amber-400);
+  --color-status-warning-surface: rgb(var(--palette-amber-rgb) / 10%);
+  --color-status-warning-border: rgb(var(--palette-amber-rgb) / 34%);
+  --color-status-danger: var(--palette-red-400);
+  --color-status-danger-surface: rgb(var(--palette-red-rgb) / 10%);
+  --color-status-danger-border: rgb(var(--palette-red-rgb) / 36%);
+
+  /* Component-specific semantic aliases. */
+  --color-navigation-selected-background: var(--color-brand-surface-selected);
+  --color-navigation-selected-border: var(--color-action-primary-hover);
+  --color-table-header-background: var(--color-surface-secondary);
+  --color-table-row-hover: var(--color-surface-secondary);
+  --color-code-background: var(--color-surface-sunken);
+  --color-code-border: var(--color-border-default);
+  --color-code-text: var(--color-text-secondary);
+  --color-code-muted: var(--color-text-muted);
+  --color-overlay-backdrop: rgb(var(--palette-black-rgb) / 72%);
+
+}

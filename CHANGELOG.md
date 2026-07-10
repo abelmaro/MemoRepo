@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-10
+
+### Added
+
+- Add MemoRepo favicon, Apple touch icon, Android app icons, and a dark-theme web app manifest, and reuse the product mark in the main navigation.
+
+### Changed
+
+- Add a scalable dark brand theme with centralized foundations for color, typography, spacing, shape, effects, motion, and layers, plus accessible interaction states and build-time enforcement against component-level design literals.
+
+### Fixed
+
+- Keep repository branch hover and focus surfaces fitted to their content across desktop and responsive layouts.
+- Respect reduced-motion preferences for loading indicators and keep the design-token API free of unused aliases.
+- Increase favicon artwork coverage and regenerate every icon size from one tightly cropped master.
+
 ## [0.1.4] - 2026-07-10
 
 ### Changed
@@ -72,7 +88,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/abelmaro/MemoRepo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/abelmaro/MemoRepo/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/abelmaro/MemoRepo/compare/v0.1.1...v0.1.2

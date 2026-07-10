@@ -1,0 +1,17 @@
+:root {
+  --border-width-none: 0;
+  --border-width-default: 1px;
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+
+  --radius-none: 0;
+  --radius-sm: 6px;
+  --radius-inner-md: 7px;
+  --radius-md: 8px;
+  --radius-inner-lg: 9px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+}

@@ -1,6 +1,6 @@
 @media (max-width: 1100px) and (min-width: 901px) {
   .workspace {
-    padding-inline: 30px;
+    padding-inline: var(--space-30);
   }
 
   .repo-table-header,
@@ -26,36 +26,37 @@
       "brand heading"
       "spaces spaces";
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 8px 18px;
+    gap: var(--space-8) var(--space-18);
     height: auto;
-    padding: 14px 20px;
-    border-right: 0;
-    border-bottom: 1px solid #e5e7eb;
+    padding: var(--space-14) var(--space-20);
+    border-right: var(--border-width-none);
+    border-bottom: var(--border-width-default) solid var(--color-border-subtle);
   }
 
   .brand {
     grid-area: brand;
-    padding: 0;
-    font-size: 18px;
+    padding: var(--space-0);
+    font-size: var(--font-size-heading-lg);
   }
 
-  .brand svg {
-    width: 22px;
+  .brand-mark {
+    width: var(--space-24);
+    height: var(--space-24);
   }
 
   .sidebar-section-heading {
     grid-area: heading;
     justify-content: flex-end;
-    gap: 8px;
-    padding: 0;
+    gap: var(--space-8);
+    padding: var(--space-0);
   }
 
   .space-list {
     grid-area: spaces;
     display: flex;
-    gap: 8px;
+    gap: var(--space-8);
     overflow-x: auto;
-    padding-bottom: 2px;
+    padding-bottom: var(--space-2);
   }
 
   .space-item {
@@ -64,7 +65,7 @@
   }
 
   .workspace {
-    padding: 26px 24px 40px;
+    padding: var(--space-26) var(--space-24) var(--space-40);
   }
 
   .repo-table-header,
@@ -85,49 +86,49 @@
 
   .preflight-check,
   .preflight-check:nth-child(even) {
-    padding-right: 0;
-    padding-left: 0;
-    border-left: 0;
+    padding-right: var(--space-0);
+    padding-left: var(--space-0);
+    border-left: var(--border-width-none);
   }
 
   .diagnostics-grid div,
   .diagnostics-grid div:first-child,
   .diagnostics-grid div:last-child {
-    padding-right: 0;
-    padding-left: 0;
-    border-left: 0;
+    padding-right: var(--space-0);
+    padding-left: var(--space-0);
+    border-left: var(--border-width-none);
   }
 
   .lifecycle-card-wide {
     grid-row: auto;
-    padding-right: 0;
+    padding-right: var(--space-0);
   }
 
   .lifecycle-grid > .lifecycle-card:not(.lifecycle-card-wide) {
-    margin-top: 18px;
-    padding-left: 0;
-    border-top: 1px solid #e2e7ef;
-    border-left: 0;
+    margin-top: var(--space-18);
+    padding-left: var(--space-0);
+    border-top: var(--border-width-default) solid var(--color-border-subtle);
+    border-left: var(--border-width-none);
   }
 }
 
 @media (max-width: 700px) {
   .workspace {
-    padding: 22px 16px 34px;
+    padding: var(--space-22) var(--space-16) var(--space-34);
   }
 
   .workspace-header {
     grid-template-columns: 1fr;
-    gap: 16px;
-    margin-bottom: 18px;
+    gap: var(--space-16);
+    margin-bottom: var(--space-18);
   }
 
   .workspace-header h1 {
-    font-size: 30px;
+    font-size: var(--font-size-display-compact);
   }
 
   .workspace-header p {
-    font-size: 14px;
+    font-size: var(--font-size-body);
   }
 
   .header-actions,
@@ -138,7 +139,7 @@
   .space-status-callout {
     grid-template-columns: auto minmax(0, 1fr);
     min-height: 0;
-    padding: 15px;
+    padding: var(--space-15);
   }
 
   .space-status-callout .primary-button,
@@ -161,7 +162,7 @@
 
   .toolbar {
     align-items: stretch;
-    padding-inline: 16px;
+    padding-inline: var(--space-16);
   }
 
   .search-box {
@@ -170,15 +171,15 @@
 
   .filter-menu .secondary-button {
     min-width: 44px;
-    padding-inline: 12px;
+    padding-inline: var(--space-12);
   }
 
   .repo-table-header {
     position: absolute;
     width: 1px;
     height: 1px;
-    padding: 0;
-    margin: -1px;
+    padding: var(--space-0);
+    margin: calc(var(--space-1) * -1);
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
@@ -186,9 +187,9 @@
 
   .repo-row {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
+    gap: var(--space-12);
     min-height: 0;
-    padding: 14px 16px;
+    padding: var(--space-14) var(--space-16);
   }
 
   .repo-main {
@@ -206,7 +207,7 @@
     grid-column: 1;
     grid-row: 2;
     display: flex;
-    gap: 8px;
+    gap: var(--space-8);
     align-items: center;
   }
 
@@ -221,10 +222,10 @@
 
   .branch-button {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 8px;
+    gap: var(--space-8);
     min-height: 40px;
-    padding: 5px 9px;
-    border-color: #e1e6ee;
+    padding: var(--space-5) var(--space-9);
+    border-color: var(--color-border-default);
   }
 
   .branch-button svg {
@@ -232,7 +233,7 @@
   }
 
   .branch-button small {
-    font-size: 11px;
+    font-size: var(--font-size-caption);
   }
 
   .repo-error {
@@ -240,8 +241,8 @@
   }
 
   .management-header {
-    gap: 14px;
-    padding: 18px 16px;
+    gap: var(--space-14);
+    padding: var(--space-18) var(--space-16);
   }
 
   .management-switcher {
@@ -251,12 +252,12 @@
 
   .management-switcher button {
     justify-content: center;
-    padding-inline: 7px;
-    font-size: 12px;
+    padding-inline: var(--space-7);
+    font-size: var(--font-size-label);
   }
 
   .management-content {
-    padding: 20px 16px 22px;
+    padding: var(--space-20) var(--space-16) var(--space-22);
   }
 
   .branch-results {
@@ -319,7 +320,7 @@
 
 @media (max-width: 440px) {
   .sidebar {
-    padding-inline: 16px;
+    padding-inline: var(--space-16);
   }
 
   .sidebar-section-heading > span {
@@ -333,12 +334,12 @@
 
   .management-switcher button {
     min-height: 42px;
-    padding-inline: 5px;
-    font-size: 11px;
+    padding-inline: var(--space-5);
+    font-size: var(--font-size-caption);
   }
 
   .repo-name {
-    font-size: 14px;
+    font-size: var(--font-size-body);
   }
 
   .repo-icon {
@@ -348,14 +349,14 @@
 
   .modal-backdrop {
     align-items: end;
-    padding: 0;
+    padding: var(--space-0);
   }
 
   .modal,
   .modal-wide {
     width: 100%;
     max-height: 92vh;
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-none) var(--radius-none);
   }
 
   .dialog-actions {
