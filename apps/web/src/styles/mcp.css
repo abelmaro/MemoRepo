@@ -1,64 +1,64 @@
 .mcp-intro {
-  padding: 18px 22px 0;
+  padding: var(--space-18) var(--space-22) var(--space-0);
 }
 
 .mcp-intro p {
-  margin: 0;
-  color: #526071;
-  line-height: 1.5;
+  margin: var(--space-0);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-comfortable);
 }
 
 .mcp-tabs {
   display: flex;
-  gap: 8px;
-  padding: 18px 22px 0;
+  gap: var(--space-8);
+  padding: var(--space-18) var(--space-22) var(--space-0);
 }
 
 .mcp-tabs button {
   min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
+  padding: var(--space-0) var(--space-12);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
   text-transform: capitalize;
 }
 
 .mcp-tabs button.active {
-  border-color: #5b35f5;
-  background: #f5f2ff;
-  color: #4f2ff0;
+  border-color: var(--color-action-primary);
+  background: var(--color-brand-surface-subtle);
+  color: var(--color-link);
 }
 
 .mcp-action-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-10);
 }
 
 .mcp-config-state {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }
 
 .mcp-test-result {
   display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid #d9eadf;
-  border-radius: 8px;
-  background: #f6fbf7;
-  color: #17623d;
+  gap: var(--space-4);
+  padding: var(--space-12) var(--space-14);
+  border: var(--border-width-default) solid var(--color-status-success-border);
+  border-radius: var(--radius-md);
+  background: var(--color-status-success-surface);
+  color: var(--color-status-success);
 }
 
 .mcp-test-result.error {
-  border-color: #facaca;
-  background: #fffafa;
-  color: #b42318;
+  border-color: var(--color-status-danger-border);
+  background: var(--color-status-danger-surface);
+  color: var(--color-status-danger);
 }
 
 .mcp-test-result span {
   color: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-  opacity: 0.8;
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-comfortable);
+  opacity: var(--opacity-strong);
 }

@@ -1,37 +1,37 @@
 .config-block,
 .job-log pre {
   overflow: auto;
-  margin: 0;
-  padding: 16px;
-  border-radius: 8px;
-  background: #111827;
-  color: #d1d5db;
-  font-size: 12px;
-  line-height: 1.6;
+  margin: var(--space-0);
+  padding: var(--space-16);
+  border-radius: var(--radius-md);
+  background: var(--color-code-background);
+  color: var(--color-code-text);
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-loose);
 }
 
 .job-log {
   display: grid;
-  gap: 12px;
-  padding: 22px;
+  gap: var(--space-12);
+  padding: var(--space-22);
 }
 
 .job-log-meta {
   display: flex;
   justify-content: space-between;
-  color: #667085;
+  color: var(--color-text-secondary);
 }
 
 .job-log-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-10);
 }
 
 .job-log-dependency {
-  padding: 10px 12px;
-  border: 1px solid #e8edf4;
-  border-radius: 8px;
-  color: #667085;
-  font-size: 13px;
+  padding: var(--space-10) var(--space-12);
+  border: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }

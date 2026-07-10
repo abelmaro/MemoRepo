@@ -1,115 +1,115 @@
 .jobs-panel,
 .removed-panel {
-  margin: 18px 0;
-  padding: 18px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
+  margin: var(--space-18) var(--space-0);
+  padding: var(--space-18);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
 }
 
 .jobs-panel > .panel-heading,
 .removed-panel > .panel-heading {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-12);
 }
 
 .jobs-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-12);
 }
 
 .jobs-header h2 {
-  margin: 0;
-  font-size: 16px;
+  margin: var(--space-0);
+  font-size: var(--font-size-heading-sm);
 }
 
 .jobs-terminal {
   display: grid;
-  gap: 2px;
+  gap: var(--space-2);
   max-height: 136px;
   overflow: auto;
-  padding: 8px;
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  background: #111827;
+  padding: var(--space-8);
+  border: var(--border-width-default) solid var(--color-code-border);
+  border-radius: var(--radius-md);
+  background: var(--color-code-background);
 }
 
 .job-terminal-row {
   display: grid;
   grid-template-columns: 74px 84px minmax(160px, 1fr) minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: var(--space-10);
   min-height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
+  padding: var(--space-0) var(--space-8);
+  border: var(--border-width-none);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #d1d5db;
+  color: var(--color-code-text);
   text-align: left;
 }
 
 .job-terminal-row:hover {
-  background: #1f2937;
+  background: var(--color-surface-tertiary);
 }
 
 .job-terminal-time {
-  color: #9ca3af;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  color: var(--color-code-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-label);
 }
 
 .job-terminal-status {
   overflow: hidden;
-  color: #cbd5e1;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--color-code-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-extrabold);
   text-overflow: ellipsis;
   text-transform: capitalize;
   white-space: nowrap;
 }
 
 .job-terminal-status-succeeded {
-  color: #86efac;
+  color: var(--color-status-success);
 }
 
 .job-terminal-status-running {
-  color: #facc15;
+  color: var(--color-status-warning);
 }
 
 .job-terminal-status-failed {
-  color: #fca5a5;
+  color: var(--color-status-danger);
 }
 
 .job-terminal-status-cancelled,
 .job-terminal-status-pending,
 .job-terminal-status-skipped {
-  color: #cbd5e1;
+  color: var(--color-code-text);
 }
 
 .job-terminal-type {
   overflow: hidden;
-  color: #e5e7eb;
+  color: var(--color-text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .job-terminal-error {
   overflow: hidden;
-  color: #fca5a5;
+  color: var(--color-status-danger);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .job-terminal-empty {
-  padding: 6px 8px;
-  color: #9ca3af;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  padding: var(--space-6) var(--space-8);
+  color: var(--color-code-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-label);
 }
 
 .removed-list {
   display: grid;
-  gap: 10px;
+  gap: var(--space-10);
 }

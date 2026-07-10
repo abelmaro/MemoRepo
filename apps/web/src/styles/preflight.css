@@ -1,81 +1,81 @@
 .preflight-panel {
   display: grid;
-  gap: 14px;
-  margin-bottom: 20px;
-  padding: 18px;
-  border: 1px solid #dde3ee;
-  border-radius: 8px;
-  background: #ffffff;
+  gap: var(--space-14);
+  margin-bottom: var(--space-20);
+  padding: var(--space-18);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
 }
 
 .preflight-header {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: var(--space-14);
   align-items: center;
 }
 
 .preflight-header h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: var(--space-0) var(--space-0) var(--space-4);
+  font-size: var(--font-size-heading-sm);
 }
 
 .preflight-header span {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
 }
 
 .preflight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0;
-  border-top: 1px solid #e2e7ef;
+  gap: var(--space-0);
+  border-top: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .preflight-check {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: start;
-  gap: 10px;
+  gap: var(--space-10);
   min-height: 76px;
-  padding: 14px 20px 14px 0;
-  border: 0;
-  border-bottom: 1px solid #e8edf4;
-  border-radius: 0;
+  padding: var(--space-14) var(--space-20) var(--space-14) var(--space-0);
+  border: var(--border-width-none);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-none);
   background: transparent;
 }
 
 .preflight-check:nth-child(even) {
-  padding-right: 0;
-  padding-left: 20px;
-  border-left: 1px solid #e2e7ef;
+  padding-right: var(--space-0);
+  padding-left: var(--space-20);
+  border-left: var(--border-width-default) solid var(--color-border-subtle);
 }
 
 .preflight-check-pass svg {
-  color: #16823a;
+  color: var(--color-status-success);
 }
 
 .preflight-check-warn svg {
-  color: #986800;
+  color: var(--color-status-warning);
 }
 
 .preflight-check-fail svg {
-  color: #c82121;
+  color: var(--color-status-danger);
 }
 
 .preflight-check div {
   display: grid;
-  gap: 4px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
 .preflight-check span,
 .preflight-check small {
-  color: #667085;
-  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
   overflow-wrap: anywhere;
 }
 
 .preflight-check small {
-  color: #7a5200;
+  color: var(--color-status-warning);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Boxes, Braces, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
+import { Activity, Boxes, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
 import { AddRepoModal } from "./components/AddRepoModal";
 import { GithubDiagnosticsPanel } from "./components/GithubDiagnosticsPanel";
 import { JobLog } from "./components/JobLog";
@@ -125,7 +125,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark" aria-hidden="true">
-            <Braces size={26} />
+            <img src="/android-chrome-192x192.png?v=3" alt="" />
           </div>
           <span>MemoRepo</span>
         </div>

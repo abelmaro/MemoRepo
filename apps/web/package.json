@@ -1,11 +1,12 @@
 {
   "name": "@memorepo/web",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "pnpm check:tokens && tsc -p tsconfig.json && vite build",
+    "check:tokens": "node scripts/check-design-tokens.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "preview": "vite preview --host 0.0.0.0"
   },

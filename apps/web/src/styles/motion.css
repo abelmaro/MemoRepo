@@ -1,0 +1,7 @@
+:root {
+  --duration-spin-fast: 0.8s;
+  --duration-spin-slow: 0.9s;
+  --duration-motion-reduced: 1ms;
+  --iteration-motion-reduced: 1;
+  --ease-linear: linear;
+}
