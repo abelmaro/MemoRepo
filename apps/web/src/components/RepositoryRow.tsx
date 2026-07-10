@@ -13,16 +13,19 @@ import {
   Trash2
 } from "lucide-react";
 import { api, booleanValue, type Job, type SpaceRepository } from "../lib/api";
+import type { SnapshotUiState } from "../lib/snapshotState";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
 
 interface RepositoryRowProps {
   repository: SpaceRepository;
+  snapshotState: SnapshotUiState;
+  onSnapshotJob?: (() => void) | undefined;
   onJob: (jobId: string) => void;
   onChanged: () => void;
 }
 
-export function RepositoryRow({ repository, onJob, onChanged }: RepositoryRowProps) {
+export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob, onChanged }: RepositoryRowProps) {
   const currentBranch = repository.selected_branch ?? repository.default_branch;
   const branches = useMemo(() => parseBranches(repository.branches_json, currentBranch), [repository.branches_json, currentBranch]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -33,7 +36,7 @@ export function RepositoryRow({ repository, onJob, onChanged }: RepositoryRowPro
   const [copyState, setCopyState] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const status = repositoryStatus(repository);
+  const status = repositoryStatus(repository, snapshotState);
 
   const checkoutMutation = useMutation({
     mutationFn: (branch: string) =>
@@ -167,10 +170,15 @@ export function RepositoryRow({ repository, onJob, onChanged }: RepositoryRowPro
       </div>
 
       <div className="repo-actions" role="cell" aria-busy={checkoutMutation.isPending || actionMutation.isPending}>
-        {status.tone === "red" ? (
+        {status.action === "reindex" ? (
           <button className="secondary-button compact-button" type="button" onClick={() => startAction("reindex")}>
             <RefreshCw size={16} />
             <span>Retry</span>
+          </button>
+        ) : status.action === "snapshot" && onSnapshotJob ? (
+          <button className="secondary-button compact-button" type="button" onClick={onSnapshotJob}>
+            <ExternalLink size={16} />
+            <span>View error</span>
           </button>
         ) : null}
         <div className="action-menu" ref={menuRef}>
@@ -337,11 +345,14 @@ export function RepositoryRow({ repository, onJob, onChanged }: RepositoryRowPro
   );
 }
 
-function repositoryStatus(repository: SpaceRepository): { label: string; tone: "green" | "amber" | "red" | "gray"; description: string } {
+function repositoryStatus(
+  repository: SpaceRepository,
+  snapshotState: SnapshotUiState
+): { label: string; tone: "green" | "amber" | "red" | "gray"; description: string; action?: "reindex" | "snapshot" } {
   const cloneStatus = repository.clone_status.toLowerCase();
   const indexStatus = repository.index_status.toLowerCase();
   if (repository.last_error || [cloneStatus, indexStatus].some((status) => ["failed", "missing", "error"].includes(status))) {
-    return { label: "Needs attention", tone: "red", description: "Review the latest error" };
+    return { label: "Needs attention", tone: "red", description: "Review the latest error", action: "reindex" };
   }
   if ([cloneStatus, indexStatus].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status))) {
     return { label: "Updating", tone: "amber", description: "Preparing agent context" };
@@ -350,7 +361,16 @@ function repositoryStatus(repository: SpaceRepository): { label: string; tone: "
     return { label: "Ready", tone: "green", description: "Available to agents" };
   }
   if (cloneStatus === "cloned" && indexStatus === "indexed") {
-    return { label: "Snapshot pending", tone: "amber", description: "Index is not in the active snapshot" };
+    if (snapshotState === "failed") {
+      return { label: "Snapshot failed", tone: "red", description: "Open the failed snapshot job", action: "snapshot" };
+    }
+    if (snapshotState === "required") {
+      return { label: "Snapshot required", tone: "amber", description: "Run Check for updates" };
+    }
+    if (snapshotState === "checking") {
+      return { label: "Checking snapshot", tone: "gray", description: "Loading the latest operation" };
+    }
+    return { label: "Snapshot pending", tone: "amber", description: "Waiting for the active snapshot" };
   }
   return { label: "Preparing", tone: "gray", description: "Clone or index is incomplete" };
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, GitBranch, Loader2, Plus } from "lucide-react";
-import { api, booleanValue, type McpConnection, type Space, type SpaceRepository } from "../lib/api";
+import { Activity, AlertCircle, CheckCircle2, GitBranch, Loader2, Plus } from "lucide-react";
+import { api, type McpConnection, type Space, type SpaceRepository } from "../lib/api";
+import type { SnapshotStateSummary } from "../lib/snapshotState";
 
 interface SystemState {
   github: { connected: boolean; viewer?: { login: string }; error?: string };
@@ -13,11 +14,21 @@ interface StatusStripProps {
   space: Space;
   repositories: SpaceRepository[];
   loading: boolean;
+  snapshotSummary: SnapshotStateSummary;
   onConnectAgent: () => void;
   onAddRepository: () => void;
+  onOpenSnapshotJob: (jobId: string) => void;
 }
 
-export function StatusStrip({ space, repositories, loading, onConnectAgent, onAddRepository }: StatusStripProps) {
+export function StatusStrip({
+  space,
+  repositories,
+  loading,
+  snapshotSummary,
+  onConnectAgent,
+  onAddRepository,
+  onOpenSnapshotJob
+}: StatusStripProps) {
   const systemQuery = useQuery({
     queryKey: ["system"],
     queryFn: () => api<SystemState>("/api/system"),
@@ -28,12 +39,12 @@ export function StatusStrip({ space, repositories, loading, onConnectAgent, onAd
     queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`),
     refetchInterval: 10000
   });
+  const snapshotJobId = snapshotSummary.latestSnapshotJob?.id;
 
   const activeConnections = (connectionsQuery.data?.connections ?? []).filter((connection) => !connection.revoked_at).length;
   const issueCount = repositories.filter((repository) => repository.last_error || [repository.clone_status, repository.index_status].some((status) => ["failed", "missing", "error"].includes(status.toLowerCase()))).length;
-  const updatingCount = repositories.filter((repository) =>
-    [repository.clone_status, repository.index_status].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status.toLowerCase())) ||
-    !booleanValue(repository.snapshot_included)
+  const updatingRepositoryCount = repositories.filter((repository) =>
+    [repository.clone_status, repository.index_status].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status.toLowerCase()))
   ).length;
   const systemProblems = [
     systemQuery.data && !systemQuery.data.github.connected ? systemQuery.data.github.error ?? "GitHub is not connected." : null,
@@ -43,8 +54,9 @@ export function StatusStrip({ space, repositories, loading, onConnectAgent, onAd
   let tone: "success" | "warning" | "danger" | "neutral" = "success";
   let title = "Agent access is ready";
   let description = `${repositories.length} ${repositories.length === 1 ? "repository is" : "repositories are"} available through ${activeConnections} active ${activeConnections === 1 ? "connection" : "connections"}.`;
-  let action: "add" | "connect" | "manage" | null = "manage";
+  let action: "add" | "connect" | "manage" | "activity" | null = "manage";
   let statusLoading = false;
+  let busy = false;
 
   if (loading) {
     tone = "neutral";
@@ -52,6 +64,7 @@ export function StatusStrip({ space, repositories, loading, onConnectAgent, onAd
     description = "Checking repositories, snapshots, and agent access…";
     action = null;
     statusLoading = true;
+    busy = true;
   } else if (repositories.length === 0) {
     tone = "neutral";
     title = "Add your first repository";
@@ -62,11 +75,29 @@ export function StatusStrip({ space, repositories, loading, onConnectAgent, onAd
     title = `${issueCount} ${issueCount === 1 ? "repository needs" : "repositories need"} attention`;
     description = "Review the affected repository and retry its index before relying on this Space.";
     action = null;
-  } else if (updatingCount > 0) {
+  } else if (snapshotSummary.state === "failed") {
+    tone = "danger";
+    title = "Snapshot build failed";
+    description = `${snapshotSummary.excludedRepositoryCount} indexed ${snapshotSummary.excludedRepositoryCount === 1 ? "repository is" : "repositories are"} not available to agents. Open the failed operation to inspect the error and retry.`;
+    action = snapshotJobId ? "activity" : null;
+  } else if (snapshotSummary.state === "required") {
+    tone = "warning";
+    title = "Snapshot rebuild required";
+    description = `${snapshotSummary.excludedRepositoryCount} indexed ${snapshotSummary.excludedRepositoryCount === 1 ? "repository is" : "repositories are"} not in the active snapshot. Run Check for updates to rebuild it.`;
+    action = null;
+  } else if (snapshotSummary.state === "checking") {
+    tone = "neutral";
+    title = "Checking snapshot status";
+    description = "Loading the latest snapshot operation…";
+    action = null;
+    statusLoading = true;
+    busy = true;
+  } else if (updatingRepositoryCount > 0 || snapshotSummary.state === "updating") {
     tone = "warning";
     title = "Preparing repository context";
-    description = `${updatingCount} ${updatingCount === 1 ? "repository is" : "repositories are"} still being cloned, indexed, or added to the active snapshot.`;
+    description = "Repositories are still being cloned, indexed, or added to the active snapshot.";
     action = null;
+    busy = true;
   } else if (connectionsQuery.isPending) {
     tone = "neutral";
     title = "Checking agent access";
@@ -84,13 +115,18 @@ export function StatusStrip({ space, repositories, loading, onConnectAgent, onAd
     <section className="space-status" aria-labelledby="space-status-title">
       <div className={`space-status-callout space-status-${tone}`} role="status">
         <div className="space-status-icon" aria-hidden="true">
-          {tone === "danger" ? <AlertCircle size={24} /> : tone === "warning" || statusLoading ? <Loader2 className="spin" size={24} /> : <CheckCircle2 size={24} />}
+          {tone === "danger" || (tone === "warning" && !busy) ? <AlertCircle size={24} /> : busy || statusLoading ? <Loader2 className="spin" size={24} /> : <CheckCircle2 size={24} />}
         </div>
         <div>
           <h2 id="space-status-title">{title}</h2>
           <p>{description}</p>
         </div>
-        {action === "add" ? (
+        {action === "activity" && snapshotJobId ? (
+          <button className="secondary-button" type="button" onClick={() => onOpenSnapshotJob(snapshotJobId)}>
+            <Activity size={18} />
+            <span>View error</span>
+          </button>
+        ) : action === "add" ? (
           <button className="primary-button" type="button" onClick={onAddRepository}>
             <Plus size={18} />
             <span>Add repository</span>
