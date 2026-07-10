@@ -118,6 +118,8 @@ MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean r
 Jobs:
 MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. Running jobs are not interrupted because Git and indexing commands do not yet support cooperative cancellation. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
 
+The space-level check and update job fetches each selected remote branch and compares its remote commit with the commit recorded by MemoRepo. It skips current repository indexes, repairs stale or failed indexes even when the commit is unchanged, and builds one replacement snapshot only when repository or snapshot state requires it. Per-repository reindex remains an explicit forced rebuild operation.
+
 ## MCP Gateway Contract
 
 The MCP gateway is scoped to one space and serves its active snapshot.

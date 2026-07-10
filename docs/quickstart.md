@@ -157,3 +157,5 @@ MemoRepo supports:
 - configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`.
 
 Running jobs are not interrupted in place. If a Git or indexing command is already executing, let it finish and retry if needed.
+
+Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's indexed commit. Repositories that are already current are skipped. Changed or incomplete indexes are rebuilt, and MemoRepo creates one replacement space snapshot only when needed.

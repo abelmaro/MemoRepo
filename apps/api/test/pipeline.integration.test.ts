@@ -82,6 +82,33 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     assert.ok(secondSnapshot);
     assert.equal(secondSnapshot.version, 2);
 
+    const indexCountBeforeUpdateCheck = countRows(services.database.sqlite, "repo_indexes");
+    const unchangedUpdateJob = services.operations.enqueueReindexSpace(space.id);
+    await waitForJobs(services.database.sqlite, [unchangedUpdateJob.id]);
+
+    const unchangedSnapshot = services.snapshots.getActiveSnapshot(space.id) as { version: number } | null;
+    assert.equal(unchangedSnapshot?.version, 2);
+    assert.equal(countRows(services.database.sqlite, "repo_indexes"), indexCountBeforeUpdateCheck);
+    const unchangedEvents = services.jobs.getJobEvents(unchangedUpdateJob.id) as Array<{ message: string }>;
+    assert.ok(unchangedEvents.some((event) => event.message.includes("is up to date")));
+
+    const sourcePath = path.join(testRoot, "source");
+    fs.writeFileSync(path.join(sourcePath, "src", "update.ts"), "export const updateAvailable = true;\n");
+    runGit(["add", "."], sourcePath);
+    runGit(["commit", "-m", "update develop"], sourcePath);
+    runGit(["push", "origin", "develop"], sourcePath);
+
+    const previousCommit = developRepository.selected_commit;
+    const changedUpdateJob = services.operations.enqueueReindexSpace(space.id);
+    await waitForJobs(services.database.sqlite, [changedUpdateJob.id]);
+
+    const updatedRepository = services.spaces.getSpaceRepository(added.spaceRepository.id);
+    assert.notEqual(updatedRepository.selected_commit, previousCommit);
+    assert.equal(updatedRepository.index_status, "indexed");
+    assert.equal(countRows(services.database.sqlite, "repo_indexes"), indexCountBeforeUpdateCheck + 1);
+    const updatedSnapshot = services.snapshots.getActiveSnapshot(space.id) as { version: number } | null;
+    assert.equal(updatedSnapshot?.version, 3);
+
     const connection = services.mcp.createConnection(space.id, "Integration Agent", "generic");
     const listResponse = await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {});
     const listResponseJson = JSON.stringify(listResponse);
@@ -2167,6 +2194,13 @@ function writeSourceFile(sourcePath: string, branch: string): void {
 
 function runGit(args: string[], cwd: string): void {
   execFileSync("git", args, { cwd, stdio: "ignore" });
+}
+
+function countRows(
+  sqlite: ReturnType<typeof createServices>["database"]["sqlite"],
+  table: "repo_indexes" | "space_snapshots"
+): number {
+  return (sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
 function jobStatus(sqlite: ReturnType<typeof createServices>["database"]["sqlite"], jobId: string): string {

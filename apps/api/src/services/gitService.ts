@@ -10,6 +10,11 @@ export interface GitCommandContext {
   timeoutMs?: number | undefined;
 }
 
+export interface RemoteBranchState {
+  branches: string[];
+  commit: string;
+}
+
 export class GitService {
   private askPassPath: string | null = null;
 
@@ -46,12 +51,29 @@ export class GitService {
       .sort((a, b) => a.localeCompare(b));
   }
 
-  async checkoutRemoteBranch(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<string> {
-    if (branch.includes("..") || branch.startsWith("-") || branch.trim().length === 0) {
-      throw new Error("Invalid branch name");
+  async fetchBranchState(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<RemoteBranchState> {
+    this.validateBranch(branch);
+    const branches = await this.fetchBranches(repoPath, context);
+    if (!branches.includes(branch)) {
+      throw new Error(`Remote branch not found: ${branch}`);
     }
 
+    const result = await this.git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`], {
+      ...context,
+      cwd: repoPath,
+      timeoutMs: 60_000
+    });
+    return { branches, commit: result.stdout.trim() };
+  }
+
+  async checkoutRemoteBranch(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<string> {
+    this.validateBranch(branch);
     await this.fetchBranches(repoPath, context);
+    return this.checkoutFetchedRemoteBranch(repoPath, branch, context);
+  }
+
+  async checkoutFetchedRemoteBranch(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<string> {
+    this.validateBranch(branch);
     await this.git(["checkout", "-B", branch, `origin/${branch}`], {
       ...context,
       cwd: repoPath,
@@ -99,6 +121,12 @@ export class GitService {
     }
 
     return result;
+  }
+
+  private validateBranch(branch: string): void {
+    if (branch.includes("..") || branch.startsWith("-") || branch.trim().length === 0) {
+      throw new Error("Invalid branch name");
+    }
   }
 
   private ensureAskPass(): string {

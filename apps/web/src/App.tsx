@@ -56,7 +56,7 @@ export function App() {
     }
   });
 
-  const reindexSpaceMutation = useMutation({
+  const updateSpaceMutation = useMutation({
     mutationFn: (spaceId: string) => api<{ job: Job }>(`/api/spaces/${spaceId}/reindex`, { method: "POST", body: "{}" }),
     onSuccess: ({ job }) => {
       setActiveJobId(job.id);
@@ -90,14 +90,14 @@ export function App() {
     setSelectedSpaceId(space.id);
   }
 
-  function reindexSpace() {
+  function checkAndUpdateSpace() {
     if (!selectedSpace) {
       return;
     }
-    if (repositories.length >= 5 && !window.confirm(`Reindex ${repositories.length} repositories in this space?`)) {
+    if (repositories.length >= 5 && !window.confirm(`Check and update ${repositories.length} repositories in this space?`)) {
       return;
     }
-    reindexSpaceMutation.mutate(selectedSpace.id);
+    updateSpaceMutation.mutate(selectedSpace.id);
   }
 
   function deleteSelectedSpace() {
@@ -158,9 +158,9 @@ export function App() {
               <Plus size={18} />
               <span>Add repo</span>
             </button>
-            <button className="secondary-button" type="button" onClick={reindexSpace} disabled={!selectedSpace || repositories.length === 0}>
+            <button className="secondary-button" type="button" onClick={checkAndUpdateSpace} disabled={!selectedSpace || repositories.length === 0}>
               <RefreshCw size={18} />
-              <span>Reindex all</span>
+              <span>Check &amp; update</span>
             </button>
             <button
               className="secondary-button danger"

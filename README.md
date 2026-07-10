@@ -56,6 +56,7 @@ For day-to-day use, prefer setting `MEMOREPO_HOME` to a path outside this reposi
 - Clones GitHub repositories into MemoRepo-managed local paths.
 - Checks out selected remote branches and records the selected commit.
 - Indexes managed clones with `codebase-memory-mcp`.
+- Checks selected remote branch commits and updates only repositories whose commit or index state changed.
 - Builds immutable per-space snapshots from the selected repositories.
 - Exposes the active snapshot through read-only native `codebase-memory-mcp` tools under a space-scoped MCP gateway.
 - Prunes old inactive snapshots and cleans local maintenance artifacts.

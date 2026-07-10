@@ -129,11 +129,34 @@ export class OperationsService {
         throw new Error("Space has no repositories");
       }
 
+      context.log(`Checking ${repositories.length} repositories for remote updates`);
+      let updatedRepositories = 0;
       for (const repository of repositories) {
         const spaceRepositoryId = String(repository.id);
         const branch = String(repository.selected_branch ?? repository.default_branch);
-        context.log(`Resetting ${repository.full_name} to origin/${branch}`);
-        const commit = await this.git.checkoutRemoteBranch(String(repository.local_path), branch, { onOutput: context.log });
+        const fullName = String(repository.full_name);
+        const localPath = String(repository.local_path);
+        context.log(`Checking ${fullName} at origin/${branch}`);
+        const remote = await this.git.fetchBranchState(localPath, branch, { onOutput: context.log });
+        this.updateBranches(spaceRepositoryId, remote.branches);
+
+        const selectedCommit = typeof repository.selected_commit === "string" ? repository.selected_commit : null;
+        const indexStatus = String(repository.index_status);
+        const commitChanged = selectedCommit !== remote.commit;
+        const needsIndex = commitChanged || indexStatus !== "indexed";
+        if (!needsIndex) {
+          context.log(`${fullName} is up to date at ${remote.commit.slice(0, 12)}`);
+          continue;
+        }
+
+        const reason = commitChanged
+          ? `${selectedCommit?.slice(0, 12) ?? "no indexed commit"} -> ${remote.commit.slice(0, 12)}`
+          : `index status is ${indexStatus}`;
+        context.log(`Updating ${fullName}: ${reason}`);
+        updateRecord(this.database, "space_repositories", { indexStatus: "stale", lastError: null, updatedAt: nowIso() }, "id", spaceRepositoryId);
+        this.spaces.markSpaceStale(spaceId);
+
+        const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log });
         updateRecord(
           this.database,
           "space_repositories",
@@ -150,10 +173,23 @@ export class OperationsService {
           spaceRepositoryId
         );
         await this.indexSpaceRepository(spaceRepositoryId, context.log);
+        updatedRepositories += 1;
       }
 
-      const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log);
-      context.log(`Activated snapshot v${snapshot.version.toString().padStart(6, "0")}`);
+      const space = this.spaces.getSpaceById(spaceId);
+      const snapshotNeedsRebuild =
+        updatedRepositories > 0 ||
+        space.snapshotStatus !== "active" ||
+        repositories.some((repository) => !Boolean(repository.snapshot_included));
+
+      if (snapshotNeedsRebuild) {
+        context.log("Building immutable cross-repo snapshot");
+        const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log);
+        context.log(`Activated snapshot v${snapshot.version.toString().padStart(6, "0")}`);
+      } else {
+        context.log("Active snapshot is already up to date");
+      }
+      context.log(`Checked ${repositories.length} repositories; updated ${updatedRepositories}`);
     });
   }
 
