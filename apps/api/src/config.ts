@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { ensurePrivateDir, initializePrivateFileCreation } from "./domain/permissions.js";
 
 export interface AppConfig {
   apiHost: string;
@@ -47,15 +47,12 @@ function positiveIntEnv(name: string, fallback: number): number {
   return value;
 }
 
-function ensureDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 export function corsOrigins(config: AppConfig): string[] {
   return Array.from(new Set([config.frontendOrigin, "http://127.0.0.1:5173", "http://localhost:5173"]));
 }
 
 export function loadConfig(): AppConfig {
+  initializePrivateFileCreation();
   const memorepoHome = absolutePath(process.env.MEMOREPO_HOME ?? ".memorepo");
   const dataDir = path.join(memorepoHome, "data");
   const spacesDir = path.join(memorepoHome, "spaces");
@@ -77,7 +74,7 @@ export function loadConfig(): AppConfig {
     tmpDir,
     binDir
   ]) {
-    ensureDir(dir);
+    ensurePrivateDir(dir);
   }
 
   const apiPort = Number(process.env.API_PORT ?? 8787);
