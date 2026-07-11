@@ -23,9 +23,10 @@ interface RepositoryRowProps {
   onSnapshotJob?: (() => void) | undefined;
   onJob: (jobId: string) => void;
   onChanged: () => void;
+  operationsDisabled: boolean;
 }
 
-export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob, onChanged }: RepositoryRowProps) {
+export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob, onChanged, operationsDisabled }: RepositoryRowProps) {
   const currentBranch = repository.selected_branch ?? repository.default_branch;
   const branches = useMemo(() => parseBranches(repository.branches_json, currentBranch), [repository.branches_json, currentBranch]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -155,7 +156,7 @@ export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob,
       </div>
 
       <div className="repo-branch-cell" role="cell" data-label="Branch">
-        <button className="branch-button" type="button" onClick={() => setBranchOpen(true)}>
+        <button className="branch-button" type="button" onClick={() => setBranchOpen(true)} disabled={operationsDisabled}>
           <GitBranch size={16} />
           <span>{currentBranch}</span>
           <small>Change</small>
@@ -171,7 +172,7 @@ export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob,
 
       <div className="repo-actions" role="cell" aria-busy={checkoutMutation.isPending || actionMutation.isPending}>
         {status.action === "reindex" ? (
-          <button className="secondary-button compact-button" type="button" onClick={() => startAction("reindex")}>
+          <button className="secondary-button compact-button" type="button" onClick={() => startAction("reindex")} disabled={operationsDisabled}>
             <RefreshCw size={16} />
             <span>Retry</span>
           </button>
@@ -190,6 +191,7 @@ export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob,
             aria-haspopup="true"
             aria-expanded={menuOpen}
             title="Repository actions"
+            disabled={operationsDisabled}
             onClick={() => setMenuOpen((open) => !open)}
           >
             <MoreVertical size={18} />

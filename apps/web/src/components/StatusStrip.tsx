@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertCircle, CheckCircle2, GitBranch, Loader2, Plus } from "lucide-react";
 import { api, type McpConnection, type Space, type SpaceRepository } from "../lib/api";
 import type { SnapshotStateSummary } from "../lib/snapshotState";
+import { QueryErrorState } from "./QueryErrorState";
 
 interface SystemState {
   github: { connected: boolean; viewer?: { login: string }; error?: string };
@@ -17,6 +18,7 @@ interface StatusStripProps {
   onConnectAgent: () => void;
   onAddRepository: () => void;
   onOpenSnapshotJob: (jobId: string) => void;
+  operationsDisabled: boolean;
 }
 
 export function StatusStrip({
@@ -26,7 +28,8 @@ export function StatusStrip({
   snapshotSummary,
   onConnectAgent,
   onAddRepository,
-  onOpenSnapshotJob
+  onOpenSnapshotJob,
+  operationsDisabled,
 }: StatusStripProps) {
   const systemQuery = useQuery({
     queryKey: ["system"],
@@ -97,6 +100,11 @@ export function StatusStrip({
     description = "Repositories are still being cloned, indexed, or added to the active snapshot.";
     action = null;
     busy = true;
+  } else if (connectionsQuery.isError) {
+    tone = "danger";
+    title = "Agent access status is unavailable";
+    description = "Repository context is ready, but active connections could not be checked.";
+    action = null;
   } else if (connectionsQuery.isPending) {
     tone = "neutral";
     title = "Checking agent access";
@@ -126,7 +134,7 @@ export function StatusStrip({
             <span>View error</span>
           </button>
         ) : action === "add" ? (
-          <button className="primary-button" type="button" onClick={onAddRepository}>
+          <button className="primary-button" type="button" onClick={onAddRepository} disabled={operationsDisabled}>
             <Plus size={18} />
             <span>Add repository</span>
           </button>
@@ -137,6 +145,12 @@ export function StatusStrip({
           </button>
         ) : null}
       </div>
+      {connectionsQuery.isError ? (
+        <QueryErrorState title="Agent connections could not be loaded" error={connectionsQuery.error} onRetry={() => void connectionsQuery.refetch()} />
+      ) : null}
+      {systemQuery.isError ? (
+        <QueryErrorState title="System status could not be loaded" error={systemQuery.error} onRetry={() => void systemQuery.refetch()} />
+      ) : null}
       {systemProblems.length > 0 ? (
         <div className="system-alert" role="alert">
           <AlertCircle size={18} />

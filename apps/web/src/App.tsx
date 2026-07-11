@@ -10,6 +10,7 @@ import { McpModal } from "./components/McpModal";
 import { Modal } from "./components/Modal";
 import { NewSpaceModal } from "./components/NewSpaceModal";
 import { PreflightPanel } from "./components/PreflightPanel";
+import { QueryErrorState } from "./components/QueryErrorState";
 import { RemovedRepositoryRow } from "./components/RemovedRepositoryRow";
 import { RepositoryRow } from "./components/RepositoryRow";
 import { StatusStrip } from "./components/StatusStrip";
@@ -74,6 +75,15 @@ export function App() {
 
   const repositories = spaceDetailQuery.data?.repositories ?? [];
   const removedRepositories = spaceDetailQuery.data?.removedRepositories ?? [];
+  const selectedRepositoryIds = new Set([...repositories, ...removedRepositories].map((repository) => repository.id));
+  const hasActiveSpaceJob = Boolean(
+    selectedSpace &&
+      (jobsQuery.data?.jobs ?? []).some(
+        (job) =>
+          ["pending", "running"].includes(job.status) &&
+          (job.space_id === selectedSpace.id || Boolean(job.space_repository_id && selectedRepositoryIds.has(job.space_repository_id))),
+      ),
+  );
   const snapshotSummary = selectedSpace
     ? snapshotStateSummary(selectedSpace.id, selectedSpace.snapshot_status, repositories, jobsQuery.data?.jobs)
     : { state: "ready" as const, excludedRepositoryCount: 0, latestSnapshotJob: null };
@@ -115,7 +125,7 @@ export function App() {
   }
 
   function checkForUpdates() {
-    if (!selectedSpace) {
+    if (!selectedSpace || hasActiveSpaceJob) {
       return;
     }
     if (repositories.length >= 5) {
@@ -153,7 +163,7 @@ export function App() {
 
         <div className="sidebar-section-heading">
           <span>Spaces</span>
-          <button className="sidebar-add-button" type="button" onClick={() => setNewSpaceOpen(true)} aria-label="Create Space" title="Create Space">
+          <button className="sidebar-add-button" type="button" onClick={() => setNewSpaceOpen(true)} disabled={spacesQuery.isError} aria-label="Create Space" title="Create Space">
             <Plus size={18} />
           </button>
         </div>
@@ -187,7 +197,7 @@ export function App() {
           </div>
           {selectedSpace ? (
             <div className="header-actions">
-              <button className="primary-button" type="button" onClick={() => setAddRepoOpen(true)}>
+              <button className="primary-button" type="button" onClick={() => setAddRepoOpen(true)} disabled={hasActiveSpaceJob}>
                 <Plus size={18} />
                 <span>Add repository</span>
               </button>
@@ -195,7 +205,18 @@ export function App() {
           ) : null}
         </header>
 
-        {!selectedSpace ? (
+        {spacesQuery.isError ? (
+          <section className="api-unavailable page-empty-state" aria-labelledby="api-unavailable-title">
+            <HeartPulse size={38} aria-hidden="true" />
+            <h2 id="api-unavailable-title">MemoRepo API is unavailable</h2>
+            <p>The dashboard could not load your Spaces. Check that the API is running, then try again.</p>
+            <QueryErrorState
+              title="Connection failed"
+              error={spacesQuery.error}
+              onRetry={() => void spacesQuery.refetch()}
+            />
+          </section>
+        ) : !selectedSpace ? (
           <section className="empty-state page-empty-state">
             <Layers size={38} />
             <h2>Create your first Space</h2>
@@ -215,6 +236,7 @@ export function App() {
               onConnectAgent={() => setMcpOpen(true)}
               onAddRepository={() => setAddRepoOpen(true)}
               onOpenSnapshotJob={(jobId) => setActiveJobId(jobId)}
+              operationsDisabled={hasActiveSpaceJob}
             />
 
             <section className="repo-section" aria-labelledby="repositories-title">
@@ -231,7 +253,7 @@ export function App() {
                     className="secondary-button"
                     type="button"
                     onClick={checkForUpdates}
-                    disabled={updateSpaceMutation.isPending}
+                    disabled={updateSpaceMutation.isPending || hasActiveSpaceJob}
                     aria-busy={updateSpaceMutation.isPending}
                     title="Check remote commits and rebuild only repositories that changed"
                   >
@@ -240,6 +262,12 @@ export function App() {
                   </button>
                 ) : null}
               </header>
+
+              {hasActiveSpaceJob ? (
+                <div className="inline-alert" role="status">
+                  A Space operation is in progress. Repository changes are available again when it finishes.
+                </div>
+              ) : null}
 
               {repositories.length > 0 ? (
                 <div className="toolbar" aria-label="Repository list controls">
@@ -336,6 +364,7 @@ export function App() {
                         void queryClient.invalidateQueries({ queryKey: ["space", selectedSpace.id] });
                         void queryClient.invalidateQueries({ queryKey: ["jobs"] });
                       }}
+                      operationsDisabled={hasActiveSpaceJob}
                     />
                   ))}
                 </div>
@@ -397,6 +426,7 @@ export function App() {
                       ) : null}
                       <LifecyclePanel
                         space={selectedSpace}
+                        operationsDisabled={hasActiveSpaceJob}
                         onChanged={() => {
                           void queryClient.invalidateQueries({ queryKey: ["space", selectedSpace.id] });
                           void queryClient.invalidateQueries({ queryKey: ["spaces"] });

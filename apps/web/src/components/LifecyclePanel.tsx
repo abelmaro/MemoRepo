@@ -11,15 +11,18 @@ import {
 } from "../lib/api";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
+import { QueryErrorState } from "./QueryErrorState";
 
 export function LifecyclePanel({
   space,
   onChanged,
-  onDeleted
+  onDeleted,
+  operationsDisabled,
 }: {
   space: Space;
   onChanged: () => void;
   onDeleted: () => void;
+  operationsDisabled: boolean;
 }) {
   const queryClient = useQueryClient();
   const [snapshotRetention, setSnapshotRetention] = useState<number | null>(null);
@@ -88,6 +91,12 @@ export function LifecyclePanel({
 
   return (
     <>
+      {snapshotsQuery.isError ? (
+        <QueryErrorState title="Snapshots could not be loaded" error={snapshotsQuery.error} onRetry={() => void snapshotsQuery.refetch()} />
+      ) : null}
+      {maintenanceQuery.isError ? (
+        <QueryErrorState title="Maintenance summary could not be loaded" error={maintenanceQuery.error} onRetry={() => void maintenanceQuery.refetch()} />
+      ) : null}
       <section className="lifecycle-panel management-panel" aria-labelledby="lifecycle-title">
       <div className="panel-heading with-icon">
         <Database size={20} />
@@ -96,12 +105,12 @@ export function LifecyclePanel({
           <p>Manage snapshots, retained jobs, and MemoRepo-owned local data.</p>
         </div>
       </div>
+      {feedback ? (
+        <div className={`inline-alert lifecycle-feedback ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>
+          {feedback.message}
+        </div>
+      ) : null}
       <div className="lifecycle-grid">
-        {feedback ? (
-          <div className={`inline-alert ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>
-            {feedback.message}
-          </div>
-        ) : null}
         <div className="lifecycle-card lifecycle-card-wide">
           <div className="lifecycle-card-header">
             <div>
@@ -119,7 +128,7 @@ export function LifecyclePanel({
                   onChange={(event) => setSnapshotRetention(Number(event.target.value))}
                 />
               </label>
-              <button className="secondary-button" type="button" onClick={() => { setFeedback(null); pruneMutation.mutate(); }} disabled={pruneMutation.isPending}>
+              <button className="secondary-button" type="button" onClick={() => { setFeedback(null); pruneMutation.mutate(); }} disabled={pruneMutation.isPending || operationsDisabled}>
                 {pruneMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
                 <span>Prune</span>
               </button>
@@ -142,7 +151,7 @@ export function LifecyclePanel({
           </div>
         </div>
 
-        <div className="lifecycle-card">
+        <div className="lifecycle-card garbage-collection-card">
           <div className="lifecycle-card-header">
             <div>
               <h3>Garbage collection</h3>
@@ -166,7 +175,7 @@ export function LifecyclePanel({
                 onChange={(event) => setJobRetentionDays(Number(event.target.value))}
               />
             </label>
-            <button className="secondary-button" type="button" onClick={() => { setFeedback(null); gcMutation.mutate(); }} disabled={gcMutation.isPending}>
+            <button className="secondary-button" type="button" onClick={() => { setFeedback(null); gcMutation.mutate(); }} disabled={gcMutation.isPending || operationsDisabled}>
               {gcMutation.isPending ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
               <span>Run GC</span>
             </button>
@@ -180,7 +189,7 @@ export function LifecyclePanel({
               <span>Removes managed clones, indexes, snapshots, jobs, and local MCP connections.</span>
             </div>
           </div>
-          <button className="secondary-button danger" type="button" onClick={() => { deleteManagedMutation.reset(); setDeleteConfirmation(""); setDeleteOpen(true); }}>
+          <button className="secondary-button danger" type="button" onClick={() => { deleteManagedMutation.reset(); setDeleteConfirmation(""); setDeleteOpen(true); }} disabled={operationsDisabled}>
             <Trash2 size={18} />
             <span>Delete space</span>
           </button>
