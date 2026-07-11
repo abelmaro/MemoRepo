@@ -7,6 +7,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Normalize MCP code locations to repository-relative `file_path` values while returning project context separately.
+- Document that indexed code text matching is case-sensitive.
+
+### Fixed
+
+- Reject empty snippet symbol names instead of returning an arbitrary suffix match.
+- Build invalid-label recovery hints from each project's actual graph schema.
+- Return accurate whole-project node counts and stop potentially truncated graph aggregations from appearing trustworthy.
+- Apply projectless graph row limits globally and interleave global search results across repositories.
+- Replace native parser failures for unsupported standalone Cypher clauses with actionable validation errors.
+- Correct self-recursion flags when they contradict the returned source and call metadata.
+- Preserve HTTP endpoint paths during MCP path sanitization.
+- Paginate global graph searches beyond the first 100 candidates and report combined totals.
+- Allow read-only access to graph properties whose names match mutation keywords.
+- Honor compact repository listings unless detailed metadata is explicitly requested.
+- Reject ignored graph ordering and replace broken `SKIP` behavior with gateway-controlled scoped offsets.
+- Add recoverable code-search pagination metadata and offsets beyond the first 25 matches.
+- Mark source-less synthetic routes explicitly and omit fictitious locations, line ranges, and empty metadata.
+- Reject contradictory trace names instead of silently tracing the symbol selected by a different qualified name.
+- Keep projectless code-search candidate counts stable across pagination offsets.
+
 ## [0.1.8] - 2026-07-11
 
 ### Changed

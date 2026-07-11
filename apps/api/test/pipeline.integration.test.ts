@@ -114,6 +114,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     const listResponse = await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {});
     const listResponseJson = JSON.stringify(listResponse);
     assert.match(listResponseJson, /integration-owner\/integration-repo/);
+    assert.doesNotMatch(listResponseJson, /spaceRepositoryId|defaultBranch|selectedBranch|selectedCommit|cloneStatus|indexStatus|snapshotIncluded|branchCount/);
     const projectName = findFirstString(listResponse, "project");
     assert.ok(projectName);
     assert.doesNotMatch(listResponseJson, /branches|githubRepositoryId|htmlUrl|remoteRef/);
@@ -136,6 +137,8 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     const expandedListResponseJson = JSON.stringify(expandedListResponse);
     assert.match(expandedListResponseJson, /branches/);
     assert.match(expandedListResponseJson, /htmlUrl/);
+    assert.match(expandedListResponseJson, /spaceRepositoryId/);
+    assert.match(expandedListResponseJson, /selectedCommit/);
     assertNoInternalPathLeak(expandedListResponseJson, testRoot);
 
     const searchResponse = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
@@ -170,6 +173,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async () => ({ payload: "x".repeat(300_000) });
     try {
       const largeResponse = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
+        project: projectName,
         query: "MATCH (n) RETURN n",
         max_rows: 1
       });
@@ -1503,21 +1507,107 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
     (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async (tool, input) => {
       toolCalls.push({ tool, input });
       if (tool === "query_graph") {
+        if (typeof input.query === "string" && input.query.includes("MATCH (n:Method) RETURN n.qualified_name AS q")) {
+          return {
+            columns: ["q"],
+            rows: Array.from({ length: Number(input.max_rows) }, (_, index) => [`method-${index}`])
+          };
+        }
+        if (typeof input.query === "string" && input.query.includes("MATCH (n) WHERE") && input.query.includes("RETURN n.name AS name")) {
+          return { rows: [["render", "src.components.App.App.render", "src/components/App.js"]] };
+        }
+        if (typeof input.query === "string" && input.query.includes("count(f)")) {
+          return { columns: ["c"], rows: [["250"]], total: 1 };
+        }
         return { rows: [{ project: input.project, query: input.query, maxRows: input.max_rows }] };
+      }
+      if (tool === "index_status") {
+        return { project: input.project, nodes: input.project === alphaProject ? 314 : 330 };
+      }
+      if (tool === "get_graph_schema") {
+        return { labels: ["Function"], adr_hint: "Use manage_adr(mode='update') to persist decisions" };
+      }
+      if (tool === "get_architecture") {
+        if (Array.isArray(input.aspects) && input.aspects.includes("routes")) {
+          return { routes: [
+            { path: "/users/login", method: "POST", handler: "login" },
+            { path: "/articles/:slug/comments", method: "", handler: "", file_path: "" }
+          ] };
+        }
+        return { languages: ["TypeScript"] };
+      }
+      if (tool === "get_code_snippet") {
+        if (input.qualified_name === "__route__POST__/articles") {
+          return {
+            qualified_name: input.qualified_name,
+            file_path: "/var/lib/memorepo/internal/routes",
+            start_line: 1,
+            end_line: 51,
+            source: "(source not available)"
+          };
+        }
+        if (input.qualified_name === `${alphaProject}.src.falseRecursive`) {
+          return {
+            qualified_name: input.qualified_name,
+            name: "get",
+            file_path: "example/alpha/src/service.ts",
+            code: "get() { return this.http.get('/articles'); }",
+            self_recursive: true,
+            recursive: true,
+            unguarded_recursion: true,
+            callees: 0
+          };
+        }
+        return {
+          qualified_name: `${input.project}.src.target`,
+          file_path: input.project === alphaProject ? "example/alpha/src/target.ts" : "example/beta/src/target.ts",
+          code: "export function target() {}"
+        };
+      }
+      if (tool === "search_graph" && input.label === "NoSuchLabel") {
+        return { results: [], hint: "Available labels: Function, Method, Class, Route, Package" };
+      }
+      if (tool === "search_graph" && input.label === "Route") {
+        return { results: [{ label: "Route", qualified_name: "__route__POST__/articles", file_path: "", method: "" }] };
+      }
+      if ((tool === "search_graph" || tool === "search_code") && (input.query === "fair-target" || input.pattern === "fair-target")) {
+        return { results: Array.from({ length: 4 }, (_, index) => ({ name: `${input.project}-${index}` })) };
+      }
+      if (tool === "search_graph" && input.query === "deep-target") {
+        const offset = Number(input.offset ?? 0);
+        const total = input.project === alphaProject ? 213 : 314;
+        const count = Math.max(0, Math.min(Number(input.limit ?? 25), total - offset));
+        return {
+          results: Array.from({ length: count }, (_, index) => ({ name: `${input.project}-${offset + index}` })),
+          total,
+          has_more: offset + count < total
+        };
+      }
+      if (tool === "search_code" && input.pattern === "page-code") {
+        const total = 80;
+        const count = Math.min(Number(input.limit ?? 25), total);
+        return { results: Array.from({ length: count }, (_, index) => ({ file_path: `src/file-${index}.ts` })), total };
+      }
+      if (tool === "search_code" && input.pattern === "stable-candidates") {
+        const total = input.project === alphaProject ? 7 : 12;
+        const count = Math.min(Number(input.limit ?? 25), total);
+        return { results: Array.from({ length: count }, (_, index) => ({ file_path: `src/${input.project}-${index}.ts` })) };
       }
       return { results: [{ name: "target", project: input.project ?? "cross-repo", qualified_name: `${input.project ?? "cross"}.target` }] };
     };
 
     try {
       toolCalls.length = 0;
-      await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+      const crossProjectSearch = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
         query: "target",
         limit: 10
-      });
-      assert.equal(toolCalls.length, 1);
-      assert.equal(toolCalls[0]!.tool, "search_graph");
-      assert.equal(toolCalls[0]!.input.project, undefined);
-      assert.equal(toolCalls[0]!.input.limit, 10);
+      }) as { results: Array<{ project: string }>; projects_searched: string[] };
+      assert.equal(toolCalls.length, 2);
+      assert.deepEqual(toolCalls.map(({ tool }) => tool), ["search_graph", "search_graph"]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.project), [alphaProject, betaProject]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.limit), [25, 25]);
+      assert.deepEqual(crossProjectSearch.results.map(({ project }) => project), [alphaProject, betaProject]);
+      assert.deepEqual(crossProjectSearch.projects_searched, [alphaProject, betaProject]);
 
       toolCalls.length = 0;
       await services.mcp.callTool(space.slug, connection.token, "search_graph", {
@@ -1526,9 +1616,200 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
       });
       assert.equal(toolCalls.length, 0);
 
+      const fairGraphSearch = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+        query: "fair-target",
+        limit: 6
+      }) as { results: Array<{ project: string }>; merge_strategy?: string };
+      assert.deepEqual(fairGraphSearch.results.map(({ project }) => project), [
+        alphaProject, betaProject, alphaProject, betaProject, alphaProject, betaProject
+      ]);
+      assert.equal(fairGraphSearch.merge_strategy, "round_robin_by_project");
+
+      const fairCodeSearch = await services.mcp.callTool(space.slug, connection.token, "search_code", {
+        pattern: "fair-target",
+        limit: 4
+      }) as { results: Array<{ project: string }> };
+      assert.deepEqual(fairCodeSearch.results.map(({ project }) => project), [alphaProject, betaProject, alphaProject, betaProject]);
+
+      const codePage = await services.mcp.callTool(space.slug, connection.token, "search_code", {
+        project: alphaProject,
+        pattern: "page-code",
+        limit: 25,
+        offset: 25
+      }) as { results: Array<{ file_path: string }>; offset?: number; effective_limit?: number; total?: number; has_more?: boolean };
+      assert.equal(codePage.results[0]?.file_path, "src/file-25.ts");
+      assert.equal(codePage.results.length, 25);
+      assert.equal(codePage.offset, 25);
+      assert.equal(codePage.effective_limit, 25);
+      assert.equal(codePage.total, 80);
+      assert.equal(codePage.has_more, true);
+
+      const firstCandidatePage = await services.mcp.callTool(space.slug, connection.token, "search_code", {
+        pattern: "stable-candidates",
+        limit: 5,
+        offset: 0
+      }) as { candidate_count?: number; results: unknown[] };
+      const secondCandidatePage = await services.mcp.callTool(space.slug, connection.token, "search_code", {
+        pattern: "stable-candidates",
+        limit: 5,
+        offset: 5
+      }) as { candidate_count?: number; results: unknown[] };
+      assert.equal(firstCandidatePage.candidate_count, 19);
+      assert.equal(secondCandidatePage.candidate_count, 19);
+      assert.equal(firstCandidatePage.results.length, 5);
+      assert.equal(secondCandidatePage.results.length, 5);
+
+      toolCalls.length = 0;
+      const deepSearch = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+        query: "deep-target",
+        limit: 1,
+        offset: 100
+      }) as { results: Array<{ project: string }>; total?: number; has_more?: boolean; candidate_count?: number };
+      assert.equal(deepSearch.results.length, 1);
+      assert.equal(deepSearch.total, 527);
+      assert.equal(deepSearch.has_more, true);
+      assert.ok((deepSearch.candidate_count ?? 0) > 100);
+      assert.equal(toolCalls.filter(({ tool }) => tool === "search_graph").length, 6);
+
+      toolCalls.length = 0;
+      const schema = await services.mcp.callTool(space.slug, connection.token, "get_graph_schema", {}) as {
+        projects: Array<{ project: string; adr_hint?: string; adr_notice?: string }>;
+      };
+      assert.equal(toolCalls.length, 2);
+      assert.ok(schema.projects.every((project) => project.adr_hint === undefined));
+      assert.ok(schema.projects.every((project) => project.adr_notice?.includes("read-only")));
+
+      toolCalls.length = 0;
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "get_architecture", { aspects: ["definitely_invalid"] }),
+        /unsupported aspects/
+      );
+      assert.equal(toolCalls.length, 0);
+
+      const routesArchitecture = await services.mcp.callTool(space.slug, connection.token, "get_architecture", {
+        project: alphaProject,
+        aspects: ["routes"]
+      }) as { routes: Array<{ path: string; method?: string; handler?: string; file_path?: string; synthetic?: boolean; source_available?: boolean }> };
+      assert.equal(routesArchitecture.routes[0]?.path, "/users/login");
+      assert.equal(routesArchitecture.routes[1]?.method, undefined);
+      assert.equal(routesArchitecture.routes[1]?.handler, undefined);
+      assert.equal(routesArchitecture.routes[1]?.file_path, undefined);
+      assert.equal(routesArchitecture.routes[1]?.synthetic, true);
+      assert.equal(routesArchitecture.routes[1]?.source_available, false);
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "search_graph", { query: "" }),
+        /query must be a non-empty string/
+      );
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "search_code", { pattern: "" }),
+        /pattern must be a non-empty string/
+      );
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "get_code_snippet", { project: alphaProject, qualified_name: "" }),
+        /qualified_name must be a non-empty string/
+      );
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "get_code_snippet", { project: alphaProject, qualified_name: "   " }),
+        /qualified_name must be a non-empty string/
+      );
+
+      toolCalls.length = 0;
+      const snippet = await services.mcp.callTool(space.slug, connection.token, "get_code_snippet", {
+        project: alphaProject,
+        qualified_name: `${alphaProject}.src.target`
+      }) as { project: string; file_path: string };
+      assert.equal(snippet.project, alphaProject);
+      assert.equal(snippet.file_path, "src/target.ts");
+
+      const correctedRecursion = await services.mcp.callTool(space.slug, connection.token, "get_code_snippet", {
+        project: alphaProject,
+        qualified_name: `${alphaProject}.src.falseRecursive`
+      }) as { self_recursive?: boolean; recursive?: boolean; unguarded_recursion?: boolean; analysis_warnings?: string[] };
+      assert.equal(correctedRecursion.self_recursive, false);
+      assert.equal(correctedRecursion.recursive, false);
+      assert.equal(correctedRecursion.unguarded_recursion, false);
+      assert.ok(correctedRecursion.analysis_warnings?.some((warning) => warning.includes("no self-call")));
+
+      const syntheticRoute = await services.mcp.callTool(space.slug, connection.token, "get_code_snippet", {
+        project: alphaProject,
+        qualified_name: "__route__POST__/articles"
+      }) as Record<string, unknown>;
+      assert.equal(syntheticRoute.synthetic, true);
+      assert.equal(syntheticRoute.source_available, false);
+      assert.equal(syntheticRoute.file_path, undefined);
+      assert.equal(syntheticRoute.start_line, undefined);
+      assert.equal(syntheticRoute.end_line, undefined);
+      assert.equal(syntheticRoute.source, undefined);
+
+      const routeSearch = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+        project: alphaProject,
+        label: "Route",
+        limit: 5
+      }) as { results: Array<Record<string, unknown>> };
+      assert.equal(routeSearch.results[0]?.synthetic, true);
+      assert.equal(routeSearch.results[0]?.source_available, false);
+      assert.equal(routeSearch.results[0]?.file_path, undefined);
+      assert.equal(routeSearch.results[0]?.method, undefined);
+
+      toolCalls.length = 0;
+      const invalidLabel = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+        project: alphaProject,
+        label: "NoSuchLabel",
+        limit: 2
+      }) as { hint?: string };
+      assert.equal(invalidLabel.hint, `Available labels for ${alphaProject}: Function`);
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "search_graph", { query: "target", limit: 0 }),
+        /limit must be at least 1/
+      );
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "search_graph", { query: "target", offset: -1 }),
+        /offset must be at least 0/
+      );
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "trace_path", { function_name: "target", depth: 999 }),
+        /depth must be between 1 and 5/
+      );
+
+      const invalidLimitResponse = await services.mcp.handleJsonRpc(space.slug, connection.token, {
+        jsonrpc: "2.0",
+        id: "invalid-limit",
+        method: "tools/call",
+        params: { name: "search_graph", arguments: { query: "target", limit: 0 } }
+      });
+      assert.equal((invalidLimitResponse?.result as { isError?: boolean } | undefined)?.isError, true);
+
+      toolCalls.length = 0;
+      const traced = await services.mcp.callTool(space.slug, connection.token, "trace_path", {
+        project: alphaProject,
+        function_name: "render",
+        qualified_name: `${alphaProject}.src.components.App.App.render`,
+        depth: 1
+      }) as { resolved_symbol: { project: string; qualified_name: string } };
+      assert.equal(traced.resolved_symbol.project, alphaProject);
+      assert.equal(traced.resolved_symbol.qualified_name, "src.components.App.App.render");
+      const candidateLookup = toolCalls.find(({ tool, input }) => tool === "query_graph" && String(input.query).includes("MATCH (n) WHERE"));
+      assert.match(String(candidateLookup?.input.query), /src\.components\.App\.App\.render/);
+      const nativeTrace = toolCalls.find(({ tool }) => tool === "trace_path");
+      assert.equal(nativeTrace?.input.function_name, "render");
+
+      toolCalls.length = 0;
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "trace_path", {
+          project: alphaProject,
+          function_name: "definitelyWrongName",
+          qualified_name: `${alphaProject}.src.components.App.App.render`,
+          depth: 1
+        }),
+        /function_name "definitelyWrongName" does not match qualified_name resolved symbol "render"/
+      );
+      assert.equal(toolCalls.some(({ tool }) => tool === "trace_path"), false);
+
       toolCalls.length = 0;
       await services.mcp.callTool(space.slug, connection.token, "search_graph", {
-        query: "target",
+        query: "scoped-target",
         project: alphaProject,
         limit: 30
       });
@@ -1541,12 +1822,14 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
         query: "MATCH (n) RETURN n",
         max_rows: 10
       });
-      assert.equal(toolCalls.length, 1);
-      assert.equal(toolCalls[0]!.tool, "query_graph");
-      assert.equal(toolCalls[0]!.input.project, undefined);
-      assert.equal(toolCalls[0]!.input.max_rows, 10);
-      assert.equal(toolCalls[0]!.input.query, "MATCH (n) RETURN n LIMIT 10");
+      assert.equal(toolCalls.length, 2);
+      assert.deepEqual(toolCalls.map(({ tool }) => tool), ["query_graph", "query_graph"]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.project), [alphaProject, betaProject]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.max_rows), [6, 6]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.query), ["MATCH (n) RETURN n LIMIT 6", "MATCH (n) RETURN n LIMIT 6"]);
       assert.equal((graph as { snapshot: { version: number; stale?: boolean } }).snapshot.version, 1);
+      assert.equal((graph as { max_rows_scope?: string }).max_rows_scope, "global");
+      assert.equal((graph as { max_rows?: number }).max_rows, 10);
       assert.equal((graph as { snapshot: { stale?: boolean } }).snapshot.stale, undefined);
       assert.equal((graph as { limits?: unknown }).limits, undefined);
       assert.equal((graph as { space?: unknown }).space, undefined);
@@ -1555,27 +1838,98 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
       await services.mcp.callTool(space.slug, connection.token, "query_graph", {
         query: "MATCH (n) RETURN n"
       });
-      assert.equal(toolCalls.length, 1);
-      assert.equal(toolCalls[0]!.input.max_rows, 25);
-      assert.equal(toolCalls[0]!.input.query, "MATCH (n) RETURN n LIMIT 25");
+      assert.equal(toolCalls.length, 2);
+      assert.deepEqual(toolCalls.map(({ input }) => input.max_rows), [14, 13]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.query), ["MATCH (n) RETURN n LIMIT 14", "MATCH (n) RETURN n LIMIT 13"]);
 
       toolCalls.length = 0;
       await services.mcp.callTool(space.slug, connection.token, "query_graph", {
-        query: "MATCH (n) RETURN n",
+        query: "MATCH (n:Function) RETURN n",
         project: betaProject,
         max_rows: 5
       });
       assert.equal(toolCalls.length, 1);
       assert.equal(toolCalls[0]!.input.project, betaProject);
-      assert.equal(toolCalls[0]!.input.query, "MATCH (n) RETURN n LIMIT 5");
+      assert.equal(toolCalls[0]!.input.query, "MATCH (n:Function) RETURN n LIMIT 6");
 
       toolCalls.length = 0;
       await services.mcp.callTool(space.slug, connection.token, "query_graph", {
         query: "MATCH (n) WHERE n.name = 'DELETE ME' RETURN n",
         max_rows: 5
       });
-      assert.equal(toolCalls.length, 1);
-      assert.equal(toolCalls[0]!.input.query, "MATCH (n) WHERE n.name = 'DELETE ME' RETURN n LIMIT 5");
+      assert.equal(toolCalls.length, 2);
+      assert.deepEqual(toolCalls.map(({ input }) => input.project), [alphaProject, betaProject]);
+      assert.deepEqual(toolCalls.map(({ input }) => input.query), [
+        "MATCH (n) WHERE n.name = 'DELETE ME' RETURN n LIMIT 4",
+        "MATCH (n) WHERE n.name = 'DELETE ME' RETURN n LIMIT 3"
+      ]);
+
+      toolCalls.length = 0;
+      const totalCount = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
+        project: alphaProject,
+        query: "MATCH (n) RETURN count(n) AS c"
+      }) as { rows: string[][]; aggregation_source?: string };
+      assert.deepEqual(totalCount.rows, [["314"]]);
+      assert.equal(totalCount.aggregation_source, "index_status");
+      assert.deepEqual(toolCalls.map(({ tool }) => tool), ["index_status"]);
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", {
+          project: alphaProject,
+          query: "MATCH (f) WHERE f.name CONTAINS 'x' RETURN count(f) AS c"
+        }),
+        /250-entity scan ceiling/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "RETURN 1 AS one" }),
+        /subset starting with MATCH/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", {
+          project: alphaProject,
+          query: "MATCH (n:Method) RETURN n.name AS name ORDER BY n.name",
+          max_rows: 10
+        }),
+        /ORDER BY is not supported reliably/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", {
+          project: alphaProject,
+          query: "MATCH (n:Method) RETURN n.name AS name SKIP 25",
+          max_rows: 25
+        }),
+        /SKIP is controlled by the offset argument/
+      );
+
+      toolCalls.length = 0;
+      const graphPage = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
+        project: alphaProject,
+        query: "MATCH (n:Method) RETURN n.qualified_name AS q",
+        max_rows: 25,
+        offset: 25
+      }) as { rows: string[][]; offset?: number; effective_limit?: number; has_more?: boolean };
+      assert.equal(graphPage.rows.length, 25);
+      assert.equal(graphPage.rows[0]?.[0], "method-25");
+      assert.equal(graphPage.rows[24]?.[0], "method-49");
+      assert.equal(graphPage.offset, 25);
+      assert.equal(graphPage.effective_limit, 25);
+      assert.equal(graphPage.has_more, true);
+      assert.equal(toolCalls[0]?.input.max_rows, 51);
+      assert.equal(toolCalls[0]?.input.query, "MATCH (n:Method) RETURN n.qualified_name AS q LIMIT 51");
+
+      for (const property of ["create", "delete", "set", "remove"]) {
+        toolCalls.length = 0;
+        await services.mcp.callTool(space.slug, connection.token, "query_graph", {
+          project: alphaProject,
+          query: `MATCH (n) RETURN n.${property} AS value`,
+          max_rows: 1
+        });
+        assert.equal(toolCalls.length, 1);
+        assert.equal(toolCalls[0]!.tool, "query_graph");
+      }
 
       await assert.rejects(
         () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "MATCH (n) DELETE n", max_rows: 5 }),
@@ -1606,10 +1960,38 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
         await assert.rejects(() => services.mcp.callTool(space.slug, connection.token, legacyTool, {}), /Unknown MCP tool/);
       }
 
+      const successfulStub = services.cbm.tool.bind(services.cbm);
+      (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async (tool, input, cacheDir, timeoutMs) => {
+        if (input.project === betaProject) {
+          throw new Error("project backend unavailable");
+        }
+        return successfulStub(tool, input, cacheDir, timeoutMs);
+      };
+      const partialSearch = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
+        query: "partial-target",
+        limit: 10
+      }) as { partial?: boolean; project_errors?: Array<{ project: string }> };
+      assert.equal(partialSearch.partial, true);
+      assert.deepEqual(partialSearch.project_errors?.map(({ project }) => project), [betaProject]);
+
+      (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async () => {
+        throw new Error("backend unavailable");
+      };
+      const failedSearch = await services.mcp.handleJsonRpc(space.slug, connection.token, {
+        jsonrpc: "2.0",
+        id: "failed-search",
+        method: "tools/call",
+        params: { name: "search_graph", arguments: { query: "all-projects-fail", limit: 10 } }
+      });
+      assert.equal((failedSearch?.result as { isError?: boolean } | undefined)?.isError, true);
+
+      (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = successfulStub;
+
       (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async () => ({
         results: Array.from({ length: 400 }, (_, index) => ({ name: `node-${index}`, detail: "y".repeat(200) }))
       });
       const truncatedResponse = (await services.mcp.callTool(space.slug, connection.token, "query_graph", {
+        project: alphaProject,
         query: "MATCH (huge) RETURN huge",
         max_rows: 25
       })) as { results: unknown[]; truncated: { field: string; returned: number; total: number } };
