@@ -12,7 +12,15 @@ import {
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
 
-export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; onChanged: () => void; onDeleted: () => void }) {
+export function LifecyclePanel({
+  space,
+  onChanged,
+  onDeleted
+}: {
+  space: Space;
+  onChanged: () => void;
+  onDeleted: () => void;
+}) {
   const queryClient = useQueryClient();
   const [snapshotRetention, setSnapshotRetention] = useState<number | null>(null);
   const [jobRetentionDays, setJobRetentionDays] = useState<number | null>(null);
@@ -168,20 +176,20 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
         <div className="lifecycle-card danger-zone">
           <div className="lifecycle-card-header">
             <div>
-              <h3>Delete space data</h3>
+              <h3>Delete space</h3>
               <span>Removes managed clones, indexes, snapshots, jobs, and local MCP connections.</span>
             </div>
           </div>
           <button className="secondary-button danger" type="button" onClick={() => { deleteManagedMutation.reset(); setDeleteConfirmation(""); setDeleteOpen(true); }}>
             <Trash2 size={18} />
-            <span>Delete managed data</span>
+            <span>Delete space</span>
           </button>
         </div>
       </div>
       </section>
 
       {deleteOpen ? (
-        <Modal title="Delete Space data" onClose={() => !deleteManagedMutation.isPending && setDeleteOpen(false)}>
+        <Modal title="Delete space" onClose={() => !deleteManagedMutation.isPending && setDeleteOpen(false)}>
           <div className="confirmation-dialog">
             <p>
               Delete <strong>{space.name}</strong> and all MemoRepo-managed clones, indexes, snapshots, jobs, and local MCP connections?
@@ -211,7 +219,7 @@ export function LifecyclePanel({ space, onChanged, onDeleted }: { space: Space; 
                 disabled={deleteConfirmation !== `DELETE ${space.name}` || deleteManagedMutation.isPending}
               >
                 {deleteManagedMutation.isPending ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-                <span>Delete managed data</span>
+                <span>Delete space</span>
               </button>
             </div>
           </div>

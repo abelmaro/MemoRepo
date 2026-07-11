@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Replace native browser alerts, confirmations, and prompts with accessible application modals or inline operation feedback.
 - Enforce the `query_graph` row limit through `max_rows`, reject caller-supplied limits, multiple statements, mutating clauses, and procedure calls, and mask literals and comments before validation.
 - Remove managed filesystem locations from system diagnostics and sanitize public HTTP and MCP error messages centrally.
+- Use consistent “Delete space” language throughout the Space lifecycle confirmation flow.
 
 ### Fixed
 
