@@ -55,7 +55,7 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
         params: {
           protocolVersion: "2024-11-05",
           capabilities: {},
-          clientInfo: { name: "memorepo-dashboard", version: "0.1.2" }
+          clientInfo: { name: "memorepo-dashboard", version: "0.1.6" }
         }
       });
 
