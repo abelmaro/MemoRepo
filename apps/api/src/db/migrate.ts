@@ -1,11 +1,51 @@
 import type Database from "better-sqlite3";
 
+export const CURRENT_SCHEMA_VERSION = 3;
+
+interface Migration {
+  version: number;
+  up: (sqlite: Database.Database) => void;
+}
+
+const migrations: Migration[] = [
+  { version: 1, up: createInitialSchema },
+  { version: 2, up: addJobDeduplication },
+  { version: 3, up: normalizeSnapshotStatuses },
+];
+
 export function migrate(sqlite: Database.Database): void {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("synchronous = NORMAL");
   sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("foreign_keys = ON");
 
+  const currentVersion = readSchemaVersion(sqlite);
+  if (currentVersion > CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Database schema version ${currentVersion} is newer than supported version ${CURRENT_SCHEMA_VERSION}`,
+    );
+  }
+
+  const startingVersion = currentVersion === 0 ? detectLegacySchemaVersion(sqlite) : currentVersion;
+  if (currentVersion === 0 && startingVersion > 0) {
+    setSchemaVersion(sqlite, startingVersion);
+  }
+
+  for (const migration of migrations) {
+    if (migration.version <= startingVersion) continue;
+
+    const applyMigration = sqlite.transaction(() => {
+      migration.up(sqlite);
+      setSchemaVersion(sqlite, migration.version);
+    });
+    applyMigration.immediate();
+  }
+
+  const reconcileDataInvariants = sqlite.transaction(() => normalizeSnapshotStatuses(sqlite));
+  reconcileDataInvariants.immediate();
+}
+
+function createInitialSchema(sqlite: Database.Database): void {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS spaces (
       id TEXT PRIMARY KEY,
@@ -99,7 +139,6 @@ export function migrate(sqlite: Database.Database): void {
       space_repository_id TEXT,
       depends_on_job_id TEXT,
       payload_json TEXT NOT NULL,
-      deduplication_key TEXT,
       error TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
@@ -143,33 +182,49 @@ export function migrate(sqlite: Database.Database): void {
       PRIMARY KEY (space_id, tool_name)
     );
   `);
+}
 
-  const normalizeSnapshotStatuses = sqlite.transaction(() => {
-    sqlite.exec(`
-      UPDATE space_snapshots
-      SET status = 'inactive'
-      WHERE status = 'active'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM spaces
-          WHERE spaces.active_snapshot_id = space_snapshots.id
-        );
-    `);
-  });
-  normalizeSnapshotStatuses.immediate();
+function addJobDeduplication(sqlite: Database.Database): void {
+  sqlite.exec(`
+    ALTER TABLE jobs ADD COLUMN deduplication_key TEXT;
 
-  const addJobDeduplication = sqlite.transaction(() => {
-    const jobColumns = sqlite.pragma("table_info(jobs)") as Array<{ name: string }>;
-    if (!jobColumns.some((column) => column.name === "deduplication_key")) {
-      sqlite.exec("ALTER TABLE jobs ADD COLUMN deduplication_key TEXT");
-    }
+    CREATE UNIQUE INDEX jobs_active_deduplication_unique
+      ON jobs(deduplication_key)
+      WHERE deduplication_key IS NOT NULL
+        AND status IN ('pending', 'running');
+  `);
+}
 
-    sqlite.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_deduplication_unique
-        ON jobs(deduplication_key)
-        WHERE deduplication_key IS NOT NULL
-          AND status IN ('pending', 'running');
-    `);
-  });
-  addJobDeduplication.immediate();
+function normalizeSnapshotStatuses(sqlite: Database.Database): void {
+  sqlite.exec(`
+    UPDATE space_snapshots
+    SET status = 'inactive'
+    WHERE status = 'active'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM spaces
+        WHERE spaces.active_snapshot_id = space_snapshots.id
+      );
+  `);
+}
+
+function detectLegacySchemaVersion(sqlite: Database.Database): number {
+  const tables = sqlite.pragma("table_list") as Array<{ name: string }>;
+  if (!tables.some((table) => table.name === "spaces")) return 0;
+
+  const jobColumns = sqlite.pragma("table_info(jobs)") as Array<{ name: string }>;
+  if (jobColumns.length === 0) {
+    throw new Error("Cannot migrate unversioned database: expected jobs table is missing");
+  }
+
+  return jobColumns.some((column) => column.name === "deduplication_key") ? 2 : 1;
+}
+
+function readSchemaVersion(sqlite: Database.Database): number {
+  return sqlite.pragma("user_version", { simple: true }) as number;
+}
+
+function setSchemaVersion(sqlite: Database.Database, version: number): void {
+  if (!Number.isSafeInteger(version) || version < 0) throw new Error("Invalid schema version");
+  sqlite.pragma(`user_version = ${version}`);
 }

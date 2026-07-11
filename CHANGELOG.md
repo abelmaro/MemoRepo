@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-11
+
+### Added
+
+- Add transactional, versioned SQLite migrations with upgrade coverage for every previously released schema.
+
+### Changed
+
+- Build the API container in isolated stages, ship production-only dependencies, pin its base image, and restrict Git trust to managed repository paths.
+- Surface unavailable API and panel query states with retry actions, disable conflicting Space operations, and add automated accessibility coverage for shared dialogs and errors.
+- Add defensive no-store browser response headers and restrict application-owned directories and database files to the service account on POSIX-capable storage.
+
+### Fixed
+
+- Keep the Data lifecycle panels in stable columns when prune or garbage-collection feedback appears.
+
 ## [0.1.6] - 2026-07-10
 
 ### Changed
@@ -104,7 +120,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/abelmaro/MemoRepo/compare/v0.1.3...v0.1.4

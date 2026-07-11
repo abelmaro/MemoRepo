@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 import { api } from "../lib/api";
 import { StatusBadge } from "./StatusBadge";
+import { QueryErrorState } from "./QueryErrorState";
 
 interface PreflightState {
   status: "ready" | "warning" | "failed";
@@ -40,6 +41,9 @@ export function PreflightPanel() {
           </div>
         </div>
       </div>
+      {preflightQuery.isError ? (
+        <QueryErrorState title="Runtime checks could not be loaded" error={preflightQuery.error} onRetry={() => void preflightQuery.refetch()} />
+      ) : null}
       <div className="preflight-grid" aria-live="polite">
         {(preflightQuery.data?.checks ?? []).map((check) => (
           <div className={`preflight-check preflight-check-${check.status}`} key={check.id}>
@@ -52,7 +56,7 @@ export function PreflightPanel() {
             <StatusBadge status={formatCheckStatus(check.status)} tone={checkStatusTone(check.status)} />
           </div>
         ))}
-        {!preflightQuery.data ? <div className="empty-inline">Checking runtime requirements...</div> : null}
+        {!preflightQuery.data && !preflightQuery.isError ? <div className="empty-inline">Checking runtime requirements...</div> : null}
       </div>
     </section>
   );

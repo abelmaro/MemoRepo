@@ -82,6 +82,10 @@
   .diagnostics-grid,
   .lifecycle-grid {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "snapshots"
+      "garbage"
+      "danger";
   }
 
   .preflight-check,

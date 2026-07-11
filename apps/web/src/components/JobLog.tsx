@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, subscribeToJobEvents, type Job, type JobEvent } from "../lib/api";
+import { QueryErrorState } from "./QueryErrorState";
 
 interface JobLogProps {
   jobId: string;
@@ -51,6 +52,9 @@ export function JobLog({ jobId, onJob }: JobLogProps) {
 
   return (
     <div className="job-log">
+      {jobQuery.isError ? (
+        <QueryErrorState title="Job details could not be loaded" error={jobQuery.error} onRetry={() => void jobQuery.refetch()} />
+      ) : null}
       <div className="job-log-meta">
         <span>{jobQuery.data?.job.type ?? "job"}</span>
         <span>{jobQuery.data?.job.status ?? "loading"}</span>

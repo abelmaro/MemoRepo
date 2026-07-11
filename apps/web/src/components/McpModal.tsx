@@ -4,6 +4,7 @@ import { CheckCircle2, Clipboard, Download, GitBranch, Loader2, Trash2 } from "l
 import { api, mcpJsonRpc, type McpConnection, type McpToolsListResult, type Space } from "../lib/api";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
+import { QueryErrorState } from "./QueryErrorState";
 
 interface McpConnectionTestResult {
   status: "success" | "error";
@@ -55,7 +56,7 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
         params: {
           protocolVersion: "2024-11-05",
           capabilities: {},
-          clientInfo: { name: "memorepo-dashboard", version: "0.1.6" }
+          clientInfo: { name: "memorepo-dashboard", version: "0.1.7" }
         }
       });
 
@@ -234,7 +235,10 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
             <span>{connections.filter((connection) => !connection.revoked_at).length} active</span>
           </div>
         </div>
-        {connections.length > 0 ? (
+        {connectionsQuery.isError ? (
+          <QueryErrorState title="Connections could not be loaded" error={connectionsQuery.error} onRetry={() => void connectionsQuery.refetch()} />
+        ) : null}
+        {!connectionsQuery.isError && connections.length > 0 ? (
           connections.map((connection) => (
             <article className="connection-row" key={connection.id}>
               <div>
@@ -254,9 +258,9 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
               </button>
             </article>
           ))
-        ) : (
+        ) : !connectionsQuery.isError ? (
           <div className="empty-inline">No MCP connections yet.</div>
-        )}
+        ) : null}
       </div>
         </>
       )}

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { api, type Job } from "../lib/api";
+import { QueryErrorState } from "./QueryErrorState";
 
 export function JobsPanel({ onSelectJob }: { onSelectJob: (jobId: string) => void }) {
   const jobsQuery = useQuery({
@@ -18,6 +19,9 @@ export function JobsPanel({ onSelectJob }: { onSelectJob: (jobId: string) => voi
           <p>Open an operation to inspect logs, dependencies, and retry options.</p>
         </div>
       </div>
+      {jobsQuery.isError ? (
+        <QueryErrorState title="Recent activity could not be loaded" error={jobsQuery.error} onRetry={() => void jobsQuery.refetch()} />
+      ) : null}
       <div className="jobs-terminal" aria-label="Recent operations" aria-live="polite">
         {(jobsQuery.data?.jobs ?? []).slice(0, 8).map((job) => (
           <button className="job-terminal-row" type="button" key={job.id} onClick={() => onSelectJob(job.id)}>
@@ -27,7 +31,7 @@ export function JobsPanel({ onSelectJob }: { onSelectJob: (jobId: string) => voi
             {job.error || jobDependencyText(job) ? <span className="job-terminal-error">{job.error ?? jobDependencyText(job)}</span> : null}
           </button>
         ))}
-        {(jobsQuery.data?.jobs ?? []).length === 0 ? <div className="job-terminal-empty">No operations yet.</div> : null}
+        {!jobsQuery.isError && (jobsQuery.data?.jobs ?? []).length === 0 ? <div className="job-terminal-empty">No operations yet.</div> : null}
       </div>
     </section>
   );

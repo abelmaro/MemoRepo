@@ -151,6 +151,36 @@
   color: var(--color-status-success);
 }
 
+.query-error-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-10);
+  align-items: center;
+  padding: var(--space-12) var(--space-14);
+  border: var(--border-width-default) solid var(--color-status-danger-border);
+  border-radius: var(--radius-md);
+  background: var(--color-status-danger-surface);
+  color: var(--color-status-danger);
+}
+
+.query-error-state div {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.query-error-state span {
+  line-height: var(--line-height-normal);
+}
+
+.api-unavailable {
+  gap: var(--space-14);
+}
+
+.api-unavailable .query-error-state {
+  width: min(100%, 720px);
+  text-align: left;
+}
+
 .repo-section,
 .page-empty-state {
   border: var(--border-width-default) solid var(--color-border-default);
