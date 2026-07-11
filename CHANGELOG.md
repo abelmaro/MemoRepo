@@ -21,6 +21,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Distinguish snapshot updates, failed builds, and required rebuilds so completed failures no longer appear as indefinitely pending.
 - Remove cleaned repository clones from the pending-cleanup list while retaining their internal history for job and index references.
 - Revoke an active snapshot atomically when a repository it contains is removed, then rebuild from the remaining repositories without exposing the stale snapshot to MCP clients.
+- Bound subprocess stream capture, unterminated output lines, job-event messages, retained log-event counts, and persisted job errors, with explicit truncation markers for noisy processes.
 
 ## [0.1.5] - 2026-07-10
 
