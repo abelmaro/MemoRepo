@@ -121,6 +121,14 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     assert.doesNotMatch(listResponseJson, new RegExp(escapeRegExp(testRoot)));
     assert.doesNotMatch(listResponseJson, /file:\/\//);
 
+    const callbackTrace = await services.mcp.callTool(space.slug, connection.token, "trace_path", {
+      project: projectName,
+      function_name: "callbackWorker",
+      direction: "inbound"
+    });
+    assert.match(JSON.stringify(callbackTrace), /resolved_symbol/);
+    assert.match(JSON.stringify(callbackTrace), /USAGE/);
+
     const expandedListResponse = await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {
       include_branches: true,
       include_details: true
@@ -286,6 +294,11 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "search_graph"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "get_code_snippet"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "list_space_repositories"));
+    const nativeTools = await services.cbm.listTools(services.config.memorepoHome);
+    assert.equal(
+      toolsPayload.result?.tools.some((tool) => tool.name === "semantic_query"),
+      nativeTools.includes("semantic_query")
+    );
     for (const legacyTool of ["get_space_architecture", "search_symbols", "trace_symbol", "get_snippet"]) {
       assert.equal(toolsPayload.result?.tools.some((tool) => tool.name === legacyTool), false);
     }
@@ -2274,6 +2287,18 @@ function writeSourceFile(sourcePath: string, branch: string): void {
       "",
       "export function routePath(): string {",
       "  return `/api/${branchName()}`;",
+      "}",
+      "",
+      "export function callbackWorker(): string {",
+      "  return branchName();",
+      "}",
+      "",
+      "export function registerCallback(callback: () => string): string {",
+      "  return callback();",
+      "}",
+      "",
+      "export function buildFlow(): string {",
+      "  return registerCallback(callbackWorker);",
       "}",
       ""
     ].join("\n")
