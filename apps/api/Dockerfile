@@ -1,11 +1,13 @@
-FROM node:22-bookworm-slim AS base
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf
+
+FROM ${NODE_IMAGE} AS cbm
 
 ARG CODEBASE_MEMORY_MCP_VERSION=v0.8.1
 ARG CODEBASE_MEMORY_MCP_SHA256_AMD64=6ab87a6c05d049dde57700803ca0ab4199fcf25973a0606618af0fcee73f5abd
 ARG CODEBASE_MEMORY_MCP_SHA256_ARM64=13526acc2a6a0697dff3c763fb443a416589bc10ad8b12015b63d87e515dd72b
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git tar gzip \
+  && apt-get install -y --no-install-recommends ca-certificates curl tar gzip \
   && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -19,14 +21,15 @@ RUN set -eux; \
   printf '%s  %s\n' "$cbm_sha256" /tmp/cbm.tar.gz | sha256sum -c -; \
   mkdir -p /tmp/cbm; \
   tar -xzf /tmp/cbm.tar.gz -C /tmp/cbm; \
-  find /tmp/cbm -type f -name codebase-memory-mcp -exec cp {} /usr/local/bin/codebase-memory-mcp \; ; \
-  chmod +x /usr/local/bin/codebase-memory-mcp; \
-  rm -rf /tmp/cbm /tmp/cbm.tar.gz
+  find /tmp/cbm -type f -name codebase-memory-mcp -exec cp {} /codebase-memory-mcp \; ; \
+  chmod 0755 /codebase-memory-mcp
+
+FROM ${NODE_IMAGE} AS build
 
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 
-WORKDIR /app
+WORKDIR /workspace
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
@@ -36,15 +39,37 @@ RUN pnpm install --filter @memorepo/api... --frozen-lockfile
 
 COPY apps/api apps/api
 
-RUN pnpm --filter @memorepo/api build
+RUN pnpm --filter @memorepo/api build \
+  && pnpm --filter @memorepo/api deploy --prod --legacy /opt/memorepo-api
 
-RUN mkdir -p /var/lib/memorepo && chown node:node /var/lib/memorepo
+FROM ${NODE_IMAGE} AS runtime
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && rm -rf /var/lib/apt/lists/* \
+    /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /opt/yarn-* \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/corepack \
+    /usr/local/bin/yarn \
+    /usr/local/bin/yarnpkg
+
+COPY --from=cbm /codebase-memory-mcp /usr/local/bin/codebase-memory-mcp
+COPY --from=build --chown=node:node /opt/memorepo-api /app
+
+RUN mkdir -p /var/lib/memorepo \
+  && chown node:node /var/lib/memorepo \
+  && git config --system --add safe.directory '/var/lib/memorepo/spaces/*'
+
+WORKDIR /app
+
+ENV NODE_ENV=production
 ENV MEMOREPO_HOME=/var/lib/memorepo
+
 EXPOSE 8787
 
 USER node
 
-RUN git config --global --add safe.directory '*'
-
-CMD ["node", "apps/api/dist/index.js"]
+CMD ["node", "dist/index.js"]
