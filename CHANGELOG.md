@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Add transactional, versioned SQLite migrations with upgrade coverage for every previously released schema.
 
+### Changed
+
+- Build the API container in isolated stages, ship production-only dependencies, pin its base image, and restrict Git trust to managed repository paths.
+
 ## [0.1.6] - 2026-07-10
 
 ### Changed
