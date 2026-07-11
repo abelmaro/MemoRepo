@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 
 export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/health", async () => ({ ok: true }));
@@ -11,17 +12,16 @@ export async function systemRoutes(app: FastifyInstance) {
     const github = await app.services.github
       .getViewer()
       .then((viewer) => ({ connected: true, viewer }))
-      .catch((error: unknown) => ({ connected: false, error: error instanceof Error ? error.message : String(error) }));
+      .catch((error: unknown) => ({ connected: false, error: publicError(app, error) }));
 
     const cbm = await app.services.cbm
       .version()
       .then((version) => ({ installed: true, version }))
-      .catch((error: unknown) => ({ installed: false, error: error instanceof Error ? error.message : String(error) }));
+      .catch((error: unknown) => ({ installed: false, error: publicError(app, error) }));
 
     return {
       github,
       codebaseMemory: cbm,
-      memorepoHome: app.services.config.memorepoHome,
       jobConcurrency: app.services.jobs.getConcurrency()
     };
   });
@@ -59,7 +59,7 @@ export async function systemRoutes(app: FastifyInstance) {
         return diagnostics;
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = publicError(app, error);
         checks.push({
           id: "github-access",
           label: "GitHub access",
@@ -81,7 +81,7 @@ export async function systemRoutes(app: FastifyInstance) {
         return { installed: true, version };
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = publicError(app, error);
         checks.push({
           id: "codebase-memory-mcp",
           label: "codebase-memory-mcp",
@@ -99,7 +99,6 @@ export async function systemRoutes(app: FastifyInstance) {
       checks,
       github,
       codebaseMemory,
-      memorepoHome: app.services.config.memorepoHome,
       mcpContainerName: app.services.config.mcpContainerName
     };
   });
@@ -162,7 +161,7 @@ function checkMemorepoHomeLocation(memorepoHome: string): PreflightCheck {
     message: insideRepo
       ? "MEMOREPO_HOME is inside the source tree. Use an external path for regular use."
       : "MEMOREPO_HOME is outside the source tree.",
-    value: resolvedHome
+    value: insideRepo
   };
 }
 
@@ -178,17 +177,21 @@ function checkMemorepoHomeWritable(memorepoHome: string, tmpDir: string): Prefli
       label: "MEMOREPO_HOME writable",
       status: "pass",
       message: "MemoRepo can write managed state.",
-      value: path.resolve(memorepoHome)
+      value: true
     };
   } catch (error) {
     return {
       id: "memorepo-home-writable",
       label: "MEMOREPO_HOME writable",
       status: "fail",
-      message: error instanceof Error ? error.message : String(error),
-      value: path.resolve(memorepoHome)
+      message: "MemoRepo cannot write managed state.",
+      value: false
     };
   }
+}
+
+function publicError(app: FastifyInstance, error: unknown): string {
+  return sanitizePublicMessage(error, [app.services.config.memorepoHome, app.services.config.tmpDir]);
 }
 
 function checkDiskSpace(memorepoHome: string): PreflightCheck {

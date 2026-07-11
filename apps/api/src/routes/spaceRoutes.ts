@@ -80,7 +80,7 @@ export async function spaceRoutes(app: FastifyInstance) {
 
   app.delete("/api/space-repositories/:spaceRepositoryId", async (request) => {
     const { spaceRepositoryId } = paramsWithSpaceRepositoryId.parse(request.params);
-    return app.services.spaces.softRemoveSpaceRepository(spaceRepositoryId);
+    return app.services.operations.enqueueRemoveRepository(spaceRepositoryId);
   });
 
   app.delete("/api/space-repositories/:spaceRepositoryId/files", async (request) => {

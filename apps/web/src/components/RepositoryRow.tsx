@@ -59,7 +59,7 @@ export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob,
   const actionMutation = useMutation({
     mutationFn: (action: "reindex" | "refresh" | "remove") => {
       if (action === "remove") {
-        return api(`/api/space-repositories/${repository.id}`, { method: "DELETE" });
+        return api<{ job?: Job }>(`/api/space-repositories/${repository.id}`, { method: "DELETE" });
       }
       return api<{ job?: Job; jobs?: Job[] }>(
         `/api/space-repositories/${repository.id}/${action === "refresh" ? "refresh-branches" : "reindex"}`,

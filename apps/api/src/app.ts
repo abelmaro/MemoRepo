@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import { ZodError } from "zod";
 import { corsOrigins } from "./config.js";
 import { NotFoundError } from "./domain/errors.js";
+import { sanitizePublicMessage } from "./domain/publicSanitize.js";
 import { registerHttpBoundary, registerHttpContentBoundary } from "./httpBoundary.js";
 import {
   loadHttpSecurityConfig,
@@ -25,7 +26,7 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
     }
   });
   app.setErrorHandler((error: unknown, _request, reply) => {
-    const { statusCode, message } = mapRouteError(error);
+    const { statusCode, message } = mapRouteError(error, services.config.memorepoHome);
     if (statusCode >= 500) {
       app.log.error({ err: error }, message);
     } else if (statusCode !== 429) {
@@ -61,20 +62,20 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
   return app;
 }
 
-function mapRouteError(error: unknown): { statusCode: number; message: string } {
+function mapRouteError(error: unknown, memorepoHome: string): { statusCode: number; message: string } {
   if (error instanceof ZodError) {
     const detail = error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ");
     return { statusCode: 400, message: `Invalid request: ${detail}` };
   }
 
   if (error instanceof NotFoundError) {
-    return { statusCode: 404, message: error.message };
+    return { statusCode: 404, message: sanitizePublicMessage(error, [memorepoHome]) };
   }
 
   if (error instanceof Error) {
     const fastifyStatus = (error as { statusCode?: unknown }).statusCode;
     if (typeof fastifyStatus === "number" && fastifyStatus >= 400 && fastifyStatus <= 599) {
-      return { statusCode: fastifyStatus, message: error.message };
+      return { statusCode: fastifyStatus, message: sanitizePublicMessage(error, [memorepoHome]) };
     }
     if (
       error instanceof TypeError ||
@@ -82,10 +83,10 @@ function mapRouteError(error: unknown): { statusCode: number; message: string } 
       error instanceof ReferenceError ||
       error instanceof SyntaxError
     ) {
-      return { statusCode: 500, message: error.message };
+      return { statusCode: 500, message: "Internal server error" };
     }
-    return { statusCode: 400, message: error.message };
+    return { statusCode: 400, message: sanitizePublicMessage(error, [memorepoHome]) };
   }
 
-  return { statusCode: 500, message: String(error) };
+  return { statusCode: 500, message: "Internal server error" };
 }

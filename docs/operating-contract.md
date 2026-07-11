@@ -145,6 +145,7 @@ Important limits:
 
 - `query_graph` accepts read-only Cypher only.
 - `query_graph` accepts `max_rows` from 1 to 25, defaulting to 25.
+- `query_graph` rejects caller-supplied limits, multiple statements, write clauses, and procedure calls, then appends the enforced `max_rows` limit itself.
 - MCP graph calls have a 10 second timeout.
 - Large MCP responses are truncated to the size cap with a `truncated` marker, or replaced with a structured `response_too_large` result when truncation is not possible.
 - Search-style calls cap `limit` at 25.

@@ -6,7 +6,6 @@ import type { SnapshotStateSummary } from "../lib/snapshotState";
 interface SystemState {
   github: { connected: boolean; viewer?: { login: string }; error?: string };
   codebaseMemory: { installed: boolean; version?: string; error?: string };
-  memorepoHome: string;
   jobConcurrency: number;
 }
 

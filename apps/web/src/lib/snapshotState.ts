@@ -20,11 +20,12 @@ export interface SnapshotStateSummary {
 
 export function snapshotStateSummary(
   spaceId: string,
+  snapshotStatus: string,
   repositories: SpaceRepository[],
   jobs: Job[] | undefined
 ): SnapshotStateSummary {
   const excludedRepositoryCount = repositories.filter((repository) => !snapshotIncluded(repository.snapshot_included)).length;
-  if (excludedRepositoryCount === 0) {
+  if (excludedRepositoryCount === 0 && snapshotStatus === "active") {
     return { state: "ready", excludedRepositoryCount, latestSnapshotJob: null };
   }
   if (!jobs) {
@@ -41,6 +42,9 @@ export function snapshotStateSummary(
     return { state: "updating", excludedRepositoryCount, latestSnapshotJob };
   }
   if (latestSnapshotJob?.status === "failed") {
+    return { state: "failed", excludedRepositoryCount, latestSnapshotJob };
+  }
+  if (snapshotStatus === "failed") {
     return { state: "failed", excludedRepositoryCount, latestSnapshotJob };
   }
   return { state: "required", excludedRepositoryCount, latestSnapshotJob };

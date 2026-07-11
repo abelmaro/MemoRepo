@@ -422,19 +422,42 @@ export class SpaceService {
   softRemoveSpaceRepository(spaceRepositoryId: string) {
     const record = this.getSpaceRepository(spaceRepositoryId);
     const timestamp = nowIso();
-    updateRecord(
-      this.database,
-      "space_repositories",
-      {
-        removedAt: timestamp,
-        snapshotIncluded: false,
-        updatedAt: timestamp
-      },
-      "id",
-      spaceRepositoryId
-    );
-    this.markSpaceStale(record.space_id);
-    return { removedAt: timestamp };
+    const space = this.getSpaceById(record.space_id);
+    const revokedSnapshotId = record.snapshot_included === 1 ? space.activeSnapshotId : null;
+
+    this.database.sqlite.transaction(() => {
+      updateRecord(
+        this.database,
+        "space_repositories",
+        {
+          removedAt: timestamp,
+          snapshotIncluded: false,
+          updatedAt: timestamp
+        },
+        "id",
+        spaceRepositoryId
+      );
+
+      if (revokedSnapshotId) {
+        updateRecord(this.database, "space_snapshots", { status: "inactive" }, "id", revokedSnapshotId);
+        updateRecord(
+          this.database,
+          "spaces",
+          {
+            activeSnapshotId: null,
+            snapshotStatus: "revoked",
+            snapshotStatusUpdatedAt: timestamp,
+            updatedAt: timestamp
+          },
+          "id",
+          record.space_id
+        );
+      } else {
+        this.markSpaceStale(record.space_id);
+      }
+    })();
+
+    return { removedAt: timestamp, revokedSnapshotId };
   }
 
   cleanupSpaceRepositoryFiles(spaceRepositoryId: string) {

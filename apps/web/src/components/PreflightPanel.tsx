@@ -7,7 +7,6 @@ interface PreflightState {
   status: "ready" | "warning" | "failed";
   checkedAt: string;
   checks: PreflightCheck[];
-  memorepoHome: string;
   mcpContainerName: string;
 }
 

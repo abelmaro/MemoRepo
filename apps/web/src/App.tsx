@@ -75,7 +75,7 @@ export function App() {
   const repositories = spaceDetailQuery.data?.repositories ?? [];
   const removedRepositories = spaceDetailQuery.data?.removedRepositories ?? [];
   const snapshotSummary = selectedSpace
-    ? snapshotStateSummary(selectedSpace.id, repositories, jobsQuery.data?.jobs)
+    ? snapshotStateSummary(selectedSpace.id, selectedSpace.snapshot_status, repositories, jobsQuery.data?.jobs)
     : { state: "ready" as const, excludedRepositoryCount: 0, latestSnapshotJob: null };
   const snapshotJobId = snapshotSummary.latestSnapshotJob?.id;
   const normalizedSearch = repoSearch.trim().toLowerCase();

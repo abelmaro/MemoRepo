@@ -272,6 +272,22 @@ export class OperationsService {
     return this.jobs.enqueue({ type: "reindex_space", spaceId, payload: { spaceId } });
   }
 
+  enqueueRemoveRepository(spaceRepositoryId: string) {
+    const record = this.spaces.getSpaceRepository(spaceRepositoryId);
+    const removal = this.spaces.softRemoveSpaceRepository(spaceRepositoryId);
+    const remainingRepositories = this.spaces.listSpaceRepositories(record.space_id);
+    const snapshotJob =
+      removal.revokedSnapshotId && remainingRepositories.length > 0
+        ? this.jobs.enqueue({
+            type: "rebuild_space_snapshot",
+            spaceId: record.space_id,
+            payload: { spaceId: record.space_id }
+          })
+        : null;
+
+    return { ...removal, job: snapshotJob };
+  }
+
   private async indexSpaceRepository(spaceRepositoryId: string, log: (message: string) => void) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
     if (!record.selected_branch || !record.selected_commit) {

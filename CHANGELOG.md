@@ -12,11 +12,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Replace native browser alerts, confirmations, and prompts with accessible application modals or inline operation feedback.
+- Enforce the `query_graph` row limit through `max_rows`, reject caller-supplied limits, multiple statements, mutating clauses, and procedure calls, and mask literals and comments before validation.
+- Remove managed filesystem locations from system diagnostics and sanitize public HTTP and MCP error messages centrally.
 
 ### Fixed
 
 - Distinguish snapshot updates, failed builds, and required rebuilds so completed failures no longer appear as indefinitely pending.
 - Remove cleaned repository clones from the pending-cleanup list while retaining their internal history for job and index references.
+- Revoke an active snapshot atomically when a repository it contains is removed, then rebuild from the remaining repositories without exposing the stale snapshot to MCP clients.
 
 ## [0.1.5] - 2026-07-10
 
