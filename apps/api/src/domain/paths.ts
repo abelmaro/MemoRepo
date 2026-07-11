@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { ensurePrivateDir } from "./permissions.js";
 
 export function assertInside(root: string, target: string): string {
   const resolvedRoot = path.resolve(root);
@@ -15,7 +15,7 @@ export function assertInside(root: string, target: string): string {
 
 export function ensureInsideDir(root: string, target: string): string {
   const resolved = assertInside(root, target);
-  fs.mkdirSync(resolved, { recursive: true });
+  ensurePrivateDir(resolved);
   return resolved;
 }
 

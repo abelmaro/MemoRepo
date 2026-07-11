@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Build the API container in isolated stages, ship production-only dependencies, pin its base image, and restrict Git trust to managed repository paths.
 - Surface unavailable API and panel query states with retry actions, disable conflicting Space operations, and add automated accessibility coverage for shared dialogs and errors.
+- Add defensive no-store browser response headers and restrict application-owned directories and database files to the service account on POSIX-capable storage.
 
 ### Fixed
 

@@ -5,6 +5,7 @@ import { corsOrigins } from "./config.js";
 import { NotFoundError } from "./domain/errors.js";
 import { sanitizePublicMessage } from "./domain/publicSanitize.js";
 import { registerHttpBoundary, registerHttpContentBoundary } from "./httpBoundary.js";
+import { registerDefensiveResponseHeaders } from "./httpResponseHeaders.js";
 import {
   loadHttpSecurityConfig,
   registerControlAccessBoundary,
@@ -36,6 +37,7 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
   });
 
   await decorateServices(app, services);
+  registerDefensiveResponseHeaders(app);
   // Reject hostile browser and Host traffic before shared per-IP budgets so another origin cannot exhaust the local quota.
   registerHttpBoundary(app, services.config);
   app.addHook("onClose", async () => {
