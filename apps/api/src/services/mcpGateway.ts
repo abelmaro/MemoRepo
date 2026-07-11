@@ -125,7 +125,7 @@ export class McpGateway {
           result: {
             protocolVersion: protocolVersionFrom(request.params),
             capabilities: { tools: {} },
-            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.7" },
+            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.8" },
             instructions: await this.buildInstructions(spaceSlug, token)
           }
         };
@@ -134,7 +134,7 @@ export class McpGateway {
       await this.assertConnection(spaceSlug, token);
 
       if (request.method === "tools/list") {
-        return { jsonrpc: "2.0", id: request.id ?? null, result: { tools: this.tools() } };
+        return { jsonrpc: "2.0", id: request.id ?? null, result: { tools: await this.availableTools(spaceSlug, token) } };
       }
 
       if (request.method === "tools/call") {
@@ -246,7 +246,7 @@ export class McpGateway {
   }
 
   private async buildInstructions(spaceSlug: string, token: string): Promise<string> {
-    const recommendedFlow = `Recommended flow: get_graph_schema before custom Cypher; search_graph, semantic_query, or search_code to locate symbols, then trace_path or get_code_snippet. Search limits cap at ${SEARCH_RESULT_MAX_LIMIT} results and query_graph at ${QUERY_GRAPH_MAX_ROWS} rows.`;
+    const recommendedFlow = `Recommended flow: get_graph_schema before custom Cypher; use an advertised search tool to locate symbols, then trace_path or get_code_snippet. Tool availability is negotiated with the installed CBM engine. Search limits cap at ${SEARCH_RESULT_MAX_LIMIT} results and query_graph at ${QUERY_GRAPH_MAX_ROWS} rows.`;
 
     try {
       const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
@@ -410,8 +410,66 @@ export class McpGateway {
     if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
       input.limit = boundedLimit(args.limit, 10, SEARCH_RESULT_MAX_LIMIT);
     }
+    if (toolName === "trace_path") {
+      return this.tracePath(space, snapshot, manifest, input);
+    }
     const response = await this.cachedCbmTool(snapshot, toolName, input, QUERY_GRAPH_TIMEOUT_MS);
     return this.withCbmResponse(space, snapshot, manifest, response);
+  }
+
+  private async availableTools(spaceSlug: string, token: string) {
+    const declared = this.tools();
+    const { snapshot } = await this.snapshotContext(spaceSlug, token);
+    const native = new Set(await this.cbm.listTools(snapshot?.artifactPath ?? this.config.memorepoHome));
+    return declared.filter((candidate) =>
+      candidate.name === "list_space_repositories" || (candidate.name === "query_graph" ? native.has("query_graph") : native.has(candidate.name))
+    );
+  }
+
+  private async tracePath(
+    space: SpaceRow,
+    snapshot: SnapshotRow,
+    manifest: SnapshotManifest,
+    input: Record<string, unknown>
+  ) {
+    const requestedName = requiredString(input.function_name, "function_name");
+    const qualifiedName = optionalString(input.qualified_name);
+    const selector = qualifiedName
+      ? `n.qualified_name = '${escapeCypherString(qualifiedName)}'`
+      : `n.name = '${escapeCypherString(requestedName)}'`;
+    const candidatesResponse = await this.cachedCbmTool(snapshot, "query_graph", {
+      ...(optionalString(input.project) ? { project: input.project } : {}),
+      query: `MATCH (n) WHERE (n:Function OR n:Method) AND ${selector} RETURN n.name AS name, n.qualified_name AS qualified_name, n.file_path AS file_path LIMIT 20`,
+      max_rows: 20
+    }, QUERY_GRAPH_TIMEOUT_MS);
+    const candidates = graphRows(candidatesResponse);
+    if (candidates.length > 1 && !qualifiedName) {
+      throw new Error(`trace_path symbol "${requestedName}" is ambiguous; retry with qualified_name from search_graph`);
+    }
+    if (candidates.length === 0) {
+      throw new Error(`trace_path could not resolve function or method "${qualifiedName ?? requestedName}"`);
+    }
+
+    const selected = candidates[0]!;
+    const selectedQualifiedName = String(selected[1]);
+    const nativeInput: Record<string, unknown> = { ...input, function_name: String(selected[0]) };
+    delete nativeInput.qualified_name;
+    const response = await this.cachedCbmTool(snapshot, "trace_path", nativeInput, QUERY_GRAPH_TIMEOUT_MS);
+    const referencesResponse = await this.cachedCbmTool(snapshot, "query_graph", {
+      ...(optionalString(input.project) ? { project: input.project } : {}),
+      query: `MATCH (source)-[r:USAGE]->(target) WHERE target.qualified_name = '${escapeCypherString(selectedQualifiedName)}' RETURN source.name AS name, source.qualified_name AS qualified_name, source.file_path AS file_path, r.callee AS callee LIMIT 25`,
+      max_rows: 25
+    }, QUERY_GRAPH_TIMEOUT_MS);
+    const references = graphRows(referencesResponse).map((row) => ({
+      name: row[0], qualified_name: row[1], file_path: row[2], callee: row[3], relation: "USAGE"
+    }));
+    const data = isRecord(response) ? response : { result: response };
+    return this.withCbmResponse(space, snapshot, manifest, {
+      ...data,
+      resolved_symbol: { name: selected[0], qualified_name: selected[1], file_path: selected[2] },
+      references,
+      confidence_notice: "CALLS edges are static-analysis results. USAGE references include callbacks and functions passed as values."
+    });
   }
 
   private scopedCbmArgs(manifest: SnapshotManifest, args: Record<string, unknown>, toolName: string): Record<string, unknown> {
@@ -517,12 +575,13 @@ export class McpGateway {
           limit: { type: "number", maximum: SEARCH_RESULT_MAX_LIMIT }
         }
       }),
-      tool("trace_path", "Run native CBM inbound/outbound traversal for a function or method name.", {
+      tool("trace_path", "Trace a uniquely resolved function or method. Includes USAGE references for callbacks and functions passed as values.", {
         type: "object",
         required: ["function_name"],
         properties: {
           project: { type: "string" },
           function_name: { type: "string" },
+          qualified_name: { type: "string" },
           direction: { type: "string", enum: ["inbound", "outbound", "both"] },
           depth: { type: "number", minimum: 1, maximum: 5 }
         }
@@ -670,6 +729,17 @@ function requiredString(value: unknown, name: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function escapeCypherString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+}
+
+function graphRows(response: unknown): unknown[][] {
+  if (!isRecord(response) || !Array.isArray(response.rows)) {
+    return [];
+  }
+  return response.rows.filter((row): row is unknown[] => Array.isArray(row));
 }
 
 function repositoryListOptions(args: Record<string, unknown>): McpRepositoryListOptions {

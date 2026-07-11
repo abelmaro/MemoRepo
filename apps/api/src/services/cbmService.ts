@@ -85,6 +85,12 @@ export class CbmService {
     return this.session(resolvedCacheDir).callTool<T>(tool, input, timeoutMs);
   }
 
+  async listTools(cacheDir: string): Promise<string[]> {
+    const resolvedCacheDir = ensureInsideDir(this.config.memorepoHome, cacheDir);
+    fs.mkdirSync(resolvedCacheDir, { recursive: true });
+    return this.session(resolvedCacheDir).listTools();
+  }
+
   async closeSession(cacheDir: string): Promise<void> {
     const session = this.sessions.get(normalizePath(path.resolve(cacheDir)));
     if (session) {
@@ -157,6 +163,7 @@ class CbmMcpSession {
   private buffer = Buffer.alloc(0);
   private nextId = 1;
   private stderr = "";
+  private toolNames: Promise<string[]> | null = null;
   closed = false;
 
   constructor(
@@ -184,7 +191,7 @@ class CbmMcpSession {
     this.ready = this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "memorepo-api", version: "0.1.7" }
+      clientInfo: { name: "memorepo-api", version: "0.1.8" }
     }, 30_000).then(() => {
       this.write({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     });
@@ -203,6 +210,14 @@ class CbmMcpSession {
     } catch {
       throw new Error(`Unable to parse codebase-memory-mcp output for ${tool}: ${text}`);
     }
+  }
+
+  async listTools(): Promise<string[]> {
+    await this.ready;
+    this.toolNames ??= this.request<McpToolsListResult>("tools/list", {}, 10_000).then((response) =>
+      (response.tools ?? []).flatMap((candidate) => typeof candidate.name === "string" ? [candidate.name] : [])
+    );
+    return this.toolNames;
   }
 
   close(): Promise<void> {
@@ -357,6 +372,10 @@ interface PendingRequest {
 
 interface McpToolCallResult {
   content?: Array<{ type?: string; text?: string }>;
+}
+
+interface McpToolsListResult {
+  tools?: Array<{ name?: unknown }>;
 }
 
 interface JsonRpcMessage {

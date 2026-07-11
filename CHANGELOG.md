@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-11
+
+### Changed
+
+- Upgrade the containerized code intelligence engine from 0.8.1 to 0.9.0 with verified release checksums.
+- Negotiate MCP tool availability with the installed code intelligence engine instead of publishing a static tool list.
+- Resolve trace targets by qualified symbol identity and expose usage references for callbacks and functions passed as values.
+
+### Fixed
+
+- Stop advertising semantic search when the installed engine does not support it.
+- Reject ambiguous trace targets instead of returning cross-language matches based only on common symbol names.
+
 ## [0.1.7] - 2026-07-11
 
 ### Added
@@ -120,7 +133,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/abelmaro/MemoRepo/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...v0.1.5
