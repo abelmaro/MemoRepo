@@ -184,7 +184,7 @@ class CbmMcpSession {
     this.ready = this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "memorepo-api", version: "0.1.6" }
+      clientInfo: { name: "memorepo-api", version: "0.1.7" }
     }, 30_000).then(() => {
       this.write({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     });

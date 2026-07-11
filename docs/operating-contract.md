@@ -180,6 +180,8 @@ The API validates the HTTP hostname and browser origin before routing requests. 
 
 The dashboard stores the control token only in the current tab's `sessionStorage`. It does not place it in URLs, build arguments, generated MCP configs, or API responses, and it does not send it to `/mcp`. That endpoint accepts separate per-connection bearer tokens. Authentication checks, control reads, mutations, SSE handshakes, and MCP calls have separate per-IP rate limits; forwarded IP headers are not trusted.
 
+API and dashboard responses set defensive content security, framing, referrer, content-type, and no-store cache policies. MemoRepo creates new private artifacts with a restrictive process umask and applies owner-only directory and database modes when the backing storage supports POSIX permissions. Docker Desktop bind mounts backed by Windows may not expose POSIX mode changes, so host access controls remain part of the local trust boundary.
+
 `GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus the Git credential variables required for that operation. CBM child processes use the same system allowlist without `GH_TOKEN`, Git credential environment variables, or unrelated application secrets.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
