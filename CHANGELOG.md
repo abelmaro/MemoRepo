@@ -14,6 +14,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Build the API container in isolated stages, ship production-only dependencies, pin its base image, and restrict Git trust to managed repository paths.
+- Surface unavailable API and panel query states with retry actions, disable conflicting Space operations, and add automated accessibility coverage for shared dialogs and errors.
+
+### Fixed
+
+- Keep the Data lifecycle panels in stable columns when prune or garbage-collection feedback appears.
 
 ## [0.1.6] - 2026-07-10
 

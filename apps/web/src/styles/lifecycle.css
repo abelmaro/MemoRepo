@@ -13,6 +13,9 @@
 .lifecycle-grid {
   display: grid;
   grid-template-columns: minmax(360px, 1.4fr) minmax(260px, 0.8fr);
+  grid-template-areas:
+    "snapshots garbage"
+    "snapshots danger";
   gap: var(--space-0);
   border-top: var(--border-width-default) solid var(--color-border-subtle);
 }
@@ -29,8 +32,20 @@
 }
 
 .lifecycle-card-wide {
-  grid-row: span 2;
+  grid-area: snapshots;
   padding-right: var(--space-22);
+}
+
+.garbage-collection-card {
+  grid-area: garbage;
+}
+
+.danger-zone {
+  grid-area: danger;
+}
+
+.lifecycle-feedback {
+  margin-bottom: var(--space-12);
 }
 
 .lifecycle-grid > .lifecycle-card:not(.lifecycle-card-wide) {

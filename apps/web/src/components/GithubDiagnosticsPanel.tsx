@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Github } from "lucide-react";
 import { api, type GitHubDiagnostics } from "../lib/api";
+import { QueryErrorState } from "./QueryErrorState";
 
 export function GithubDiagnosticsPanel() {
   const githubDiagnosticsQuery = useQuery({
@@ -24,6 +25,9 @@ export function GithubDiagnosticsPanel() {
           </div>
         </div>
       </div>
+      {githubDiagnosticsQuery.isError ? (
+        <QueryErrorState title="GitHub access could not be checked" error={githubDiagnosticsQuery.error} onRetry={() => void githubDiagnosticsQuery.refetch()} />
+      ) : null}
       <div className="diagnostics-grid" aria-live="polite">
         <div>
           <strong>Scopes</strong>
