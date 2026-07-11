@@ -24,12 +24,18 @@ export interface JobContext {
 
 export type JobHandler = (payload: Record<string, unknown>, context: JobContext) => Promise<void>;
 
+export const JOB_EVENT_MESSAGE_MAX_BYTES = 16 * 1024;
+export const JOB_LOG_EVENT_MAX_COUNT = 500;
+const JOB_LOG_TRUNCATED_EVENT_TYPE = "log_truncated";
+
 export class JobRunner {
   readonly events = new EventEmitter();
   private handlers = new Map<string, JobHandler>();
   private timer: NodeJS.Timeout | null = null;
   private activeJobs = 0;
   private recoveredRunningJobs = false;
+  private logEventCounts = new Map<string, number>();
+  private saturatedLogJobs = new Set<string>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -314,8 +320,9 @@ export class JobRunner {
 
   private fail(jobId: string, message: string): void {
     const finishedAt = nowIso();
-    updateRecord(this.database, "jobs", { status: "failed", error: message, finishedAt }, "id", jobId);
-    this.writeEvent(jobId, "error", message);
+    const boundedMessage = truncateEventMessage(message);
+    updateRecord(this.database, "jobs", { status: "failed", error: boundedMessage, finishedAt }, "id", jobId);
+    this.writeEvent(jobId, "error", boundedMessage);
     this.writeEvent(jobId, "status", "failed");
   }
 
@@ -340,15 +347,49 @@ export class JobRunner {
   }
 
   private writeEvent(jobId: string, eventType: string, message: string): void {
+    if (eventType === "log" && !this.acceptLogEvent(jobId)) {
+      return;
+    }
+    const boundedMessage = truncateEventMessage(message);
     const record = {
       id: createId("evt"),
       jobId,
       eventType,
-      message,
+      message: boundedMessage,
       createdAt: nowIso()
     };
     insertRecord(this.database, "job_events", record);
     this.events.emit(jobId, record);
+  }
+
+  private acceptLogEvent(jobId: string): boolean {
+    if (this.saturatedLogJobs.has(jobId)) {
+      return false;
+    }
+    const current = this.logEventCounts.get(jobId) ?? this.countLogEvents(jobId);
+    if (current < JOB_LOG_EVENT_MAX_COUNT) {
+      this.logEventCounts.set(jobId, current + 1);
+      return true;
+    }
+
+    this.saturatedLogJobs.add(jobId);
+    const record = {
+      id: createId("evt"),
+      jobId,
+      eventType: JOB_LOG_TRUNCATED_EVENT_TYPE,
+      message: `Additional job output was discarded after ${JOB_LOG_EVENT_MAX_COUNT} log events.`,
+      createdAt: nowIso()
+    };
+    insertRecord(this.database, "job_events", record);
+    this.events.emit(jobId, record);
+    return false;
+  }
+
+  private countLogEvents(jobId: string): number {
+    const row = this.database.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM job_events WHERE job_id = ? AND event_type = 'log'")
+      .get(jobId) as { count: number };
+    return row.count;
   }
 
   private requireJob(jobId: string): JobRow {
@@ -363,6 +404,17 @@ export class JobRunner {
     const row = this.database.sqlite.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as { status: string } | undefined;
     return row?.status === "running";
   }
+}
+
+function truncateEventMessage(message: string): string {
+  if (Buffer.byteLength(message, "utf8") <= JOB_EVENT_MESSAGE_MAX_BYTES) {
+    return message;
+  }
+  const suffix = "\n[message truncated]";
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  const buffer = Buffer.from(message, "utf8");
+  const prefix = buffer.subarray(0, JOB_EVENT_MESSAGE_MAX_BYTES - suffixBytes).toString("utf8").replace(/\uFFFD$/, "");
+  return `${prefix}${suffix}`;
 }
 
 interface JobRow {

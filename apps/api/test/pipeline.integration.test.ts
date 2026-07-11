@@ -151,7 +151,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     assertNoInternalPathLeak(snippetResponseJson, testRoot);
 
     const graphResponse = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
-      query: "MATCH (n) RETURN n LIMIT 5",
+      query: "MATCH (n) RETURN n",
       max_rows: 5
     });
     const graphResponseJson = JSON.stringify(graphResponse);
@@ -162,7 +162,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     (services.cbm as unknown as { tool: typeof services.cbm.tool }).tool = async () => ({ payload: "x".repeat(300_000) });
     try {
       const largeResponse = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
-        query: "MATCH (n) RETURN n LIMIT 1",
+        query: "MATCH (n) RETURN n",
         max_rows: 1
       });
       assert.equal((largeResponse as { status?: string }).status, "response_too_large");
@@ -184,6 +184,7 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     const cleanedRepository = services.spaces.getSpaceRepository(added.spaceRepository.id);
     assert.equal(cleanedRepository.clone_status, "cleaned");
     assert.equal(cleanedRepository.index_status, "not_indexed");
+    assert.equal(services.spaces.listRemovedSpaceRepositories(space.id).length, 0);
 
     services.mcp.revokeConnection(connection.connection.id);
     await assert.rejects(
@@ -1391,6 +1392,57 @@ test("garbage collection removes failed snapshots, old jobs, stale indexes, and 
   }
 });
 
+test("repository removal revokes the active snapshot before a replacement can be served", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-remove-revoke-"));
+  process.env.GH_TOKEN = "test-token";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Remove And Revoke Space");
+    const alpha = createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 5001,
+      owner: "example",
+      name: "alpha"
+    });
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 5002,
+      owner: "example",
+      name: "beta"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+
+    const connection = services.mcp.createConnection(space.id, "Removal Agent", "generic");
+    const beforeRemoval = await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {});
+    assert.match(JSON.stringify(beforeRemoval), /example\/alpha/);
+
+    const removal = services.spaces.softRemoveSpaceRepository(alpha.id);
+    assert.ok(removal.revokedSnapshotId);
+
+    const revokedSpace = services.spaces.getSpaceById(space.id);
+    assert.equal(revokedSpace.activeSnapshotId, null);
+    assert.equal(revokedSpace.snapshotStatus, "revoked");
+    const whileRevoked = await services.mcp.callTool(space.slug, connection.token, "search_graph", { query: "alpha" });
+    assert.equal((whileRevoked as { status?: string }).status, "no_active_snapshot");
+    assert.doesNotMatch(JSON.stringify(whileRevoked), /example\/alpha/);
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const afterReplacement = await services.mcp.callTool(space.slug, connection.token, "list_space_repositories", {});
+    assert.doesNotMatch(JSON.stringify(afterReplacement), /example\/alpha/);
+    assert.match(JSON.stringify(afterReplacement), /example\/beta/);
+    assert.equal(services.spaces.getSpaceById(space.id).snapshotStatus, "active");
+  } finally {
+    services.jobs.stop();
+    await services.cbm.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
 test("MCP graph tools route multi-repo spaces through the CBM snapshot store", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-multi-repo-scope-"));
@@ -1514,6 +1566,21 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 
       await assert.rejects(
         () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "MATCH (n) DELETE n", max_rows: 5 }),
+        /read-only Cypher/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "MATCH (n) RETURN n LIMIT 999999", max_rows: 5 }),
+        /LIMIT is controlled by max_rows/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "MATCH (n) RETURN n; MATCH (m) RETURN m", max_rows: 5 }),
+        /exactly one Cypher statement/
+      );
+
+      await assert.rejects(
+        () => services.mcp.callTool(space.slug, connection.token, "query_graph", { query: "MATCH (n) RETURN n /* LIMIT 999 */ CALL db.labels()", max_rows: 5 }),
         /read-only Cypher/
       );
 

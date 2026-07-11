@@ -3,6 +3,7 @@ import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
+import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { createId, createSecretToken, sha256 } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
@@ -124,7 +125,7 @@ export class McpGateway {
           result: {
             protocolVersion: protocolVersionFrom(request.params),
             capabilities: { tools: {} },
-            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.2" },
+            serverInfo: { name: `memorepo-${spaceSlug}`, version: "0.1.6" },
             instructions: await this.buildInstructions(spaceSlug, token)
           }
         };
@@ -158,7 +159,7 @@ export class McpGateway {
         id: request.id ?? null,
         error: {
           code: -32000,
-          message: error instanceof Error ? error.message : String(error)
+          message: sanitizePublicMessage(error, [this.config.memorepoHome])
         }
       };
     }
@@ -378,12 +379,18 @@ export class McpGateway {
     if (maxRowsValue < 1 || maxRowsValue > QUERY_GRAPH_MAX_ROWS) {
       throw new Error(`query_graph max_rows must be between 1 and ${QUERY_GRAPH_MAX_ROWS}`);
     }
-    const queryWithoutLiterals = query.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, "''");
-    if (/\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP|LOAD\s+CSV|CALL\s+db\.)\b/i.test(queryWithoutLiterals)) {
+    const queryStructure = maskCypherLiteralsAndComments(query);
+    if (queryStructure.includes(";")) {
+      throw new Error("query_graph accepts exactly one Cypher statement");
+    }
+    if (/\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|LOAD\s+CSV|CALL|FOREACH|USE)\b/i.test(queryStructure)) {
       throw new Error("query_graph only accepts read-only Cypher");
     }
+    if (/\bLIMIT\b/i.test(queryStructure)) {
+      throw new Error("query_graph LIMIT is controlled by max_rows; remove LIMIT from the query");
+    }
 
-    const scopedQuery = /\bLIMIT\s+\d+\b/i.test(queryWithoutLiterals) ? query : `${query} LIMIT ${maxRowsValue}`;
+    const scopedQuery = `${query} LIMIT ${maxRowsValue}`;
     const input = this.scopedCbmArgs(manifest, args, "query_graph");
     input.query = scopedQuery;
     input.max_rows = maxRowsValue;
@@ -590,6 +597,57 @@ export class McpGateway {
         toMcpRepository(repository as Record<string, unknown>, projectsBySpaceRepositoryId.get(String((repository as Record<string, unknown>).id)), options)
       );
   }
+}
+
+function maskCypherLiteralsAndComments(query: string): string {
+  let result = "";
+  let index = 0;
+  while (index < query.length) {
+    const current = query[index]!;
+    const next = query[index + 1];
+
+    if (current === "/" && next === "/") {
+      const end = query.indexOf("\n", index + 2);
+      result += " ".repeat((end === -1 ? query.length : end) - index);
+      index = end === -1 ? query.length : end;
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      const closing = query.indexOf("*/", index + 2);
+      if (closing === -1) {
+        throw new Error("query_graph contains an unterminated comment");
+      }
+      const end = closing + 2;
+      result += " ".repeat(end - index);
+      index = end;
+      continue;
+    }
+    if (current === "'" || current === '"') {
+      const quote = current;
+      const start = index;
+      index += 1;
+      while (index < query.length) {
+        if (query[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (query[index] === quote) {
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      if (query[index - 1] !== quote) {
+        throw new Error("query_graph contains an unterminated string literal");
+      }
+      result += " ".repeat(index - start);
+      continue;
+    }
+
+    result += current;
+    index += 1;
+  }
+  return result;
 }
 
 function tool(name: string, description: string, inputSchema: Record<string, unknown>) {

@@ -5,6 +5,8 @@ export interface ProcessResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
 }
 
 export interface RunProcessOptions {
@@ -17,9 +19,14 @@ export interface RunProcessOptions {
   killGraceMs?: number | undefined;
   sensitiveValues?: string[] | undefined;
   onOutput?: ((line: string) => void) | undefined;
+  maxCaptureBytes?: number | undefined;
+  maxLineBytes?: number | undefined;
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000;
+export const DEFAULT_PROCESS_CAPTURE_MAX_BYTES = 1024 * 1024;
+export const DEFAULT_PROCESS_LINE_MAX_BYTES = 16 * 1024;
+const TRUNCATED_LINE_PREFIX = "[output truncated] ";
 const SAFE_PROCESS_ENVIRONMENT_ALLOWLIST = [
   "PATH",
   "PATHEXT",
@@ -73,7 +80,12 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
     let stdout = "";
     let stderr = "";
     let outputBuffer = "";
+    let outputBufferTruncated = false;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let timedOut = false;
+    const maxCaptureBytes = positiveLimit(options.maxCaptureBytes, DEFAULT_PROCESS_CAPTURE_MAX_BYTES);
+    const maxLineBytes = positiveLimit(options.maxLineBytes, DEFAULT_PROCESS_LINE_MAX_BYTES);
 
     let killTimer: NodeJS.Timeout | undefined;
     const timeout =
@@ -101,9 +113,13 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       const sanitized = redactSensitive(raw, sensitiveValues);
 
       if (target === "stdout") {
-        stdout += sanitized;
+        const captured = appendRecent(stdout, sanitized, maxCaptureBytes);
+        stdout = captured.value;
+        stdoutTruncated ||= captured.truncated;
       } else {
-        stderr += sanitized;
+        const captured = appendRecent(stderr, sanitized, maxCaptureBytes);
+        stderr = captured.value;
+        stderrTruncated ||= captured.truncated;
       }
 
       outputBuffer += sanitized;
@@ -111,8 +127,13 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       outputBuffer = lines.pop() ?? "";
       for (const line of lines) {
         if (line.trim().length > 0) {
-          options.onOutput?.(line);
+          options.onOutput?.(`${outputBufferTruncated ? TRUNCATED_LINE_PREFIX : ""}${boundedRecent(line, maxLineBytes)}`);
         }
+        outputBufferTruncated = false;
+      }
+      if (Buffer.byteLength(outputBuffer, "utf8") > maxLineBytes) {
+        outputBuffer = boundedRecent(outputBuffer, maxLineBytes);
+        outputBufferTruncated = true;
       }
     }
 
@@ -127,13 +148,33 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
     child.on("close", (exitCode) => {
       clearTimers();
       if (outputBuffer.trim().length > 0) {
-        options.onOutput?.(outputBuffer);
+        options.onOutput?.(`${outputBufferTruncated ? TRUNCATED_LINE_PREFIX : ""}${outputBuffer}`);
       }
       if (timedOut) {
         reject(new Error(`${options.command} timed out after ${options.timeoutMs}ms`));
         return;
       }
-      resolve({ exitCode, stdout, stderr });
+      resolve({ exitCode, stdout, stderr, stdoutTruncated, stderrTruncated });
     });
   });
+}
+
+function positiveLimit(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function appendRecent(current: string, appended: string, maxBytes: number): { value: string; truncated: boolean } {
+  const combined = `${current}${appended}`;
+  if (Buffer.byteLength(combined, "utf8") <= maxBytes) {
+    return { value: combined, truncated: false };
+  }
+  return { value: boundedRecent(combined, maxBytes), truncated: true };
+}
+
+function boundedRecent(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, "utf8");
+  if (buffer.byteLength <= maxBytes) {
+    return value;
+  }
+  return buffer.subarray(buffer.byteLength - maxBytes).toString("utf8").replace(/^\uFFFD/, "");
 }

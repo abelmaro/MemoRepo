@@ -118,6 +118,8 @@ MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean r
 Jobs:
 MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. Running jobs are not interrupted because Git and indexing commands do not yet support cooperative cancellation. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
 
+Subprocess stdout and stderr capture, unterminated output lines, persisted job-event messages, and retained log-event counts are bounded. MemoRepo preserves recent stream output and emits explicit truncation markers when additional diagnostic output is discarded.
+
 The space-level check and update job fetches each selected remote branch and compares its remote commit with the commit recorded by MemoRepo. It skips current repository indexes, repairs stale or failed indexes even when the commit is unchanged, and builds one replacement snapshot only when repository or snapshot state requires it. Per-repository reindex remains an explicit forced rebuild operation.
 
 ## MCP Gateway Contract
@@ -145,6 +147,7 @@ Important limits:
 
 - `query_graph` accepts read-only Cypher only.
 - `query_graph` accepts `max_rows` from 1 to 25, defaulting to 25.
+- `query_graph` rejects caller-supplied limits, multiple statements, write clauses, and procedure calls, then appends the enforced `max_rows` limit itself.
 - MCP graph calls have a 10 second timeout.
 - Large MCP responses are truncated to the size cap with a `truncated` marker, or replaced with a structured `response_too_large` result when truncation is not possible.
 - Search-style calls cap `limit` at 25.

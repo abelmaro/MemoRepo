@@ -15,6 +15,7 @@ import { RepositoryRow } from "./components/RepositoryRow";
 import { StatusStrip } from "./components/StatusStrip";
 import { api, type Job, type Space, type SpaceRepository } from "./lib/api";
 import { matchesRepositoryKind, REPOSITORY_KIND_FILTERS, type RepositoryKindFilter } from "./lib/repositoryKinds";
+import { snapshotStateSummary } from "./lib/snapshotState";
 
 type ManagementView = "activity" | "system" | "settings";
 
@@ -29,6 +30,7 @@ export function App() {
   const [repoKindFilter, setRepoKindFilter] = useState<RepositoryKindFilter>("all");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [managementView, setManagementView] = useState<ManagementView | null>(null);
+  const [updateConfirmationOpen, setUpdateConfirmationOpen] = useState(false);
   const filterMenuRef = useRef<HTMLDivElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -54,9 +56,16 @@ export function App() {
     refetchInterval: 5000
   });
 
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api<{ jobs: Job[] }>("/api/jobs"),
+    refetchInterval: 3000
+  });
+
   const updateSpaceMutation = useMutation({
     mutationFn: (spaceId: string) => api<{ job: Job }>(`/api/spaces/${spaceId}/reindex`, { method: "POST", body: "{}" }),
     onSuccess: ({ job }) => {
+      setUpdateConfirmationOpen(false);
       setActiveJobId(job.id);
       setManagementView("activity");
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -65,6 +74,10 @@ export function App() {
 
   const repositories = spaceDetailQuery.data?.repositories ?? [];
   const removedRepositories = spaceDetailQuery.data?.removedRepositories ?? [];
+  const snapshotSummary = selectedSpace
+    ? snapshotStateSummary(selectedSpace.id, selectedSpace.snapshot_status, repositories, jobsQuery.data?.jobs)
+    : { state: "ready" as const, excludedRepositoryCount: 0, latestSnapshotJob: null };
+  const snapshotJobId = snapshotSummary.latestSnapshotJob?.id;
   const normalizedSearch = repoSearch.trim().toLowerCase();
   const filteredRepositories = repositories.filter(
     (repository) => repository.full_name.toLowerCase().includes(normalizedSearch) && matchesRepositoryKind(repository, repoKindFilter)
@@ -105,10 +118,18 @@ export function App() {
     if (!selectedSpace) {
       return;
     }
-    if (repositories.length >= 5 && !window.confirm(`Check and update ${repositories.length} repositories in this Space?`)) {
+    if (repositories.length >= 5) {
+      updateSpaceMutation.reset();
+      setUpdateConfirmationOpen(true);
       return;
     }
     updateSpaceMutation.mutate(selectedSpace.id);
+  }
+
+  function confirmCheckForUpdates() {
+    if (selectedSpace) {
+      updateSpaceMutation.mutate(selectedSpace.id);
+    }
   }
 
   function clearRepositoryFilters() {
@@ -190,8 +211,10 @@ export function App() {
               space={selectedSpace}
               repositories={repositories}
               loading={spaceDetailQuery.isPending}
+              snapshotSummary={snapshotSummary}
               onConnectAgent={() => setMcpOpen(true)}
               onAddRepository={() => setAddRepoOpen(true)}
+              onOpenSnapshotJob={(jobId) => setActiveJobId(jobId)}
             />
 
             <section className="repo-section" aria-labelledby="repositories-title">
@@ -306,6 +329,8 @@ export function App() {
                     <RepositoryRow
                       key={repository.id}
                       repository={repository}
+                      snapshotState={snapshotSummary.state}
+                      onSnapshotJob={snapshotJobId ? () => setActiveJobId(snapshotJobId) : undefined}
                       onJob={(jobId) => setActiveJobId(jobId)}
                       onChanged={() => {
                         void queryClient.invalidateQueries({ queryKey: ["space", selectedSpace.id] });
@@ -408,6 +433,29 @@ export function App() {
         />
       ) : null}
       {mcpOpen && selectedSpace ? <McpModal space={selectedSpace} onClose={() => setMcpOpen(false)} /> : null}
+      {updateConfirmationOpen && selectedSpace ? (
+        <Modal title="Check repositories for updates" onClose={() => !updateSpaceMutation.isPending && setUpdateConfirmationOpen(false)}>
+          <div className="confirmation-dialog">
+            <p>
+              Check and update all <strong>{repositories.length} repositories</strong> in {selectedSpace.name}? MemoRepo will rebuild the Space snapshot when needed.
+            </p>
+            {updateSpaceMutation.error ? (
+              <div className="inline-alert error" role="alert">
+                {updateSpaceMutation.error instanceof Error ? updateSpaceMutation.error.message : "Repositories could not be updated."}
+              </div>
+            ) : null}
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => setUpdateConfirmationOpen(false)} disabled={updateSpaceMutation.isPending}>
+                Cancel
+              </button>
+              <button className="primary-button" type="button" onClick={confirmCheckForUpdates} disabled={updateSpaceMutation.isPending}>
+                {updateSpaceMutation.isPending ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                <span>Check for updates</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
       {activeJobId ? (
         <Modal title="Job details" onClose={() => setActiveJobId(null)} wide>
           <JobLog jobId={activeJobId} onJob={(jobId) => setActiveJobId(jobId)} />

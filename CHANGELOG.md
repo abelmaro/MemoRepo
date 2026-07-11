@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-10
+
+### Changed
+
+- Replace native browser alerts, confirmations, and prompts with accessible application modals or inline operation feedback.
+- Enforce the `query_graph` row limit through `max_rows`, reject caller-supplied limits, multiple statements, mutating clauses, and procedure calls, and mask literals and comments before validation.
+- Remove managed filesystem locations from system diagnostics and sanitize public HTTP and MCP error messages centrally.
+- Use consistent “Delete space” language throughout the Space lifecycle confirmation flow.
+
+### Fixed
+
+- Distinguish snapshot updates, failed builds, and required rebuilds so completed failures no longer appear as indefinitely pending.
+- Remove cleaned repository clones from the pending-cleanup list while retaining their internal history for job and index references.
+- Revoke an active snapshot atomically when a repository it contains is removed, then rebuild from the remaining repositories without exposing the stale snapshot to MCP clients.
+- Bound subprocess stream capture, unterminated output lines, job-event messages, retained log-event counts, and persisted job errors, with explicit truncation markers for noisy processes.
+
 ## [0.1.5] - 2026-07-10
 
 ### Added
@@ -88,7 +104,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/abelmaro/MemoRepo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/abelmaro/MemoRepo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/abelmaro/MemoRepo/compare/v0.1.2...v0.1.3

@@ -178,7 +178,7 @@ Arguments:
 - `query` required string.
 - `max_rows` optional integer from `1` to `25`, defaulting to `25`.
 
-`query_graph` rejects write operations such as `CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`, `LOAD CSV`, and `CALL db.*`. If the query does not include a `LIMIT`, MemoRepo appends one from `max_rows`.
+`query_graph` rejects multiple statements, caller-supplied `LIMIT` clauses, write operations, and procedure calls. MemoRepo always appends the final row limit from `max_rows`; use that argument instead of writing `LIMIT` in the query.
 
 ## Not Exposed
 

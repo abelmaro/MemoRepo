@@ -70,3 +70,32 @@ test("runProcess escalates to SIGKILL when a timed out process ignores SIGTERM",
     /timed out after 250ms/
   );
 });
+
+test("runProcess bounds captured streams and marks truncation", async () => {
+  const result = await runProcess({
+    command: process.execPath,
+    args: ["-e", "process.stdout.write('a'.repeat(4096)); process.stderr.write('b'.repeat(4096));"],
+    timeoutMs: 30_000,
+    maxCaptureBytes: 256
+  });
+
+  assert.equal(Buffer.byteLength(result.stdout), 256);
+  assert.equal(Buffer.byteLength(result.stderr), 256);
+  assert.equal(result.stdoutTruncated, true);
+  assert.equal(result.stderrTruncated, true);
+});
+
+test("runProcess bounds unterminated output lines before emitting them", async () => {
+  const lines: string[] = [];
+  await runProcess({
+    command: process.execPath,
+    args: ["-e", "process.stdout.write('x'.repeat(4096));"],
+    timeoutMs: 30_000,
+    maxLineBytes: 128,
+    onOutput: (line) => lines.push(line)
+  });
+
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^\[output truncated\] /);
+  assert.ok(Buffer.byteLength(lines[0]!) < 180);
+});

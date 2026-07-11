@@ -5,7 +5,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { AppDatabase } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
 import { schema } from "../src/db/schema.js";
-import { JobRunner } from "../src/services/jobRunner.js";
+import { JOB_EVENT_MESSAGE_MAX_BYTES, JOB_LOG_EVENT_MAX_COUNT, JobRunner } from "../src/services/jobRunner.js";
 import { SpaceService } from "../src/services/spaceService.js";
 
 test("enqueue returns the existing active logical job and releases the key for terminal jobs", () => {
@@ -143,6 +143,36 @@ test("migration upgrades existing job tables before creating the active deduplic
   }
 });
 
+test("job output is bounded by message size and retained log count", async () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 1);
+  jobs.register("noisy_job", async (_payload, context) => {
+    context.log("x".repeat(JOB_EVENT_MESSAGE_MAX_BYTES * 2));
+    for (let index = 0; index < JOB_LOG_EVENT_MAX_COUNT + 25; index += 1) {
+      context.log(`line-${index}`);
+    }
+  });
+
+  try {
+    jobs.start();
+    const job = jobs.enqueue({ type: "noisy_job" });
+    await waitForTerminalJob(database, job.id);
+    const completed = jobs.getJob(job.id) as { status: string; error: string | null };
+    assert.equal(completed.status, "succeeded", completed.error ?? undefined);
+
+    const events = jobs.getJobEvents(job.id) as Array<{ event_type: string; message: string }>;
+    const logs = events.filter((event) => event.event_type === "log");
+    assert.equal(logs.length, JOB_LOG_EVENT_MAX_COUNT);
+    assert.ok(Buffer.byteLength(logs[0]!.message, "utf8") <= JOB_EVENT_MESSAGE_MAX_BYTES);
+    assert.match(logs[0]!.message, /\[message truncated\]$/);
+    assert.equal(events.filter((event) => event.event_type === "log_truncated").length, 1);
+    assert.equal(events.at(-1)?.message, "succeeded");
+  } finally {
+    jobs.stop();
+    database.sqlite.close();
+  }
+});
+
 function createTestDatabase(): AppDatabase {
   const sqlite = new Database(":memory:");
   migrate(sqlite);
@@ -160,4 +190,16 @@ function countEvents(database: AppDatabase): number {
 function assertNoDeduplicationKey(row: unknown): asserts row is Record<string, unknown> {
   assert.ok(row && typeof row === "object");
   assert.equal(Object.prototype.hasOwnProperty.call(row, "deduplication_key"), false);
+}
+
+async function waitForTerminalJob(database: AppDatabase, jobId: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const row = database.sqlite.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as { status: string };
+    if (["succeeded", "failed", "cancelled", "skipped"].includes(row.status)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for job completion");
 }
