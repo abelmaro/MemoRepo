@@ -200,16 +200,7 @@ class CbmMcpSession {
   async callTool<T>(tool: string, input: Record<string, unknown>, timeoutMs: number): Promise<T> {
     await this.ready;
     const response = await this.request<McpToolCallResult>("tools/call", { name: tool, arguments: input }, timeoutMs);
-    const text = response.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text;
-    if (!text) {
-      return response as T;
-    }
-
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error(`Unable to parse codebase-memory-mcp output for ${tool}: ${text}`);
-    }
+    return parseCbmToolResult<T>(tool, response);
   }
 
   async listTools(): Promise<string[]> {
@@ -370,8 +361,9 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
 }
 
-interface McpToolCallResult {
+export interface McpToolCallResult {
   content?: Array<{ type?: string; text?: string }>;
+  isError?: boolean;
 }
 
 interface McpToolsListResult {
@@ -382,4 +374,52 @@ interface JsonRpcMessage {
   id?: unknown;
   result?: unknown;
   error?: { message: string };
+}
+
+export class CbmToolExecutionError extends Error {
+  constructor(readonly tool: string, message: string) {
+    super(message);
+    this.name = "CbmToolExecutionError";
+  }
+}
+
+export function parseCbmToolResult<T>(tool: string, response: McpToolCallResult): T {
+  const text = response.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text;
+  if (!text) {
+    if (response.isError) {
+      throw new CbmToolExecutionError(tool, "codebase-memory-mcp reported an error without details");
+    }
+    return response as T;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    if (response.isError) {
+      throw new CbmToolExecutionError(tool, text);
+    }
+    throw new Error(`Unable to parse codebase-memory-mcp output for ${tool}: ${text}`);
+  }
+
+  const embeddedError = recordErrorMessage(parsed);
+  if (response.isError || embeddedError) {
+    throw new CbmToolExecutionError(tool, embeddedError ?? text);
+  }
+  return parsed as T;
+}
+
+function recordErrorMessage(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const error = (value as Record<string, unknown>).error;
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const message = (error as Record<string, unknown>).message;
+    return typeof message === "string" && message.trim() ? message : undefined;
+  }
+  return undefined;
 }

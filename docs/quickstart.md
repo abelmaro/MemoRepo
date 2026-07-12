@@ -102,7 +102,7 @@ Choose the client tab, create a read-only token, test the connection, and copy o
 For stdio clients, the generated command uses:
 
 ```text
-docker exec -i -e MEMOREPO_MCP_TOKEN=... memorepo-api node /app/apps/api/dist/cli/mcp.js --space <space-slug>
+docker exec -i -e MEMOREPO_MCP_TOKEN=... memorepo-api node /app/dist/cli/mcp.js --space <space-slug>
 ```
 
 For HTTP clients, use the local endpoint and bearer token shown in the config.
