@@ -115,6 +115,15 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 
 For the detailed product and runtime contract, see [docs/operating-contract.md](docs/operating-contract.md). For the agent-facing MCP tool contract, see [docs/mcp-tools.md](docs/mcp-tools.md).
 
+## Contributing and Security
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before
+opening a change and follow the [Code of Conduct](CODE_OF_CONDUCT.md) when
+participating in the project.
+
+Do not report suspected vulnerabilities in public issues. Follow the private
+disclosure process in the [Security Policy](.github/SECURITY.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

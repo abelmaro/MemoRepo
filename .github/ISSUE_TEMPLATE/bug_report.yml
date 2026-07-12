@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible problem in MemoRepo
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Search for duplicates and remove secrets, private repository content, personal data, and local paths before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the release version or full commit SHA where the problem occurs.
+      placeholder: 0.1.9 or 0123456789abcdef...
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - API
+        - Dashboard
+        - Command-line integration
+        - Docker environment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system, runtime versions, and whether you used Docker Compose or direct workspace commands.
+      placeholder: Windows 11, Docker Desktop 4.x, Docker Compose
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest sequence of steps that consistently reproduces the problem.
+      placeholder: |
+        1. Start the application with ...
+        2. Open ...
+        3. Select ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened instead? Include sanitized error messages when useful.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Optional supporting evidence. Remove tokens, private data, repository content, usernames, and local paths.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any relevant workaround, frequency, regression information, or related issue.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed credentials, private data, repository content, and identifying local paths.
+          required: true
+        - label: This report does not describe a security vulnerability.
+          required: true

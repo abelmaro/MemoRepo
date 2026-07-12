@@ -1,0 +1,62 @@
+name: Feature request
+description: Propose a user-facing improvement to MemoRepo
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the proposed implementation. Large or breaking changes should be discussed before development starts.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or limitation should this change address?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result and how users would benefit.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain a possible approach if you have one. The problem and outcome are more important than a specific implementation.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe existing workflows, workarounds, or alternative designs you considered.
+    validations:
+      required: false
+  - type: checkboxes
+    id: components
+    attributes:
+      label: Potentially affected areas
+      options:
+        - label: API
+        - label: Dashboard
+        - label: Command-line integration
+        - label: Docker environment
+        - label: Documentation
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration considerations
+      description: Note any configuration, data, API, deployment, or workflow changes that may require migration.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate proposal.
+          required: true
+        - label: I described the user problem separately from the proposed implementation.
+          required: true
