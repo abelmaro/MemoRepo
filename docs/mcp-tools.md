@@ -48,7 +48,9 @@ MemoRepo internally paginates each project as needed, then aggregates projectles
 - Graph calls have a 10 second timeout.
 - Search-style calls require a positive integer `limit` and cap values above `25` at `25`.
 - Empty search queries and code patterns are rejected instead of being treated as broad listing operations.
+- Search text containing control characters is rejected instead of being passed through as an empty or match-all native pattern.
 - Search offsets must be non-negative integers.
+- If `project` is supplied, it must be a non-empty string. Only omitting the field enables a projectless call.
 - Trace depth must be an integer from `1` to `5`.
 - `query_graph` accepts `max_rows` from `1` to `25`, defaulting to `25`. For projectless calls this is a global limit distributed across projects.
 - Large responses are truncated to the size limit with a `truncated` marker; when nothing can be truncated they are replaced with `response_too_large`.
@@ -96,15 +98,27 @@ Arguments:
 
 Supported aspects are `languages`, `packages`, `entry_points`, `routes`, `hotspots`, `boundaries`, `layers`, `clusters`, and `adr`. Unknown aspects are rejected with an actionable tool error.
 
+When `aspects` is provided, source-backed route discovery runs only when `routes` is requested. Native route data is omitted from unrelated aspect responses.
+
 Without `project`, this asks CBM for the architecture of the whole space snapshot store, including cross-repo context when available.
 
 HTTP endpoint paths such as `/users/login` are preserved as routes and are not treated as filesystem paths by public-response sanitization.
+
+Object-property parameters such as `:article.slug` are normalized to `:slug`. When a route has no method, MemoRepo searches matching indexed source and fills the method only if exactly one HTTP verb is supported by that evidence.
+
+Concatenated paths such as `'/profiles/' + username + '/follow'` are normalized to `/profiles/:username/follow` when discovered from indexed snippets.
+
+Architecture routes, `search_graph` calls scoped to `label: "Route"`, and simple `MATCH (n:Route) RETURN ...` projections use the same normalized inventory. Missing HTTP calls found in indexed snippets are added with `method_source: "indexed_code"`.
+
+Source discovery also runs when the native architecture response omits the routes aspect entirely. Aggregate `ANY` entries are omitted when one or more method-specific routes exist for the same normalized path.
 
 If the underlying engine does not return a requested aspect, MemoRepo includes a warning instead of silently hiding the unsupported or misspelled value.
 
 ### `get_graph_schema`
 
 Runs native CBM `get_graph_schema`.
+
+For a scoped project, the reported Route count is reconciled with the same normalized, source-enriched inventory used by route architecture and search responses.
 
 Arguments:
 
@@ -126,6 +140,14 @@ Arguments:
 - `limit` optional integer, max `25`.
 - `offset` optional non-negative integer.
 
+`name_pattern` and `file_pattern` are regular expressions. Invalid expressions fail before native execution with an actionable tool error.
+
+When `label` is `Route` and a project is supplied, results come from the same normalized route inventory used by `get_architecture`.
+
+Each synthesized Route result includes `navigable`. When false, `navigation_notice` explains that no exact snippet target exists and directs clients to source-search evidence instead.
+
+For projectless searches with an exact combined `total`, `candidate_count` uses that stable total rather than the size of the internally prefetched page window.
+
 ### `semantic_query`
 
 Runs native CBM semantic search.
@@ -146,11 +168,11 @@ Arguments:
 - `pattern` required string.
 - `regex` optional boolean, default `false`.
 - `limit` optional integer, max `25`.
-- `offset` optional integer from `0` to `224`.
+- `offset` optional non-negative integer. When `project` is set, the native per-project result window limits it to `0` through `249`.
 
 Use this for literals, error messages, route strings, config keys, and text that may not be represented as a graph symbol.
 
-Code text matching is case-sensitive. Responses include `offset`, `effective_limit`, `returned`, and `has_more`; increase `offset` to recover matches beyond the first 25. For projectless searches, `candidate_count` is computed from a fixed snapshot-and-query candidate window, so it remains stable across pages.
+Code text matching is case-sensitive. Responses include `offset`, `effective_limit`, `returned`, and `has_more`; increase `offset` to recover matches beyond the first 25. Native `total_results` metadata is preserved as a stable `total`, including on empty pages beyond the final result. For projectless searches, `candidate_count` is computed from a fixed per-project candidate window, remains stable across pages, and every combined candidate can be reached even when the aggregate exceeds 250 matches. A scoped search exposes at most the native engine's first 250 matches; narrow the pattern when one repository exceeds that window.
 
 ### `trace_path`
 
@@ -167,6 +189,14 @@ Use names returned by `search_graph` or `semantic_query`.
 
 `qualified_name` accepts the exact project-prefixed value returned by discovery tools; MemoRepo also resolves the engine's internal project-relative form when necessary. When both identifiers are supplied, `function_name` must match the symbol resolved by `qualified_name`; contradictory identifiers are rejected.
 
+When direct graph resolution finds no candidate for an unqualified function name, MemoRepo performs an exact structured-name lookup. Multiple matches are reported as ambiguity with qualified candidates rather than as a missing symbol.
+
+For an exact qualified symbol that is retrievable as a snippet but absent from direct graph resolution, the snippet identity is used as the trace target. If source evidence marks that identity as low-confidence, the call succeeds with `trace_available: false` and omits potentially contaminated edges.
+
+When normalized snippet evidence proves that a symbol is not recursive, self-referential native trace hops are removed and counted in `filtered_contradictory_self_hops`.
+
+Because native traversal selects by simple name, exact qualified traces normalize both project-prefixed and project-relative hop identities before validating returned callers and callees against indexed source evidence. Homonymous hops are removed only when the source provides positive contradictory receiver evidence, preserving internal calls such as `this.method()` and matching imported receivers. Removed hops are counted in `filtered_identity_incompatible_hops`; HTTP callees recoverable from the exact source are returned with `evidence: "indexed_source"`.
+
 ### `get_code_snippet`
 
 Runs native CBM snippet lookup by qualified symbol name.
@@ -179,11 +209,15 @@ Arguments:
 
 This tool does not accept arbitrary filesystem paths.
 
-`qualified_name` must contain a non-whitespace symbol name. Snippet responses include `project` separately and expose `file_path` relative to the repository root, matching search results.
+`qualified_name` must contain a non-whitespace symbol name. Snippet responses include `project` separately and expose `file_path` relative to the repository root, matching search results. Abbreviated suffix-only matches are marked with `symbol_identity_confidence: "low"`; caller and callee neighbor metadata is omitted until the client retries with the full qualified name.
 
 When native recursion flags contradict the returned source—for example, a method calls a same-named method on another object—MemoRepo clears the unsupported self-recursion flags and adds an `analysis_warnings` entry.
 
 Synthetic route nodes without source are marked with `synthetic: true` and `source_available: false`. Fictitious file paths, line ranges, empty methods/handlers, and unavailable-source placeholders are omitted.
+
+When source and recursion evidence indicate that the native index may have merged homonymous methods, the snippet remains retrievable with `symbol_identity_confidence: "low"` and an explicit warning. Trace edges are withheld for that symbol. Recursion flags unsupported by the returned source are cleared, and leading syntax punctuation is removed from `return_type`.
+
+If a native snippet returns `caller_names`, MemoRepo reconciles the numeric `callers` field with that list and records the correction in `analysis_warnings`.
 
 ### `detect_changes`
 
@@ -202,17 +236,27 @@ Arguments:
 - `project` optional string.
 - `query` required string.
 - `max_rows` optional integer from `1` to `25`, defaulting to `25`.
-- `offset` optional integer from `0` to `224`; requires an explicit `project`.
+- `offset` optional integer from `0` to `249`; requires an explicit `project`.
 
 `query_graph` rejects multiple statements, caller-supplied `LIMIT` clauses, write operations, and procedure calls. MemoRepo controls the internal query window from `offset` and `max_rows`, then returns at most `max_rows` rows.
 
-Without `project`, query results are grouped by project so rows or columns from different repository graphs are never mixed ambiguously. The response includes `max_rows_scope: "global"`; when the limit is lower than the project count, it also identifies projects omitted from that call.
+Relationship patterns that reuse the same node variable on both sides, such as `(a)-[:CALLS]->(a)`, are rejected because the installed engine does not preserve that identity constraint reliably.
+
+Inline node property maps require an explicit label, for example `(f:Method {qualified_name: "..."})`. Unlabeled forms are rejected because the installed engine can return a false empty result for them.
+
+Without `project`, every repository is queried before the global row limit is applied. Results remain grouped by project so rows or columns from different repository graphs are never mixed ambiguously. Empty repositories do not consume the row budget, and `projects_searched` identifies the complete searched set. Because projectless rows are grouped rather than globally ordered, the response omits root `has_more` when more rows exist and instead returns `scope_continuation_required: true` with concrete `continuation_projects` for scoped follow-up calls.
 
 The supported read-only subset starts with `MATCH`. Standalone `RETURN`, `UNWIND`, and unsupported clauses are rejected before execution with an actionable message. `ORDER BY` is rejected because the installed engine does not apply it reliably; sort returned pages client-side.
 
 Caller-supplied `SKIP` is rejected. For scoped pagination, pass `offset`; MemoRepo expands the internal query window before slicing so later pages are not lost to `max_rows`.
 
+The engine exposes at most 250 rows for one graph query. The final accessible page is returned with `has_more: false`, `truncated: true`, and an actionable narrowing notice when more rows may exist beyond that boundary.
+
 Read-only property access remains valid even when a property is named `create`, `delete`, `set`, or `remove`; mutation keywords are evaluated in Cypher context rather than as raw substrings.
+
+For an exact qualified `CALLS` source or target, MemoRepo checks the opposite endpoint against indexed source when its identity can be verified. Contradictory homonymous edges are removed and counted in `filtered_receiver_incompatible_calls`.
+
+Custom property references are checked against the union of available project schemas. A property absent from every schema is rejected instead of inheriting the native engine's ambiguous empty-string/null behavior.
 
 The exact broad count `MATCH (n) RETURN count(n)` is answered from snapshot index status to avoid the native engine's internal scan ceiling. Other aggregate queries that hit that ceiling fail explicitly instead of returning a potentially inaccurate value; narrow them by label or filters.
 
