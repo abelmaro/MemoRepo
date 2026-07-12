@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-12
+
 ### Changed
 
 - Normalize MCP code locations to repository-relative `file_path` values while returning project context separately.
