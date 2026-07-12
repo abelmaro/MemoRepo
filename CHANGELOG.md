@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Normalize MCP code locations to repository-relative `file_path` values while returning project context separately.
+- Document that indexed code text matching is case-sensitive.
+
+### Fixed
+
+- Harden MCP input validation and recovery guidance: reject empty snippet symbols, explicit empty project scopes, control characters, invalid structured-search regular expressions, repeated node variables across relationship patterns, and unlabeled inline-property Cypher patterns; derive invalid-label hints from each project's actual schema instead of returning misleading native failures.
+- Make read-only Cypher results trustworthy: return exact whole-project counts, reject or flag aggregations that hit the engine ceiling, replace unsupported standalone clauses and ignored ordering with actionable errors, provide gateway-controlled scoped offsets instead of broken `SKIP`, allow properties named like mutation keywords, and reject properties absent from every available schema.
+- Correct cross-repository execution and continuation: search every repository before applying global limits, interleave global results fairly, prevent empty early repositories from hiding later matches, replace unreachable global graph offsets with explicit per-project continuation, and omit root `has_more` when continuation requires a concrete project scope.
+- Make search pagination complete and internally consistent: paginate graph search beyond the first 100 candidates with combined totals, expose code-search offsets and metadata beyond the first 25 matches, keep structured and code-search candidate counts stable across pages, make final native windows reachable without advertising impossible pages, preserve scoped totals beyond the final result, and allow every combined projectless code-search candidate to be reached beyond the per-project engine window.
+- Strengthen exact symbol and snippet identity: reject contradictory trace names, recover exact candidates through structured search or retrievable snippets when direct lookup misses, preserve actionable ambiguity errors, mark abbreviated suffix matches and homonymous snippets as low-confidence with explicit warnings while withholding unreliable neighbor metadata, and reconcile source-backed recursion flags, return types, and caller counts.
+- Make call traces conservative and evidence-based: normalize project-prefixed and relative caller identities before validation, remove contradicted self-hops and receiver-incompatible `CALLS` edges with correction counts, filter homonymous contamination from exact traces and graph queries, recover HTTP callees from exact source when native name-only traversal is ambiguous, and preserve valid internal or imported callers unless positive receiver evidence proves an edge incompatible.
+- Unify and enrich HTTP route behavior: preserve endpoint paths during sanitization; normalize dynamic, dotted, and concatenated parameters; infer missing methods only from matching indexed source; share one source-enriched inventory across architecture, Route search, simple Route Cypher, and schema counts; discover routes when native architecture omits them; mark source-less routes without fictitious locations, line ranges, or empty metadata; mark synthesized routes non-navigable when their exact snippet identity cannot be resolved; remove redundant `ANY` entries; and avoid injecting routes into unrelated requested architecture aspects.
+- Honor compact repository listings unless detailed metadata is explicitly requested.
+
 ## [0.1.8] - 2026-07-11
 
 ### Changed
