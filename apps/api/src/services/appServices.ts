@@ -3,6 +3,8 @@ import { loadConfig } from "../config.js";
 import { createDatabase } from "../db/connection.js";
 import { CbmService } from "./cbmService.js";
 import { GitService } from "./gitService.js";
+import { GitHubCredentialProvider } from "./githubCredentialProvider.js";
+import { CredentialCipher, GitHubCredentialStore } from "./githubCredentialStore.js";
 import { GitHubService } from "./githubService.js";
 import { JobRunner } from "./jobRunner.js";
 import { McpGateway } from "./mcpGateway.js";
@@ -16,6 +18,15 @@ export type AppServices = ReturnType<typeof createServices>;
 export function createServices() {
   const config = loadConfig();
   const database = createDatabase(config);
+  const githubCredentialStore = new GitHubCredentialStore(
+    database,
+    new CredentialCipher(config.githubCredentialKeyPath)
+  );
+  const githubCredentials = new GitHubCredentialProvider(
+    githubCredentialStore,
+    config.githubOAuthEnabled,
+    config.githubToken
+  );
   const github = new GitHubService(database, config);
   const git = new GitService(config);
   const cbm = new CbmService(config);
@@ -28,7 +39,21 @@ export function createServices() {
 
   operations.registerJobHandlers();
 
-  return { config, database, github, git, cbm, spaces, snapshots, jobs, operations, mcp, maintenance };
+  return {
+    config,
+    database,
+    githubCredentialStore,
+    githubCredentials,
+    github,
+    git,
+    cbm,
+    spaces,
+    snapshots,
+    jobs,
+    operations,
+    mcp,
+    maintenance
+  };
 }
 
 declare module "fastify" {

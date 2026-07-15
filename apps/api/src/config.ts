@@ -7,7 +7,11 @@ export interface AppConfig {
   publicApiUrl: string;
   frontendOrigin: string;
   githubToken: string;
+  githubOAuthClientId: string | null;
+  githubOAuthEnabled: boolean;
   memorepoHome: string;
+  secretsDir: string;
+  githubCredentialKeyPath: string;
   dataDir: string;
   spacesDir: string;
   indexesDir: string;
@@ -47,6 +51,20 @@ function positiveIntEnv(name: string, fallback: number): number {
   return value;
 }
 
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+  throw new Error(`${name} must be a boolean value`);
+}
+
 export function corsOrigins(config: AppConfig): string[] {
   return Array.from(new Set([config.frontendOrigin, "http://127.0.0.1:5173", "http://localhost:5173"]));
 }
@@ -54,6 +72,7 @@ export function corsOrigins(config: AppConfig): string[] {
 export function loadConfig(): AppConfig {
   initializePrivateFileCreation();
   const memorepoHome = absolutePath(process.env.MEMOREPO_HOME ?? ".memorepo");
+  const secretsDir = absolutePath(process.env.MEMOREPO_SECRETS_DIR ?? path.join(memorepoHome, "secrets"));
   const dataDir = path.join(memorepoHome, "data");
   const spacesDir = path.join(memorepoHome, "spaces");
   const indexesDir = path.join(memorepoHome, "indexes");
@@ -65,6 +84,7 @@ export function loadConfig(): AppConfig {
 
   for (const dir of [
     memorepoHome,
+    secretsDir,
     dataDir,
     spacesDir,
     indexesDir,
@@ -85,7 +105,11 @@ export function loadConfig(): AppConfig {
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
     githubToken: requiredEnv("GH_TOKEN"),
+    githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || null,
+    githubOAuthEnabled: booleanEnv("MEMOREPO_GITHUB_OAUTH_ENABLED", false),
     memorepoHome,
+    secretsDir,
+    githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),
     dataDir,
     spacesDir,
     indexesDir,

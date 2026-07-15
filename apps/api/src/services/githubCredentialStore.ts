@@ -29,6 +29,11 @@ export interface StoredGitHubCredential extends GitHubCredentialInput {
 
 export interface GitHubCredentialMetadata extends Omit<StoredGitHubCredential, "accessToken"> {}
 
+export interface GitHubCredentialReader {
+  get(): StoredGitHubCredential | null;
+  getMetadata(): GitHubCredentialMetadata | null;
+}
+
 interface GitHubCredentialRow {
   github_user_id: number;
   login: string;
