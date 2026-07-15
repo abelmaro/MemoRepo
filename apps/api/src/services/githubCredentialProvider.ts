@@ -15,7 +15,7 @@ export class GitHubCredentialProvider {
   constructor(
     private readonly store: GitHubCredentialWriter,
     private readonly oauthEnabled: boolean,
-    private readonly legacyToken: string
+    private readonly legacyToken: string | null
   ) {}
 
   getAccessToken(): string {
@@ -27,6 +27,9 @@ export class GitHubCredentialProvider {
       return credential.accessToken;
     }
 
+    if (!this.legacyToken) {
+      throw new GitHubNotConnectedError();
+    }
     return this.legacyToken;
   }
 
@@ -35,14 +38,17 @@ export class GitHubCredentialProvider {
   }
 
   getSensitiveValues(): string[] {
-    const values = [this.legacyToken];
+    const values: string[] = [];
+    if (this.legacyToken) {
+      values.push(this.legacyToken);
+    }
     if (this.oauthEnabled) {
       const accessToken = this.store.get()?.accessToken;
       if (accessToken) {
         values.push(accessToken);
       }
     }
-    return [...new Set(values.filter(Boolean))];
+    return [...new Set(values)];
   }
 
   usesOAuth(): boolean {

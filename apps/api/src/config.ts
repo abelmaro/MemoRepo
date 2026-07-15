@@ -6,7 +6,7 @@ export interface AppConfig {
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
-  githubToken: string;
+  githubToken: string | null;
   githubOAuthClientId: string | null;
   githubOAuthEnabled: boolean;
   memorepoHome: string;
@@ -29,14 +29,6 @@ export interface AppConfig {
 
 function absolutePath(input: string): string {
   return path.isAbsolute(input) ? input : path.resolve(process.cwd(), input);
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim().length === 0) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
 }
 
 function positiveIntEnv(name: string, fallback: number): number {
@@ -104,9 +96,9 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
-    githubToken: requiredEnv("GH_TOKEN"),
+    githubToken: process.env.GH_TOKEN?.trim() || null,
     githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || null,
-    githubOAuthEnabled: booleanEnv("MEMOREPO_GITHUB_OAUTH_ENABLED", false),
+    githubOAuthEnabled: booleanEnv("MEMOREPO_GITHUB_OAUTH_ENABLED", true),
     memorepoHome,
     secretsDir,
     githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),

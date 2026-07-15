@@ -9,10 +9,16 @@ export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/auth/status", async (_request, reply) => reply.code(204).send());
 
   app.get("/api/system", async () => {
-    const github = await app.services.github
-      .getViewer()
-      .then((viewer) => ({ connected: true, viewer }))
-      .catch((error: unknown) => ({ connected: false, error: publicError(app, error) }));
+    const connection = app.services.githubOAuth.connectionStatus();
+    const github =
+      connection.enabled && !connection.configured
+        ? { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." }
+        : connection.enabled && !connection.connected
+          ? { connected: false, error: "Connect GitHub from System health before syncing repositories." }
+          : await app.services.github
+              .getViewer()
+              .then((viewer) => ({ connected: true, viewer }))
+              .catch((error: unknown) => ({ connected: false, error: publicError(app, error) }));
 
     const cbm = await app.services.cbm
       .version()
@@ -29,45 +35,73 @@ export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/preflight", async () => {
     const checks: PreflightCheck[] = [];
     const checkedAt = new Date().toISOString();
+    const connection = app.services.githubOAuth.connectionStatus();
 
-    checks.push(checkGithubToken());
+    checks.push(
+      checkGitHubAuthentication(
+        app.services.config.githubOAuthEnabled,
+        app.services.config.githubOAuthClientId,
+        app.services.config.githubToken
+      )
+    );
     checks.push(checkMcpContainerTarget(app.services.config.mcpContainerName));
     checks.push(checkMemorepoHomeLocation(app.services.config.memorepoHome));
     checks.push(checkMemorepoHomeWritable(app.services.config.memorepoHome, app.services.config.tmpDir));
     checks.push(checkDiskSpace(app.services.config.memorepoHome));
 
-    const github = await app.services.github
-      .diagnoseAccess()
-      .then((diagnostics) => {
-        const warningCount = diagnostics.warnings.length;
-        checks.push({
-          id: "github-access",
-          label: "GitHub access",
-          status: diagnostics.visibleRepositoryCount > 0 ? (warningCount > 0 ? "warn" : "pass") : "warn",
-          message:
-            diagnostics.visibleRepositoryCount > 0
-              ? `${diagnostics.visibleRepositoryCount} visible repositories, ${diagnostics.visibleOrganizationCount} visible organizations`
-              : "Token is valid but no repositories are visible.",
-          ...(warningCount > 0 ? { detail: diagnostics.warnings.join(" ") } : {})
-        });
-        checks.push({
-          id: "github-scopes",
-          label: "GitHub scopes",
-          status: diagnostics.tokenScopes.length > 0 ? "pass" : "warn",
-          message: diagnostics.tokenScopes.length > 0 ? diagnostics.tokenScopes.join(", ") : "GitHub did not report token scopes."
-        });
-        return diagnostics;
-      })
-      .catch((error: unknown) => {
-        const message = publicError(app, error);
-        checks.push({
-          id: "github-access",
-          label: "GitHub access",
-          status: "fail",
-          message
-        });
-        return { connected: false, error: message };
+    let github;
+    if (connection.enabled && !connection.configured) {
+      github = { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." };
+    } else if (connection.enabled && !connection.connected) {
+      checks.push({
+        id: "github-connection",
+        label: "GitHub connection",
+        status: "warn",
+        message: "No GitHub account is connected yet. Connect from System health before syncing repositories."
       });
+      github = { connected: false, error: "No GitHub account is connected." };
+    } else {
+      github = await app.services.github
+        .diagnoseAccess()
+        .then((diagnostics) => {
+          if (connection.enabled) {
+            checks.push({
+              id: "github-connection",
+              label: "GitHub connection",
+              status: "pass",
+              message: `Connected as @${diagnostics.viewer.login}.`
+            });
+          }
+          const warningCount = diagnostics.warnings.length;
+          checks.push({
+            id: "github-access",
+            label: "GitHub access",
+            status: diagnostics.visibleRepositoryCount > 0 ? (warningCount > 0 ? "warn" : "pass") : "warn",
+            message:
+              diagnostics.visibleRepositoryCount > 0
+                ? `${diagnostics.visibleRepositoryCount} visible repositories, ${diagnostics.visibleOrganizationCount} visible organizations`
+                : "GitHub is connected but no repositories are visible.",
+            ...(warningCount > 0 ? { detail: diagnostics.warnings.join(" ") } : {})
+          });
+          checks.push({
+            id: "github-scopes",
+            label: "GitHub scopes",
+            status: diagnostics.tokenScopes.length > 0 ? "pass" : "warn",
+            message: diagnostics.tokenScopes.length > 0 ? diagnostics.tokenScopes.join(", ") : "GitHub did not report OAuth scopes."
+          });
+          return diagnostics;
+        })
+        .catch((error: unknown) => {
+          const message = publicError(app, error);
+          checks.push({
+            id: connection.enabled ? "github-connection" : "github-access",
+            label: connection.enabled ? "GitHub connection" : "GitHub access",
+            status: "fail",
+            message
+          });
+          return { connected: false, error: message };
+        });
+    }
 
     const codebaseMemory = await app.services.cbm
       .version()
@@ -125,13 +159,29 @@ interface PreflightCheck {
   value?: string | number | boolean;
 }
 
-function checkGithubToken(): PreflightCheck {
-  const present = Boolean(process.env.GH_TOKEN?.trim());
+function checkGitHubAuthentication(
+  oauthEnabled: boolean,
+  oauthClientId: string | null,
+  legacyToken: string | null
+): PreflightCheck {
+  if (oauthEnabled) {
+    const configured = Boolean(oauthClientId);
+    return {
+      id: "github-oauth-client",
+      label: "GitHub OAuth client",
+      status: configured ? "pass" : "fail",
+      message: configured
+        ? "The public OAuth client ID is configured."
+        : "Set GITHUB_OAUTH_CLIENT_ID before connecting GitHub."
+    };
+  }
+
+  const present = Boolean(legacyToken);
   return {
     id: "github-token",
-    label: "GH_TOKEN",
+    label: "GitHub compatibility credential",
     status: present ? "pass" : "fail",
-    message: present ? "Configured for the API container." : "Set GH_TOKEN before starting MemoRepo."
+    message: present ? "Configured for the API container." : "Configure GitHub authentication before repository operations."
   };
 }
 

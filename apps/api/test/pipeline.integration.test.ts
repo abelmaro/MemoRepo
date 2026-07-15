@@ -17,6 +17,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url
 const testsRoot = path.join(repoRoot, ".tmp-memorepo-tests");
 const TEST_CONTROL_TOKEN = "test-control-token-0123456789abcdef0123456789abcdef";
 process.env.MEMOREPO_CONTROL_TOKEN = TEST_CONTROL_TOKEN;
+process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "false";
 
 test("database exposes a Drizzle client over the SQLite source of truth", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
@@ -655,6 +656,70 @@ test("preflight reports local runtime checks without leaking secrets", async () 
       }
     );
   } finally {
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("OAuth-first startup reports an actionable disconnected state without contacting GitHub", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "oauth-disconnected-"));
+  const originalFetch = globalThis.fetch;
+  const previousClientId = process.env.GITHUB_OAUTH_CLIENT_ID;
+  let githubRequestCount = 0;
+
+  process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "true";
+  process.env.GITHUB_OAUTH_CLIENT_ID = "public-oauth-client-id";
+  delete process.env.GH_TOKEN;
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+  process.env.MEMOREPO_API_CONTAINER_NAME = "memorepo-api";
+  globalThis.fetch = (async () => {
+    githubRequestCount += 1;
+    throw new Error("GitHub should not be contacted before an account is connected");
+  }) as typeof fetch;
+
+  const services = createServices();
+  (services.cbm as unknown as { version: () => Promise<string> }).version = async () => "codebase-memory-mcp test";
+  const app = await createApp(services);
+
+  try {
+    const preflightResponse = await injectControlApi(app, { method: "GET", url: "/api/preflight" });
+    assert.equal(preflightResponse.statusCode, 200);
+    const preflight = preflightResponse.json<{
+      status: string;
+      checks: Array<{ id: string; status: string; message: string }>;
+      github: { connected: boolean; error?: string };
+    }>();
+
+    assert.equal(preflight.status, "warning");
+    assert.deepEqual(
+      preflight.checks.find((check) => check.id === "github-oauth-client")?.status,
+      "pass"
+    );
+    assert.equal(
+      preflight.checks.find((check) => check.id === "github-connection")?.status,
+      "warn"
+    );
+    assert.equal(preflight.checks.some((check) => check.id === "github-access"), false);
+    assert.equal(preflight.github.connected, false);
+
+    const systemResponse = await injectControlApi(app, { method: "GET", url: "/api/system" });
+    assert.equal(systemResponse.statusCode, 200);
+    const system = systemResponse.json<{ github: { connected: boolean; error?: string } }>();
+    assert.equal(system.github.connected, false);
+    assert.match(system.github.error ?? "", /Connect GitHub from System health/);
+    assert.equal(githubRequestCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "false";
+    process.env.GH_TOKEN = "test-token";
+    if (previousClientId === undefined) {
+      delete process.env.GITHUB_OAUTH_CLIENT_ID;
+    } else {
+      process.env.GITHUB_OAUTH_CLIENT_ID = previousClientId;
+    }
     await app.close();
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
