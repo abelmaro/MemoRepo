@@ -1,12 +1,16 @@
 import path from "node:path";
 import { ensurePrivateDir, initializePrivateFileCreation } from "./domain/permissions.js";
 
+// GitHub OAuth Client IDs are public identifiers. Official MemoRepo builds ship this value so
+// end users can authorize GitHub without registering an application or editing their environment.
+export const MEMOREPO_GITHUB_OAUTH_CLIENT_ID = "Ov23libToTurEq9tXh9c";
+
 export interface AppConfig {
   apiHost: string;
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
-  githubOAuthClientId: string | null;
+  githubOAuthClientId: string;
   memorepoHome: string;
   secretsDir: string;
   githubCredentialKeyPath: string;
@@ -80,7 +84,7 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
-    githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || null,
+    githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || MEMOREPO_GITHUB_OAUTH_CLIENT_ID,
     memorepoHome,
     secretsDir,
     githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),

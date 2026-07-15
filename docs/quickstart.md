@@ -2,20 +2,7 @@
 
 This guide takes a local user from a clean checkout to a working read-only MCP connection.
 
-## 1. Register A GitHub OAuth App
-
-In GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App** and register one app for this MemoRepo installation:
-
-- **Application name:** a recognizable name such as `MemoRepo Local`
-- **Homepage URL:** `http://127.0.0.1:5173`
-- **Authorization callback URL:** `http://127.0.0.1:5173`
-- **Enable Device Flow:** checked
-
-The callback field is required when registering the app, but MemoRepo's Device Flow does not redirect to it. Copy the app's **Client ID** after registration. MemoRepo does not use the Client Secret.
-
-Only authorize a device code that you initiated from your local MemoRepo dashboard, and verify the expected application name on GitHub before approving it. GitHub documents the registration steps in [Creating an OAuth app](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) and the protocol in [Authorizing OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
-
-## 2. Prepare Runtime
+## 1. Prepare Runtime
 
 Install Docker Desktop or Docker Engine.
 
@@ -37,12 +24,13 @@ PowerShell 7:
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 ```
 
-Edit `.env` and set the public OAuth Client ID plus the local control secret:
+Edit `.env` and set the local control secret:
 
 ```bash
-GITHUB_OAUTH_CLIENT_ID=your-oauth-client-id
 MEMOREPO_CONTROL_TOKEN=your-random-control-token
 ```
+
+Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork maintainers and contributors can optionally set `GITHUB_OAUTH_CLIENT_ID` to use a different OAuth App during development.
 
 For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
 
@@ -50,7 +38,7 @@ On Linux, create the `MEMOREPO_HOME` directory yourself before the first `docker
 
 Keep `MEMOREPO_API_CONTAINER_NAME=memorepo-api` unless you also change `container_name` in `docker-compose.yml`.
 
-## 3. Start MemoRepo
+## 2. Start MemoRepo
 
 ```bash
 docker compose up --build
@@ -66,26 +54,28 @@ Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it on
 
 The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; a GitHub connection warning is expected until the next step.
 
-## 4. Connect GitHub
+## 3. Sign In With GitHub
 
-Open **System health**, choose **Connect GitHub**, and follow the modal:
+Open **System health**, choose **Sign in with GitHub**, and follow the modal:
 
-- copy the one-time user code;
-- open GitHub's official device page from the modal;
-- confirm the expected OAuth App and requested `repo` scope;
+- MemoRepo attempts to copy the one-time user code and opens GitHub's official device page;
+- if the browser blocks the page, use **Continue on GitHub** from the modal;
+- enter the displayed code and confirm the MemoRepo OAuth App and requested `repo` scope;
 - approve the code and return to MemoRepo.
 
 MemoRepo validates the GitHub profile before storing the credential and automatically queues the first repository sync. The connection panel then shows the account, granted scopes, and visible repository counts.
 
+Only authorize a device code that you initiated from your local MemoRepo dashboard, and verify the expected application name on GitHub before approving it. GitHub documents the protocol in [Authorizing OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
+
 If organization repositories are missing, review the organization's OAuth App policy and complete any required SAML SSO authorization. The OAuth scope cannot grant access the connected GitHub user does not already have.
 
-## 5. Sync Repositories
+## 4. Sync Repositories
 
 The first sync starts after connection. Use `Sync GitHub` later whenever you want to refresh the repository catalog.
 
 MemoRepo stores repository metadata in SQLite. It does not clone repositories during this sync; cloning starts when a repository is added to a space.
 
-## 6. Create A Space
+## 5. Create A Space
 
 Click `New Space` and choose a name that matches the agent context you want, such as:
 
@@ -95,7 +85,7 @@ analytics
 
 A space isolates repository membership, snapshots, and MCP connections.
 
-## 7. Add A Repository
+## 6. Add A Repository
 
 Click `Add repo`.
 
@@ -108,7 +98,7 @@ https://github.com/owner/repo
 
 MemoRepo will enqueue jobs to clone, checkout, index, and build the first space snapshot. Open the job log to follow progress.
 
-## 8. Connect An Agent
+## 7. Connect An Agent
 
 Click `Connect agent`.
 
@@ -122,7 +112,7 @@ docker exec -i -e MEMOREPO_MCP_TOKEN=... memorepo-api node /app/dist/cli/mcp.js 
 
 For HTTP clients, use the local endpoint and bearer token shown in the config.
 
-## 9. Recommended Agent Workflow
+## 8. Recommended Agent Workflow
 
 For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 
@@ -136,19 +126,19 @@ When using the MCP server from an agent:
 
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
-## 10. When Something Fails
+## 9. When Something Fails
 
-Use the preflight panel first. It checks OAuth App configuration, GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
+Use the preflight panel first. It checks GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
 
 Then open the failed job log. Job logs usually contain the failing GitHub, Git, indexing, or snapshot operation.
 
-## 11. Manage Or Revoke GitHub Access
+## 10. Manage Or Revoke GitHub Access
 
 **Disconnect locally** deletes MemoRepo's encrypted credential while keeping existing clones, indexes, and snapshots available. It does not revoke the authorization at GitHub. Use **Manage authorization on GitHub** in the connection panel to review or revoke the OAuth App itself.
 
 If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key is no longer available and you must reconnect GitHub. Back up the data directory and secrets volume together if you need restorable credentials.
 
-## 12. Keep Local State Tidy
+## 11. Keep Local State Tidy
 
 Use the `Data lifecycle` panel inside a space to:
 
@@ -165,7 +155,7 @@ MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
 ```
 
-## 13. Manage Jobs
+## 12. Manage Jobs
 
 Recent jobs are shown at the bottom of the dashboard. Open a job to inspect logs, dependencies, and dependent jobs.
 

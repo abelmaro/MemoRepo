@@ -20,9 +20,8 @@ The Node workspaces can be run directly for development, but productive local us
 
 ## Configuration Contract
 
-MemoRepo expects these runtime inputs:
+MemoRepo accepts these runtime inputs:
 
-- `GITHUB_OAUTH_CLIENT_ID`: the public Client ID for a GitHub OAuth App with Device Flow enabled. MemoRepo does not use the Client Secret.
 - `MEMOREPO_CONTROL_TOKEN`: a 43-128-character URL-safe value generated from at least 32 random bytes, used to authenticate the local control API and unlock the dashboard.
 - `MEMOREPO_HOME`: the local state root for SQLite data, managed clones, indexes, logs, temporary files, and helper scripts.
 - `MEMOREPO_SECRETS_DIR`: the separate location for the local credential-encryption key. Docker Compose maps this to the `memorepo-secrets` named volume.
@@ -36,6 +35,8 @@ MemoRepo expects these runtime inputs:
 - `MEMOREPO_JOB_RETENTION_DAYS`: the default age threshold for deleting terminal jobs during garbage collection, defaulting to `30`.
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
 - `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
+
+Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure GitHub credentials. Fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as an optional development override; no Client Secret is used.
 
 `MEMOREPO_HOME` defaults to `./.memorepo` for a simple first run. For regular use, place it outside the repository source tree.
 
@@ -185,7 +186,7 @@ The dashboard stores the control token only in the current tab's `sessionStorage
 
 API and dashboard responses set defensive content security, framing, referrer, content-type, and no-store cache policies. MemoRepo creates new private artifacts with a restrictive process umask and applies owner-only directory and database modes when the backing storage supports POSIX permissions. Docker Desktop bind mounts backed by Windows may not expose POSIX mode changes, so host access controls remain part of the local trust boundary.
 
-GitHub authorization uses OAuth Device Flow for the single local user. The private device code exists only in API memory while authorization is pending. After GitHub returns an access token, MemoRepo validates the user profile and stores the token encrypted with AES-256-GCM; the encryption key is generated locally with owner-only permissions where the host filesystem supports them. The OAuth App Client ID is public, and no Client Secret is used.
+GitHub authorization uses OAuth Device Flow for the single local user. The private device code exists only in API memory while authorization is pending. After GitHub returns an access token, MemoRepo validates the user profile and stores the token encrypted with AES-256-GCM; the encryption key is generated locally with owner-only permissions where the host filesystem supports them. Official builds include the public OAuth App Client ID, and no Client Secret is used.
 
 Git remotes are stored as clean HTTPS URLs, and the decrypted credential is supplied ephemerally through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus only the credential variables required for that operation. CBM child processes receive no GitHub credential variables or unrelated application secrets. Disconnecting locally deletes the encrypted credential; revoking the OAuth authorization remains an explicit action in GitHub settings.
 

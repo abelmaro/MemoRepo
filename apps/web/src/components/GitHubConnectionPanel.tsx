@@ -16,8 +16,10 @@ export function GitHubConnectionPanel() {
   const [authorization, setAuthorization] = useState<GitHubDeviceAuthorizationStart | null>(null);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [automaticOpenFailed, setAutomaticOpenFailed] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const completedAttempt = useRef<string | null>(null);
+  const authorizationWindow = useRef<Window | null>(null);
 
   const connectionQuery = useQuery({
     queryKey: ["github-auth-status"],
@@ -54,6 +56,29 @@ export function GitHubConnectionPanel() {
       setCopied(false);
       setFeedback(null);
       setAuthorization(started);
+      const openedWindow = authorizationWindow.current;
+      if (openedWindow && !openedWindow.closed) {
+        try {
+          openedWindow.opener = null;
+          openedWindow.location.replace(started.verificationUri);
+          setAutomaticOpenFailed(false);
+        } catch {
+          closeAuthorizationWindow();
+          setAutomaticOpenFailed(true);
+        }
+      } else {
+        setAutomaticOpenFailed(true);
+      }
+
+      if (navigator.clipboard) {
+        void navigator.clipboard.writeText(started.userCode).then(
+          () => setCopied(true),
+          () => setCopied(false)
+        );
+      }
+    },
+    onError: () => {
+      closeAuthorizationWindow();
     }
   });
 
@@ -68,6 +93,10 @@ export function GitHubConnectionPanel() {
   });
 
   const attemptStatus = attemptQuery.data;
+
+  useEffect(() => {
+    return () => closeAuthorizationWindow();
+  }, []);
 
   useEffect(() => {
     if (
@@ -95,6 +124,7 @@ export function GitHubConnectionPanel() {
       })
       .finally(() => {
         if (active) {
+          closeAuthorizationWindow();
           setAuthorization(null);
           void refreshGitHubState(queryClient);
         }
@@ -119,6 +149,7 @@ export function GitHubConnectionPanel() {
 
   function cancelAuthorization() {
     const attemptId = authorization?.attemptId;
+    closeAuthorizationWindow();
     setAuthorization(null);
     if (attemptId && (!attemptStatus || attemptStatus.status === "pending")) {
       void api(`/api/github/auth/device/${encodeURIComponent(attemptId)}`, { method: "DELETE" }).catch(() => undefined);
@@ -127,7 +158,30 @@ export function GitHubConnectionPanel() {
 
   function restartAuthorization() {
     setAuthorization(null);
+    startAuthorization();
+  }
+
+  function startAuthorization() {
+    setAutomaticOpenFailed(false);
+    closeAuthorizationWindow();
+    try {
+      authorizationWindow.current = window.open("about:blank", "memorepo-github-authorization");
+    } catch {
+      authorizationWindow.current = null;
+    }
     connectMutation.mutate();
+  }
+
+  function closeAuthorizationWindow() {
+    const openedWindow = authorizationWindow.current;
+    authorizationWindow.current = null;
+    if (openedWindow && !openedWindow.closed) {
+      try {
+        openedWindow.close();
+      } catch {
+        // The manual GitHub link remains available if the browser refuses window control.
+      }
+    }
   }
 
   const connection = connectionQuery.data;
@@ -153,15 +207,11 @@ export function GitHubConnectionPanel() {
             <button
               className="primary-button compact-button"
               type="button"
-              onClick={() => connectMutation.mutate()}
-              disabled={
-                connectMutation.isPending ||
-                connectionQuery.isPending ||
-                connection?.configured === false
-              }
+              onClick={startAuthorization}
+              disabled={connectMutation.isPending || connectionQuery.isPending}
             >
               {connectMutation.isPending ? <Loader2 className="spin" size={16} /> : <Github size={16} />}
-              <span>{connectMutation.isPending ? "Starting…" : "Connect GitHub"}</span>
+              <span>{connectMutation.isPending ? "Opening GitHub…" : "Sign in with GitHub"}</span>
             </button>
           )}
         </div>
@@ -192,10 +242,6 @@ export function GitHubConnectionPanel() {
                 <strong>{formatScopes(connection.scopes)}</strong> scope
               </span>
             </div>
-          </div>
-        ) : connection && !connection.configured ? (
-          <div className="diagnostics-warning" role="alert">
-            Configure the public GitHub OAuth client ID before connecting.
           </div>
         ) : (
           <p className="github-connection-copy">
@@ -229,12 +275,12 @@ export function GitHubConnectionPanel() {
       </section>
 
       {authorization ? (
-        <Modal title="Connect GitHub" onClose={cancelAuthorization}>
+        <Modal title="Sign in with GitHub" onClose={cancelAuthorization}>
           <div className="github-device-flow">
             <div>
               <p className="modal-eyebrow">Secure device authorization</p>
               <p>
-                Open the official GitHub page and enter this one-time code. MemoRepo never receives your password.
+                Enter this one-time code on GitHub. MemoRepo never receives your password.
               </p>
             </div>
             <div className="github-device-code" aria-label={`GitHub device code ${authorization.userCode}`}>
@@ -244,6 +290,11 @@ export function GitHubConnectionPanel() {
                 <span>{copied ? "Copied" : "Copy code"}</span>
               </button>
             </div>
+            {automaticOpenFailed ? (
+              <div className="inline-alert" role="status">
+                Your browser did not open GitHub automatically. Use the button below to continue.
+              </div>
+            ) : null}
             <a
               className="primary-button github-device-link"
               href={authorization.verificationUri}
@@ -252,7 +303,7 @@ export function GitHubConnectionPanel() {
               data-modal-autofocus
             >
               <ExternalLink size={17} />
-              <span>Open github.com/login/device</span>
+              <span>Continue on GitHub</span>
             </a>
             <div className="github-device-status" aria-live="polite">
               {attemptQuery.isError ? (
@@ -321,7 +372,6 @@ export function GitHubConnectionPanel() {
 function connectionSummary(connection: GitHubConnectionStatus | undefined, pending: boolean): string {
   if (pending) return "Checking connection…";
   if (!connection) return "Connection unavailable";
-  if (!connection.configured) return "OAuth client not configured";
   if (!connection.connected) return "Not connected";
   return `Connected as @${connection.viewer?.login ?? "unknown"}`;
 }

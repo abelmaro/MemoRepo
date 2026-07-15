@@ -15,13 +15,21 @@ vi.mock("../lib/api", async (importOriginal) => ({
 afterEach(() => {
   cleanup();
   apiMock.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("GitHubConnectionPanel", () => {
   it("starts device authorization without exposing the private device code", async () => {
+    const replace = vi.fn();
+    vi.spyOn(window, "open").mockReturnValue({
+      closed: false,
+      close: vi.fn(),
+      location: { replace },
+      opener: window
+    } as unknown as Window);
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/github/auth/status") {
-        return Promise.resolve({ configured: true, connected: false });
+        return Promise.resolve({ connected: false });
       }
       if (path === "/api/github/auth/device" && init?.method === "POST") {
         return Promise.resolve({
@@ -43,21 +51,105 @@ describe("GitHubConnectionPanel", () => {
     });
 
     renderPanel();
-    const connectButton = await screen.findByRole("button", { name: "Connect GitHub" });
+    const connectButton = await screen.findByRole("button", { name: "Sign in with GitHub" });
     await waitFor(() => expect((connectButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(connectButton);
 
     expect(await screen.findByText("ABCD-1234")).toBeTruthy();
-    const link = screen.getByRole("link", { name: "Open github.com/login/device" });
+    expect(window.open).toHaveBeenCalledWith("about:blank", "memorepo-github-authorization");
+    expect(replace).toHaveBeenCalledWith("https://github.com/login/device");
+    const link = screen.getByRole("link", { name: "Continue on GitHub" });
     expect(link.getAttribute("href")).toBe("https://github.com/login/device");
     expect(document.body.textContent).not.toContain("private-device-code");
+  });
+
+  it("keeps a manual GitHub link when the browser blocks the automatic page", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/github/auth/status") {
+        return Promise.resolve({ connected: false });
+      }
+      if (path === "/api/github/auth/device" && init?.method === "POST") {
+        return Promise.resolve({
+          attemptId: "gha_attempt",
+          userCode: "ABCD-1234",
+          verificationUri: "https://github.com/login/device",
+          expiresAt: "2026-07-15T12:15:00.000Z",
+          intervalSeconds: 60
+        });
+      }
+      if (path === "/api/github/auth/device/gha_attempt") {
+        return Promise.resolve({
+          status: "pending",
+          expiresAt: "2026-07-15T12:15:00.000Z",
+          nextPollAt: "2026-07-15T12:00:05.000Z"
+        });
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+
+    renderPanel();
+    const signInButton = await screen.findByRole("button", { name: "Sign in with GitHub" });
+    await waitFor(() => expect((signInButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(signInButton);
+
+    expect(await screen.findByText(/did not open GitHub automatically/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Continue on GitHub" })).toBeTruthy();
+  });
+
+  it("closes the GitHub page and queues the first sync after authorization", async () => {
+    const close = vi.fn();
+    vi.spyOn(window, "open").mockReturnValue({
+      closed: false,
+      close,
+      location: { replace: vi.fn() },
+      opener: window
+    } as unknown as Window);
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/github/auth/status") {
+        return Promise.resolve({ connected: false });
+      }
+      if (path === "/api/github/auth/device" && init?.method === "POST") {
+        return Promise.resolve({
+          attemptId: "gha_attempt",
+          userCode: "ABCD-1234",
+          verificationUri: "https://github.com/login/device",
+          expiresAt: "2026-07-15T12:15:00.000Z",
+          intervalSeconds: 60
+        });
+      }
+      if (path === "/api/github/auth/device/gha_attempt") {
+        return Promise.resolve({
+          status: "connected",
+          viewer: {
+            id: 42,
+            login: "octocat",
+            name: "The Octocat",
+            avatarUrl: "https://avatars.example/octocat"
+          },
+          scopes: ["repo"]
+        });
+      }
+      if (path === "/api/github/sync" && init?.method === "POST") {
+        return Promise.resolve({ job: { id: "job_1" } });
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+
+    renderPanel();
+    const signInButton = await screen.findByRole("button", { name: "Sign in with GitHub" });
+    await waitFor(() => expect((signInButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(signInButton);
+
+    expect(await screen.findByText("Connected as octocat. Repository sync was queued.")).toBeTruthy();
+    expect(apiMock).toHaveBeenCalledWith("/api/github/sync", { method: "POST", body: "{}" });
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("shows a connected account and confirms local disconnection", async () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/github/auth/status") {
         return Promise.resolve({
-          configured: true,
           connected: true,
           viewer: {
             id: 42,

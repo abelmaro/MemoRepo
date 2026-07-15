@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, MEMOREPO_GITHUB_OAUTH_CLIENT_ID } from "../src/config.js";
 
-test("configuration accepts the public GitHub OAuth client ID without an application secret", () => {
+test("configuration ships the official public GitHub OAuth client ID and accepts a development override", () => {
   const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "memorepo-oauth-config-"));
   const previous = {
     home: process.env.MEMOREPO_HOME,
@@ -16,11 +16,19 @@ test("configuration accepts the public GitHub OAuth client ID without an applica
   try {
     process.env.MEMOREPO_HOME = path.join(testRoot, "home");
     delete process.env.MEMOREPO_SECRETS_DIR;
-    process.env.GITHUB_OAUTH_CLIENT_ID = "public-client-id";
+    delete process.env.GITHUB_OAUTH_CLIENT_ID;
 
-    const config = loadConfig();
+    const officialConfig = loadConfig();
 
-    assert.equal(config.githubOAuthClientId, "public-client-id");
+    assert.equal(officialConfig.githubOAuthClientId, MEMOREPO_GITHUB_OAUTH_CLIENT_ID);
+    assert.doesNotMatch(officialConfig.githubOAuthClientId, /PENDING|PLACEHOLDER/i);
+    assert.match(officialConfig.githubOAuthClientId, /^[A-Za-z0-9]{20,64}$/);
+
+    process.env.GITHUB_OAUTH_CLIENT_ID = "development-client-id";
+
+    const developmentConfig = loadConfig();
+
+    assert.equal(developmentConfig.githubOAuthClientId, "development-client-id");
   } finally {
     restoreEnvironment("MEMOREPO_HOME", previous.home);
     restoreEnvironment("MEMOREPO_SECRETS_DIR", previous.secrets);

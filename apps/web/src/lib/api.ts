@@ -56,7 +56,6 @@ export interface GitHubDiagnostics {
 }
 
 export interface GitHubConnectionStatus {
-  configured: boolean;
   connected: boolean;
   viewer?: GitHubOAuthViewer;
   scopes?: string[];

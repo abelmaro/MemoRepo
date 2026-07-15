@@ -655,7 +655,7 @@ test("preflight reports local runtime checks without leaking secrets", async () 
 
         assert.equal(payload.mcpContainerName, "memorepo-api");
         assert.ok(["ready", "warning"].includes(payload.status));
-        assert.ok(checkIds.includes("github-oauth-client"));
+        assert.equal(checkIds.includes("github-oauth-client"), false);
         assert.ok(checkIds.includes("github-connection"));
         assert.ok(checkIds.includes("github-access"));
         assert.ok(checkIds.includes("github-scopes"));
@@ -700,10 +700,7 @@ test("OAuth-first startup reports an actionable disconnected state without conta
     }>();
 
     assert.equal(preflight.status, "warning");
-    assert.deepEqual(
-      preflight.checks.find((check) => check.id === "github-oauth-client")?.status,
-      "pass"
-    );
+    assert.equal(preflight.checks.some((check) => check.id === "github-oauth-client"), false);
     assert.equal(
       preflight.checks.find((check) => check.id === "github-connection")?.status,
       "warn"
@@ -715,7 +712,7 @@ test("OAuth-first startup reports an actionable disconnected state without conta
     assert.equal(systemResponse.statusCode, 200);
     const system = systemResponse.json<{ github: { connected: boolean; error?: string } }>();
     assert.equal(system.github.connected, false);
-    assert.match(system.github.error ?? "", /Connect GitHub from System health/);
+    assert.match(system.github.error ?? "", /Sign in with GitHub from System health/);
     assert.equal(githubRequestCount, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -751,7 +748,6 @@ test("GitHub OAuth routes expose only public device authorization state", async 
   try {
     const initialStatus = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
     assert.deepEqual(initialStatus.json(), {
-      configured: true,
       connected: false,
       manageAuthorizationUrl: "https://github.com/settings/connections/applications/test-oauth-client-id"
     });

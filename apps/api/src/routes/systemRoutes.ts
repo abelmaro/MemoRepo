@@ -11,14 +11,12 @@ export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/system", async () => {
     const connection = app.services.githubOAuth.connectionStatus();
     const github =
-      !connection.configured
-        ? { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." }
-        : !connection.connected
-          ? { connected: false, error: "Connect GitHub from System health before syncing repositories." }
-          : await app.services.github
-              .getViewer()
-              .then((viewer) => ({ connected: true, viewer }))
-              .catch((error: unknown) => ({ connected: false, error: publicError(app, error) }));
+      !connection.connected
+        ? { connected: false, error: "Sign in with GitHub from System health before syncing repositories." }
+        : await app.services.github
+            .getViewer()
+            .then((viewer) => ({ connected: true, viewer }))
+            .catch((error: unknown) => ({ connected: false, error: publicError(app, error) }));
 
     const cbm = await app.services.cbm
       .version()
@@ -37,21 +35,18 @@ export async function systemRoutes(app: FastifyInstance) {
     const checkedAt = new Date().toISOString();
     const connection = app.services.githubOAuth.connectionStatus();
 
-    checks.push(checkGitHubOAuthClient(app.services.config.githubOAuthClientId));
     checks.push(checkMcpContainerTarget(app.services.config.mcpContainerName));
     checks.push(checkMemorepoHomeLocation(app.services.config.memorepoHome));
     checks.push(checkMemorepoHomeWritable(app.services.config.memorepoHome, app.services.config.tmpDir));
     checks.push(checkDiskSpace(app.services.config.memorepoHome));
 
     let github;
-    if (!connection.configured) {
-      github = { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." };
-    } else if (!connection.connected) {
+    if (!connection.connected) {
       checks.push({
         id: "github-connection",
         label: "GitHub connection",
         status: "warn",
-        message: "No GitHub account is connected yet. Connect from System health before syncing repositories."
+        message: "No GitHub account is connected yet. Sign in from System health before syncing repositories."
       });
       github = { connected: false, error: "No GitHub account is connected." };
     } else {
@@ -149,18 +144,6 @@ interface PreflightCheck {
   message: string;
   detail?: string;
   value?: string | number | boolean;
-}
-
-function checkGitHubOAuthClient(oauthClientId: string | null): PreflightCheck {
-  const configured = Boolean(oauthClientId);
-  return {
-    id: "github-oauth-client",
-    label: "GitHub OAuth client",
-    status: configured ? "pass" : "fail",
-    message: configured
-      ? "The public OAuth client ID is configured."
-      : "Set GITHUB_OAUTH_CLIENT_ID before connecting GitHub."
-  };
 }
 
 function checkMcpContainerTarget(containerName: string): PreflightCheck {

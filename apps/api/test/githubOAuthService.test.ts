@@ -43,6 +43,7 @@ test("device flow starts once and does not expose the private device code", asyn
     service.connectionStatus().manageAuthorizationUrl,
     "https://github.com/settings/connections/applications/client-id"
   );
+  assert.equal("configured" in service.connectionStatus(), false);
 });
 
 test("device flow honors pending and slow-down intervals before storing a verified token", async () => {
@@ -181,13 +182,6 @@ test("device flow reaches terminal states for denial, local cancellation, and ex
     status: "expired",
     error: "The GitHub authorization code expired"
   });
-});
-
-test("device flow requires a configured OAuth client", async () => {
-  await assert.rejects(
-    () => new GitHubOAuthService(null, memoryStore()).startDeviceAuthorization(),
-    (error: unknown) => error instanceof GitHubOAuthRequestError && error.statusCode === 503
-  );
 });
 
 function memoryStore(): GitHubCredentialWriter {

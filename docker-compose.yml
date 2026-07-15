@@ -12,6 +12,7 @@ services:
       NODE_ENV: production
       API_HOST: 0.0.0.0
       API_PORT: 8787
+      # Optional development/fork override. Official builds use MemoRepo's embedded public Client ID.
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
       MEMOREPO_CONTROL_TOKEN: ${MEMOREPO_CONTROL_TOKEN:?Set MEMOREPO_CONTROL_TOKEN in .env}
       MEMOREPO_HOME: /var/lib/memorepo

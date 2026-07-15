@@ -73,7 +73,6 @@ export type DeviceAuthorizationStatus =
   | { status: "denied" | "expired" | "failed"; error: string };
 
 export interface GitHubOAuthConnectionStatus {
-  configured: boolean;
   connected: boolean;
   viewer?: PublicGitHubViewer;
   scopes?: string[];
@@ -106,7 +105,7 @@ export class GitHubOAuthService {
   private readonly requestTimeoutMs: number;
 
   constructor(
-    private readonly clientId: string | null,
+    private readonly clientId: string,
     private readonly credentialStore: GitHubCredentialWriter,
     options: GitHubOAuthServiceOptions = {}
   ) {
@@ -117,13 +116,12 @@ export class GitHubOAuthService {
   }
 
   async startDeviceAuthorization(): Promise<DeviceAuthorizationStart> {
-    this.assertAvailable();
     const now = this.now();
     if (this.activeAttempt?.status === "pending" && this.activeAttempt.expiresAt > now) {
       return this.publicStart(this.activeAttempt);
     }
 
-    const body = new URLSearchParams({ client_id: this.clientId!, scope: REQUIRED_SCOPE });
+    const body = new URLSearchParams({ client_id: this.clientId, scope: REQUIRED_SCOPE });
     const response = await this.requestJson(GITHUB_DEVICE_CODE_URL, {
       method: "POST",
       headers: oauthHeaders(),
@@ -163,7 +161,7 @@ export class GitHubOAuthService {
     }
 
     const body = new URLSearchParams({
-      client_id: this.clientId!,
+      client_id: this.clientId,
       device_code: attempt.deviceCode!,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code"
     });
@@ -227,11 +225,8 @@ export class GitHubOAuthService {
   connectionStatus(): GitHubOAuthConnectionStatus {
     const metadata = this.credentialStore.getMetadata();
     return {
-      configured: Boolean(this.clientId),
       connected: Boolean(metadata),
-      ...(this.clientId
-        ? { manageAuthorizationUrl: `https://github.com/settings/connections/applications/${encodeURIComponent(this.clientId)}` }
-        : {}),
+      manageAuthorizationUrl: `https://github.com/settings/connections/applications/${encodeURIComponent(this.clientId)}`,
       ...(metadata ? connectionDetails(metadata) : {})
     };
   }
@@ -239,12 +234,6 @@ export class GitHubOAuthService {
   disconnect(): boolean {
     this.activeAttempt = null;
     return this.credentialStore.delete();
-  }
-
-  private assertAvailable(): void {
-    if (!this.clientId) {
-      throw new GitHubOAuthRequestError("GitHub OAuth client ID is not configured", 503);
-    }
   }
 
   private requireAttempt(attemptId: string): DeviceAuthorizationAttempt {
