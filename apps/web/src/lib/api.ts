@@ -55,6 +55,37 @@ export interface GitHubDiagnostics {
   error?: string;
 }
 
+export interface GitHubConnectionStatus {
+  enabled: boolean;
+  configured: boolean;
+  connected: boolean;
+  viewer?: GitHubOAuthViewer;
+  scopes?: string[];
+  connectedAt?: string;
+  lastValidatedAt?: string | null;
+  manageAuthorizationUrl?: string;
+}
+
+export interface GitHubOAuthViewer {
+  id: number;
+  login: string;
+  name: string | null;
+  avatarUrl: string;
+}
+
+export interface GitHubDeviceAuthorizationStart {
+  attemptId: string;
+  userCode: string;
+  verificationUri: "https://github.com/login/device";
+  expiresAt: string;
+  intervalSeconds: number;
+}
+
+export type GitHubDeviceAuthorizationStatus =
+  | { status: "pending"; expiresAt: string; nextPollAt: string }
+  | { status: "connected"; viewer: GitHubOAuthViewer; scopes: string[] }
+  | { status: "denied" | "expired" | "failed"; error: string };
+
 export interface GitHubOrganizationAccess {
   login: string;
   status: "visible" | "inaccessible";

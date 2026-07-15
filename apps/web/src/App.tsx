@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Boxes, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
 import { AddRepoModal } from "./components/AddRepoModal";
-import { GithubDiagnosticsPanel } from "./components/GithubDiagnosticsPanel";
+import { GitHubConnectionPanel } from "./components/GitHubConnectionPanel";
 import { JobLog } from "./components/JobLog";
 import { JobsPanel } from "./components/JobsPanel";
 import { LifecyclePanel } from "./components/LifecyclePanel";
@@ -399,7 +399,7 @@ export function App() {
                   {managementView === "system" ? (
                     <div className="system-panels">
                       <PreflightPanel />
-                      <GithubDiagnosticsPanel />
+                      <GitHubConnectionPanel />
                     </div>
                   ) : null}
                   {managementView === "settings" ? (

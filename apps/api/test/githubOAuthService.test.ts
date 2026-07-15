@@ -39,6 +39,10 @@ test("device flow starts once and does not expose the private device code", asyn
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.url, "https://github.com/login/device/code");
   assert.match(String(requests[0]?.init.body), /scope=repo/);
+  assert.equal(
+    service.connectionStatus().manageAuthorizationUrl,
+    "https://github.com/settings/connections/applications/client-id"
+  );
 });
 
 test("device flow honors pending and slow-down intervals before storing a verified token", async () => {

@@ -80,6 +80,7 @@ export interface GitHubOAuthConnectionStatus {
   scopes?: string[];
   connectedAt?: string;
   lastValidatedAt?: string | null;
+  manageAuthorizationUrl?: string;
 }
 
 interface GitHubOAuthServiceOptions {
@@ -231,6 +232,9 @@ export class GitHubOAuthService {
       enabled: this.enabled,
       configured: Boolean(this.clientId),
       connected: Boolean(metadata),
+      ...(this.clientId
+        ? { manageAuthorizationUrl: `https://github.com/settings/connections/applications/${encodeURIComponent(this.clientId)}` }
+        : {}),
       ...(metadata ? connectionDetails(metadata) : {})
     };
   }
