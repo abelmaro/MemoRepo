@@ -36,6 +36,7 @@ export interface GitHubCredentialReader {
 
 export interface GitHubCredentialWriter extends GitHubCredentialReader {
   save(input: GitHubCredentialInput, timestamp?: string): StoredGitHubCredential;
+  markValidated(timestamp?: string): void;
   delete(): boolean;
 }
 

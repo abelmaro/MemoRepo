@@ -478,7 +478,7 @@ test("synced repository listing supports kind filters", () => {
   }
 });
 
-test("GitHub sync includes visible organization repositories and reports protected orgs", async () => {
+test("GitHub sync includes organization repositories returned by the authenticated repository listing", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-org-sync-"));
   process.env.GH_TOKEN = "test-token";
@@ -490,23 +490,15 @@ test("GitHub sync includes visible organization repositories and reports protect
   try {
     await withGitHubFetch(
       {
-        "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name": [],
-        "https://api.github.com/user/orgs?per_page=100": [{ login: "VisibleOrg" }, { login: "LockedOrg" }],
-        "https://api.github.com/orgs/VisibleOrg/repos?per_page=100&type=all&sort=full_name": [
-          githubRepositoryPayload(8101, "VisibleOrg", "catalog-app", { private: true }),
-          githubRepositoryPayload(8102, "VisibleOrg", "catalog-api", { archived: true })
-        ],
-        "https://api.github.com/orgs/LockedOrg/repos?per_page=100&type=all&sort=full_name": githubErrorResponse(
-          403,
-          "Resource protected by organization SAML enforcement.\nTo access this repository, visit https://github.com/enterprises/example-enterprise/sso?authorization_request=test and try your request again."
-        )
+        "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name": [
+          githubRepositoryPayload(8101, "VisibleOrg", "catalog-app", { private: true, ownerType: "Organization" }),
+          githubRepositoryPayload(8102, "VisibleOrg", "catalog-api", { archived: true, ownerType: "Organization" })
+        ]
       },
       async () => {
         const result = await services.github.syncRepositories();
         assert.equal(result.count, 2);
-        assert.equal(result.warnings.length, 1);
-        assert.match(result.warnings[0]!, /LockedOrg/);
-        assert.match(result.warnings[0]!, /Authorize this PAT for SAML SSO/);
+        assert.equal(result.warnings.length, 0);
       }
     );
 
@@ -535,13 +527,12 @@ test("GitHub sync warns when an authenticated token exposes no repository scope"
     await withGitHubFetch(
       {
         "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name": [],
-        "https://api.github.com/user/orgs?per_page=100": []
       },
       async () => {
         const result = await services.github.syncRepositories();
         assert.equal(result.count, 0);
         assert.equal(result.warnings.length, 1);
-        assert.match(result.warnings[0]!, /exposes no repositories or organizations/);
+        assert.match(result.warnings[0]!, /no repositories are visible/);
       }
     );
   } finally {
@@ -569,16 +560,9 @@ test("GitHub diagnostics reports scopes, visible repos, and organization access"
           { "x-oauth-scopes": "repo, read:org", "x-accepted-oauth-scopes": "user" }
         ),
         "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name": [
-          githubRepositoryPayload(8201, "diagnostic-user", "personal-repo")
-        ],
-        "https://api.github.com/user/orgs?per_page=100": [{ login: "VisibleOrg" }, { login: "LockedOrg" }],
-        "https://api.github.com/orgs/VisibleOrg/repos?per_page=100&type=all&sort=full_name": [
-          githubRepositoryPayload(8202, "VisibleOrg", "catalog-app")
-        ],
-        "https://api.github.com/orgs/LockedOrg/repos?per_page=100&type=all&sort=full_name": githubErrorResponse(
-          403,
-          "Resource protected by organization SAML enforcement.\nTo access this repository, visit https://github.com/enterprises/example-enterprise/sso?authorization_request=test and try your request again."
-        )
+          githubRepositoryPayload(8201, "diagnostic-user", "personal-repo"),
+          githubRepositoryPayload(8202, "VisibleOrg", "catalog-app", { ownerType: "Organization" })
+        ]
       },
       async () => {
         const response = await injectControlApi(app, { method: "GET", url: "/api/github/diagnostics" });
@@ -600,7 +584,7 @@ test("GitHub diagnostics reports scopes, visible repos, and organization access"
         assert.deepEqual(payload.tokenScopes, ["repo", "read:org"]);
         assert.deepEqual(payload.acceptedScopes, ["user"]);
         assert.equal(payload.visibleRepositoryCount, 2);
-        assert.equal(payload.userRepositoryCount, 1);
+        assert.equal(payload.userRepositoryCount, 2);
         assert.equal(payload.visibleOrganizationCount, 1);
         assert.deepEqual(
           payload.organizations.map((organization) => ({
@@ -609,11 +593,10 @@ test("GitHub diagnostics reports scopes, visible repos, and organization access"
             repositoryCount: organization.repositoryCount
           })),
           [
-            { login: "VisibleOrg", status: "visible", repositoryCount: 1 },
-            { login: "LockedOrg", status: "inaccessible", repositoryCount: null }
+            { login: "VisibleOrg", status: "visible", repositoryCount: 1 }
           ]
         );
-        assert.match(payload.warnings[0]!, /LockedOrg/);
+        assert.deepEqual(payload.warnings, []);
       }
     );
   } finally {
@@ -891,7 +874,7 @@ test("GitHub repository resolution returns actionable SAML errors", async () => 
           (error) => {
             const message = error instanceof Error ? error.message : String(error);
             assert.match(message, /GitHub request failed 403/);
-            assert.match(message, /Authorize this PAT for SAML SSO/);
+            assert.match(message, /Authorize this GitHub connection for SAML SSO/);
             assert.match(message, /https:\/\/github\.com\/enterprises\/example-enterprise\/sso/);
             assert.doesNotMatch(message, /\{"message"/);
             return true;
@@ -3066,11 +3049,11 @@ function githubRepositoryPayload(
   id: number,
   owner: string,
   name: string,
-  options: { private?: boolean; archived?: boolean; fork?: boolean } = {}
+  options: { private?: boolean; archived?: boolean; fork?: boolean; ownerType?: "User" | "Organization" } = {}
 ) {
   return {
     id,
-    owner: { login: owner },
+    owner: { login: owner, type: options.ownerType ?? "User" },
     name,
     full_name: `${owner}/${name}`,
     html_url: `https://github.com/${owner}/${name}`,

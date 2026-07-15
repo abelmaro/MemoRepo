@@ -33,8 +33,8 @@ export function createServices() {
     config.githubOAuthEnabled,
     githubCredentialStore
   );
-  const github = new GitHubService(database, config);
-  const git = new GitService(config);
+  const github = new GitHubService(database, githubCredentials);
+  const git = new GitService(config, githubCredentials);
   const cbm = new CbmService(config);
   const spaces = new SpaceService(database, config, cbm);
   const snapshots = new SnapshotService(database, config, cbm);

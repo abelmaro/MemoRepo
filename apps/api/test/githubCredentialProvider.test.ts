@@ -6,7 +6,7 @@ import {
 } from "../src/services/githubCredentialProvider.js";
 import type {
   GitHubCredentialMetadata,
-  GitHubCredentialReader,
+  GitHubCredentialWriter,
   StoredGitHubCredential
 } from "../src/services/githubCredentialStore.js";
 
@@ -39,6 +39,11 @@ test("credential provider exclusively uses stored OAuth credentials when enabled
   assert.equal(provider.getConnectionMetadata()?.login, "octocat");
   assert.deepEqual(provider.getSensitiveValues(), ["legacy-secret", "gho_oauth-secret"]);
   assert.equal(provider.usesOAuth(), true);
+
+  provider.markValidated("2026-07-15T12:05:00.000Z");
+  assert.equal(provider.getConnectionMetadata()?.lastValidatedAt, "2026-07-15T12:05:00.000Z");
+  assert.equal(provider.invalidateOAuthCredential(), true);
+  assert.throws(() => provider.getAccessToken(), GitHubNotConnectedError);
 });
 
 test("credential provider fails with an actionable conflict when OAuth is enabled but disconnected", () => {
@@ -50,9 +55,34 @@ test("credential provider fails with an actionable conflict when OAuth is enable
   );
 });
 
-function reader(credential: StoredGitHubCredential | null): GitHubCredentialReader {
+function reader(credential: StoredGitHubCredential | null): GitHubCredentialWriter {
   return {
     get: () => credential,
-    getMetadata: () => (credential ? metadata : null)
+    getMetadata: () => {
+      if (!credential) {
+        return null;
+      }
+      const { accessToken: _accessToken, ...currentMetadata } = credential;
+      return currentMetadata;
+    },
+    save: (input, timestamp = new Date().toISOString()) => {
+      credential = {
+        ...input,
+        connectedAt: timestamp,
+        lastValidatedAt: timestamp,
+        updatedAt: timestamp
+      };
+      return credential;
+    },
+    markValidated: (timestamp = new Date().toISOString()) => {
+      if (credential) {
+        credential = { ...credential, lastValidatedAt: timestamp, updatedAt: timestamp };
+      }
+    },
+    delete: () => {
+      const existed = credential !== null;
+      credential = null;
+      return existed;
+    }
   };
 }

@@ -208,6 +208,11 @@ function memoryStore(): GitHubCredentialWriter {
       };
       return credential;
     },
+    markValidated: (timestamp = new Date().toISOString()) => {
+      if (credential) {
+        credential = { ...credential, lastValidatedAt: timestamp, updatedAt: timestamp };
+      }
+    },
     delete: () => {
       const existed = credential !== null;
       credential = null;

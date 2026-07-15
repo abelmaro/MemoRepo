@@ -1,6 +1,6 @@
 import type {
   GitHubCredentialMetadata,
-  GitHubCredentialReader
+  GitHubCredentialWriter
 } from "./githubCredentialStore.js";
 
 export class GitHubNotConnectedError extends Error {
@@ -13,7 +13,7 @@ export class GitHubNotConnectedError extends Error {
 
 export class GitHubCredentialProvider {
   constructor(
-    private readonly store: GitHubCredentialReader,
+    private readonly store: GitHubCredentialWriter,
     private readonly oauthEnabled: boolean,
     private readonly legacyToken: string
   ) {}
@@ -47,5 +47,15 @@ export class GitHubCredentialProvider {
 
   usesOAuth(): boolean {
     return this.oauthEnabled;
+  }
+
+  markValidated(timestamp = new Date().toISOString()): void {
+    if (this.oauthEnabled) {
+      this.store.markValidated(timestamp);
+    }
+  }
+
+  invalidateOAuthCredential(): boolean {
+    return this.oauthEnabled ? this.store.delete() : false;
   }
 }

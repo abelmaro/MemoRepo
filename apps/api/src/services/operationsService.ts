@@ -25,7 +25,7 @@ export class OperationsService {
 
   registerJobHandlers(): void {
     this.jobs.register("sync_github_repositories", async (_payload, context) => {
-      context.log("Syncing GitHub repositories visible to GH_TOKEN");
+      context.log("Syncing repositories visible to the connected GitHub account");
       const result = await this.github.syncRepositories();
       context.log(`Synced ${result.count} repositories`);
       for (const warning of result.warnings) {
