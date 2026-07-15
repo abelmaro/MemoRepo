@@ -5,6 +5,7 @@ import { CbmService } from "./cbmService.js";
 import { GitService } from "./gitService.js";
 import { GitHubCredentialProvider } from "./githubCredentialProvider.js";
 import { CredentialCipher, GitHubCredentialStore } from "./githubCredentialStore.js";
+import { GitHubOAuthService } from "./githubOAuthService.js";
 import { GitHubService } from "./githubService.js";
 import { JobRunner } from "./jobRunner.js";
 import { McpGateway } from "./mcpGateway.js";
@@ -27,6 +28,11 @@ export function createServices() {
     config.githubOAuthEnabled,
     config.githubToken
   );
+  const githubOAuth = new GitHubOAuthService(
+    config.githubOAuthClientId,
+    config.githubOAuthEnabled,
+    githubCredentialStore
+  );
   const github = new GitHubService(database, config);
   const git = new GitService(config);
   const cbm = new CbmService(config);
@@ -44,6 +50,7 @@ export function createServices() {
     database,
     githubCredentialStore,
     githubCredentials,
+    githubOAuth,
     github,
     git,
     cbm,

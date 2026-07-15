@@ -34,6 +34,11 @@ export interface GitHubCredentialReader {
   getMetadata(): GitHubCredentialMetadata | null;
 }
 
+export interface GitHubCredentialWriter extends GitHubCredentialReader {
+  save(input: GitHubCredentialInput, timestamp?: string): StoredGitHubCredential;
+  delete(): boolean;
+}
+
 interface GitHubCredentialRow {
   github_user_id: number;
   login: string;
