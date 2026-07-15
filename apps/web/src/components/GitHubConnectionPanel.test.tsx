@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubConnectionPanel } from "./GitHubConnectionPanel";
 
@@ -97,6 +98,50 @@ describe("GitHubConnectionPanel", () => {
     expect(screen.getByRole("link", { name: "Continue on GitHub" })).toBeTruthy();
   });
 
+  it("uses the preopened GitHub page from an external sign-in request", async () => {
+    const replace = vi.fn();
+    const handled = vi.fn();
+    const openedWindow = {
+      closed: false,
+      close: vi.fn(),
+      location: { replace },
+      opener: window
+    } as unknown as Window;
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(null);
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/github/auth/status") {
+        return Promise.resolve({ connected: false });
+      }
+      if (path === "/api/github/auth/device" && init?.method === "POST") {
+        return Promise.resolve({
+          attemptId: "gha_external_attempt",
+          userCode: "WXYZ-5678",
+          verificationUri: "https://github.com/login/device",
+          expiresAt: "2026-07-15T12:15:00.000Z",
+          intervalSeconds: 60
+        });
+      }
+      if (path === "/api/github/auth/device/gha_external_attempt") {
+        return Promise.resolve({
+          status: "pending",
+          expiresAt: "2026-07-15T12:15:00.000Z",
+          nextPollAt: "2026-07-15T12:00:05.000Z"
+        });
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+
+    renderPanel({
+      signInRequest: { id: 1, authorizationWindow: openedWindow },
+      onSignInRequestHandled: handled
+    });
+
+    expect(await screen.findByText("WXYZ-5678")).toBeTruthy();
+    expect(replace).toHaveBeenCalledWith("https://github.com/login/device");
+    expect(windowOpen).not.toHaveBeenCalled();
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the GitHub page and queues the first sync after authorization", async () => {
     const close = vi.fn();
     vi.spyOn(window, "open").mockReturnValue({
@@ -183,11 +228,11 @@ describe("GitHubConnectionPanel", () => {
   });
 });
 
-function renderPanel() {
+function renderPanel(props: ComponentProps<typeof GitHubConnectionPanel> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <GitHubConnectionPanel />
+      <GitHubConnectionPanel {...props} />
     </QueryClientProvider>
   );
 }

@@ -129,14 +129,21 @@
   font-size: var(--font-size-body-sm);
 }
 
-.system-alert div,
+.system-alert-copy,
 .inline-alert {
   line-height: var(--line-height-normal);
 }
 
-.system-alert div {
+.system-alert-copy {
   display: grid;
+  flex: 1;
   gap: var(--space-2);
+  min-width: 0;
+}
+
+.system-alert > .primary-button {
+  flex: none;
+  align-self: center;
 }
 
 .inline-alert.error {

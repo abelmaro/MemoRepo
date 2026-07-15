@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Boxes, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
 import { AddRepoModal } from "./components/AddRepoModal";
-import { GitHubConnectionPanel } from "./components/GitHubConnectionPanel";
+import { GitHubConnectionPanel, type GitHubSignInRequest } from "./components/GitHubConnectionPanel";
 import { JobLog } from "./components/JobLog";
 import { JobsPanel } from "./components/JobsPanel";
 import { LifecyclePanel } from "./components/LifecyclePanel";
@@ -32,8 +32,10 @@ export function App() {
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [managementView, setManagementView] = useState<ManagementView | null>(null);
   const [updateConfirmationOpen, setUpdateConfirmationOpen] = useState(false);
+  const [githubSignInRequest, setGitHubSignInRequest] = useState<GitHubSignInRequest | null>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const githubSignInRequestId = useRef(0);
 
   const spacesQuery = useQuery({
     queryKey: ["spaces"],
@@ -151,6 +153,19 @@ export function App() {
     setManagementView((current) => (current === view ? null : view));
   }
 
+  function signInWithGitHub() {
+    let authorizationWindow: Window | null = null;
+    try {
+      authorizationWindow = window.open("about:blank", "memorepo-github-authorization");
+    } catch {
+      authorizationWindow = null;
+    }
+
+    githubSignInRequestId.current += 1;
+    setGitHubSignInRequest({ id: githubSignInRequestId.current, authorizationWindow });
+    setManagementView("system");
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -235,6 +250,7 @@ export function App() {
               snapshotSummary={snapshotSummary}
               onConnectAgent={() => setMcpOpen(true)}
               onAddRepository={() => setAddRepoOpen(true)}
+              onSignInGitHub={signInWithGitHub}
               onOpenSnapshotJob={(jobId) => setActiveJobId(jobId)}
               operationsDisabled={hasActiveSpaceJob}
             />
@@ -399,7 +415,10 @@ export function App() {
                   {managementView === "system" ? (
                     <div className="system-panels">
                       <PreflightPanel />
-                      <GitHubConnectionPanel />
+                      <GitHubConnectionPanel
+                        signInRequest={githubSignInRequest}
+                        onSignInRequestHandled={() => setGitHubSignInRequest(null)}
+                      />
                     </div>
                   ) : null}
                   {managementView === "settings" ? (

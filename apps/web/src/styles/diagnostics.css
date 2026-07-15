@@ -87,7 +87,7 @@
   font-size: var(--font-size-heading-sm);
 }
 
-.github-connection-header span,
+.github-connection-header .panel-heading span,
 .github-connection-copy,
 .github-account-card span,
 .github-device-flow small,

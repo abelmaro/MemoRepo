@@ -11,7 +11,17 @@ import {
 import { Modal } from "./Modal";
 import { QueryErrorState } from "./QueryErrorState";
 
-export function GitHubConnectionPanel() {
+export interface GitHubSignInRequest {
+  id: number;
+  authorizationWindow: Window | null;
+}
+
+interface GitHubConnectionPanelProps {
+  signInRequest?: GitHubSignInRequest | null;
+  onSignInRequestHandled?: () => void;
+}
+
+export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }: GitHubConnectionPanelProps = {}) {
   const queryClient = useQueryClient();
   const [authorization, setAuthorization] = useState<GitHubDeviceAuthorizationStart | null>(null);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -20,6 +30,7 @@ export function GitHubConnectionPanel() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const completedAttempt = useRef<string | null>(null);
   const authorizationWindow = useRef<Window | null>(null);
+  const handledSignInRequest = useRef<number | null>(null);
 
   const connectionQuery = useQuery({
     queryKey: ["github-auth-status"],
@@ -99,6 +110,16 @@ export function GitHubConnectionPanel() {
   }, []);
 
   useEffect(() => {
+    if (!signInRequest || handledSignInRequest.current === signInRequest.id) {
+      return;
+    }
+
+    handledSignInRequest.current = signInRequest.id;
+    beginAuthorization(signInRequest.authorizationWindow);
+    onSignInRequestHandled?.();
+  }, [signInRequest, onSignInRequestHandled]);
+
+  useEffect(() => {
     if (
       !authorization ||
       attemptStatus?.status !== "connected" ||
@@ -162,13 +183,19 @@ export function GitHubConnectionPanel() {
   }
 
   function startAuthorization() {
+    let openedWindow: Window | null = null;
+    try {
+      openedWindow = window.open("about:blank", "memorepo-github-authorization");
+    } catch {
+      openedWindow = null;
+    }
+    beginAuthorization(openedWindow);
+  }
+
+  function beginAuthorization(openedWindow: Window | null) {
     setAutomaticOpenFailed(false);
     closeAuthorizationWindow();
-    try {
-      authorizationWindow.current = window.open("about:blank", "memorepo-github-authorization");
-    } catch {
-      authorizationWindow.current = null;
-    }
+    authorizationWindow.current = openedWindow;
     connectMutation.mutate();
   }
 
