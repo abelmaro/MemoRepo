@@ -11,9 +11,9 @@ export async function systemRoutes(app: FastifyInstance) {
   app.get("/api/system", async () => {
     const connection = app.services.githubOAuth.connectionStatus();
     const github =
-      connection.enabled && !connection.configured
+      !connection.configured
         ? { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." }
-        : connection.enabled && !connection.connected
+        : !connection.connected
           ? { connected: false, error: "Connect GitHub from System health before syncing repositories." }
           : await app.services.github
               .getViewer()
@@ -37,22 +37,16 @@ export async function systemRoutes(app: FastifyInstance) {
     const checkedAt = new Date().toISOString();
     const connection = app.services.githubOAuth.connectionStatus();
 
-    checks.push(
-      checkGitHubAuthentication(
-        app.services.config.githubOAuthEnabled,
-        app.services.config.githubOAuthClientId,
-        app.services.config.githubToken
-      )
-    );
+    checks.push(checkGitHubOAuthClient(app.services.config.githubOAuthClientId));
     checks.push(checkMcpContainerTarget(app.services.config.mcpContainerName));
     checks.push(checkMemorepoHomeLocation(app.services.config.memorepoHome));
     checks.push(checkMemorepoHomeWritable(app.services.config.memorepoHome, app.services.config.tmpDir));
     checks.push(checkDiskSpace(app.services.config.memorepoHome));
 
     let github;
-    if (connection.enabled && !connection.configured) {
+    if (!connection.configured) {
       github = { connected: false, error: "Configure the GitHub OAuth client ID before connecting an account." };
-    } else if (connection.enabled && !connection.connected) {
+    } else if (!connection.connected) {
       checks.push({
         id: "github-connection",
         label: "GitHub connection",
@@ -64,14 +58,12 @@ export async function systemRoutes(app: FastifyInstance) {
       github = await app.services.github
         .diagnoseAccess()
         .then((diagnostics) => {
-          if (connection.enabled) {
-            checks.push({
-              id: "github-connection",
-              label: "GitHub connection",
-              status: "pass",
-              message: `Connected as @${diagnostics.viewer.login}.`
-            });
-          }
+          checks.push({
+            id: "github-connection",
+            label: "GitHub connection",
+            status: "pass",
+            message: `Connected as @${diagnostics.viewer.login}.`
+          });
           const warningCount = diagnostics.warnings.length;
           checks.push({
             id: "github-access",
@@ -94,8 +86,8 @@ export async function systemRoutes(app: FastifyInstance) {
         .catch((error: unknown) => {
           const message = publicError(app, error);
           checks.push({
-            id: connection.enabled ? "github-connection" : "github-access",
-            label: connection.enabled ? "GitHub connection" : "GitHub access",
+            id: "github-connection",
+            label: "GitHub connection",
             status: "fail",
             message
           });
@@ -159,29 +151,15 @@ interface PreflightCheck {
   value?: string | number | boolean;
 }
 
-function checkGitHubAuthentication(
-  oauthEnabled: boolean,
-  oauthClientId: string | null,
-  legacyToken: string | null
-): PreflightCheck {
-  if (oauthEnabled) {
-    const configured = Boolean(oauthClientId);
-    return {
-      id: "github-oauth-client",
-      label: "GitHub OAuth client",
-      status: configured ? "pass" : "fail",
-      message: configured
-        ? "The public OAuth client ID is configured."
-        : "Set GITHUB_OAUTH_CLIENT_ID before connecting GitHub."
-    };
-  }
-
-  const present = Boolean(legacyToken);
+function checkGitHubOAuthClient(oauthClientId: string | null): PreflightCheck {
+  const configured = Boolean(oauthClientId);
   return {
-    id: "github-token",
-    label: "GitHub compatibility credential",
-    status: present ? "pass" : "fail",
-    message: present ? "Configured for the API container." : "Configure GitHub authentication before repository operations."
+    id: "github-oauth-client",
+    label: "GitHub OAuth client",
+    status: configured ? "pass" : "fail",
+    message: configured
+      ? "The public OAuth client ID is configured."
+      : "Set GITHUB_OAUTH_CLIENT_ID before connecting GitHub."
   };
 }
 

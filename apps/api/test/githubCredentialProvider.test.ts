@@ -22,23 +22,13 @@ const metadata: GitHubCredentialMetadata = {
   updatedAt: "2026-07-15T12:00:00.000Z"
 };
 
-test("credential provider preserves the existing token while compatibility mode is disabled", () => {
-  const provider = new GitHubCredentialProvider(reader(null), false, "legacy-secret");
-
-  assert.equal(provider.getAccessToken(), "legacy-secret");
-  assert.equal(provider.getConnectionMetadata(), null);
-  assert.deepEqual(provider.getSensitiveValues(), ["legacy-secret"]);
-  assert.equal(provider.usesOAuth(), false);
-});
-
-test("credential provider exclusively uses stored OAuth credentials when enabled", () => {
+test("credential provider exclusively uses stored OAuth credentials", () => {
   const credential: StoredGitHubCredential = { ...metadata, accessToken: "gho_oauth-secret" };
-  const provider = new GitHubCredentialProvider(reader(credential), true, "legacy-secret");
+  const provider = new GitHubCredentialProvider(reader(credential));
 
   assert.equal(provider.getAccessToken(), "gho_oauth-secret");
   assert.equal(provider.getConnectionMetadata()?.login, "octocat");
-  assert.deepEqual(provider.getSensitiveValues(), ["legacy-secret", "gho_oauth-secret"]);
-  assert.equal(provider.usesOAuth(), true);
+  assert.deepEqual(provider.getSensitiveValues(), ["gho_oauth-secret"]);
 
   provider.markValidated("2026-07-15T12:05:00.000Z");
   assert.equal(provider.getConnectionMetadata()?.lastValidatedAt, "2026-07-15T12:05:00.000Z");
@@ -46,8 +36,8 @@ test("credential provider exclusively uses stored OAuth credentials when enabled
   assert.throws(() => provider.getAccessToken(), GitHubNotConnectedError);
 });
 
-test("credential provider fails with an actionable conflict when OAuth is enabled but disconnected", () => {
-  const provider = new GitHubCredentialProvider(reader(null), true, "legacy-secret");
+test("credential provider fails with an actionable conflict when disconnected", () => {
+  const provider = new GitHubCredentialProvider(reader(null));
 
   assert.throws(
     () => provider.getAccessToken(),

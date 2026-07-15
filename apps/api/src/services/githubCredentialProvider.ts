@@ -12,56 +12,30 @@ export class GitHubNotConnectedError extends Error {
 }
 
 export class GitHubCredentialProvider {
-  constructor(
-    private readonly store: GitHubCredentialWriter,
-    private readonly oauthEnabled: boolean,
-    private readonly legacyToken: string | null
-  ) {}
+  constructor(private readonly store: GitHubCredentialWriter) {}
 
   getAccessToken(): string {
-    if (this.oauthEnabled) {
-      const credential = this.store.get();
-      if (!credential) {
-        throw new GitHubNotConnectedError();
-      }
-      return credential.accessToken;
-    }
-
-    if (!this.legacyToken) {
+    const credential = this.store.get();
+    if (!credential) {
       throw new GitHubNotConnectedError();
     }
-    return this.legacyToken;
+    return credential.accessToken;
   }
 
   getConnectionMetadata(): GitHubCredentialMetadata | null {
-    return this.oauthEnabled ? this.store.getMetadata() : null;
+    return this.store.getMetadata();
   }
 
   getSensitiveValues(): string[] {
-    const values: string[] = [];
-    if (this.legacyToken) {
-      values.push(this.legacyToken);
-    }
-    if (this.oauthEnabled) {
-      const accessToken = this.store.get()?.accessToken;
-      if (accessToken) {
-        values.push(accessToken);
-      }
-    }
-    return [...new Set(values)];
-  }
-
-  usesOAuth(): boolean {
-    return this.oauthEnabled;
+    const accessToken = this.store.get()?.accessToken;
+    return accessToken ? [accessToken] : [];
   }
 
   markValidated(timestamp = new Date().toISOString()): void {
-    if (this.oauthEnabled) {
-      this.store.markValidated(timestamp);
-    }
+    this.store.markValidated(timestamp);
   }
 
   invalidateOAuthCredential(): boolean {
-    return this.oauthEnabled ? this.store.delete() : false;
+    return this.store.delete();
   }
 }

@@ -9,7 +9,7 @@ test("CBM receives only allowlisted system variables and explicit overrides", ()
       Path: "/usr/local/bin:/usr/bin",
       TEMP: "/tmp",
       HOME: "/home/memorepo",
-      GH_TOKEN: "github-secret",
+      GITHUB_ACCESS_TOKEN: "github-secret",
       MEMOREPO_CONTROL_TOKEN: "control-secret",
       AWS_SECRET_ACCESS_KEY: "cloud-secret",
       SSH_AUTH_SOCK: "/tmp/agent.sock"
@@ -23,7 +23,7 @@ test("CBM receives only allowlisted system variables and explicit overrides", ()
     CBM_CACHE_DIR: "/tmp/cbm-cache",
     CBM_LOG_LEVEL: "warn"
   });
-  assert.equal(environment.GH_TOKEN, undefined);
+  assert.equal(environment.GITHUB_ACCESS_TOKEN, undefined);
   assert.equal(environment.MEMOREPO_CONTROL_TOKEN, undefined);
   assert.equal(environment.AWS_SECRET_ACCESS_KEY, undefined);
   assert.equal(environment.SSH_AUTH_SOCK, undefined);

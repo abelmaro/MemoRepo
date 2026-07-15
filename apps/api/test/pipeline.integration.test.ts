@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.js";
 import { migrate } from "../src/db/migrate.js";
-import { createServices } from "../src/services/appServices.js";
+import { createServices as createAppServices } from "../src/services/appServices.js";
 import { insertRecord, updateRecord } from "../src/db/sql.js";
 import { spaces } from "../src/db/schema.js";
 import { nowIso } from "../src/domain/time.js";
@@ -16,13 +16,30 @@ import { createId } from "../src/domain/ids.js";
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const testsRoot = path.join(repoRoot, ".tmp-memorepo-tests");
 const TEST_CONTROL_TOKEN = "test-control-token-0123456789abcdef0123456789abcdef";
+const TEST_GITHUB_ACCESS_TOKEN = "test-oauth-access-token";
 process.env.MEMOREPO_CONTROL_TOKEN = TEST_CONTROL_TOKEN;
-process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "false";
+process.env.GITHUB_OAUTH_CLIENT_ID = "test-oauth-client-id";
+
+function createServices() {
+  const services = createAppServices();
+  services.githubCredentialStore.save(
+    {
+      githubUserId: 42,
+      login: "test-user",
+      name: "Test User",
+      avatarUrl: "https://avatars.example/test-user",
+      accessToken: TEST_GITHUB_ACCESS_TOKEN,
+      tokenType: "bearer",
+      scopes: ["repo"]
+    },
+    "2026-07-15T12:00:00.000Z"
+  );
+  return services;
+}
 
 test("database exposes a Drizzle client over the SQLite source of truth", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "drizzle-db-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -46,7 +63,6 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "pipeline-"));
   const memorepoHome = path.join(testRoot, "memorepo-home");
 
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = memorepoHome;
   process.env.API_PORT = "8787";
 
@@ -215,7 +231,6 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
 test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and deletes connections", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-http-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -387,7 +402,6 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
 test("MCP connection configs follow the public API URL", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-public-url-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   delete process.env.MEMOREPO_PUBLIC_API_URL;
@@ -418,7 +432,6 @@ test("MCP connection configs follow the public API URL", () => {
 test("synced repository listing supports kind filters", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "filters-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -482,7 +495,6 @@ test("synced repository listing supports kind filters", () => {
 test("GitHub sync includes organization repositories returned by the authenticated repository listing", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-org-sync-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -518,7 +530,6 @@ test("GitHub sync includes organization repositories returned by the authenticat
 test("GitHub sync warns when an authenticated token exposes no repository scope", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-empty-scope-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -545,7 +556,6 @@ test("GitHub sync warns when an authenticated token exposes no repository scope"
 test("GitHub diagnostics reports scopes, visible repos, and organization access", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-diagnostics-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -610,7 +620,6 @@ test("GitHub diagnostics reports scopes, visible repos, and organization access"
 test("preflight reports local runtime checks without leaking secrets", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "preflight-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   process.env.MEMOREPO_API_CONTAINER_NAME = "memorepo-api";
@@ -635,7 +644,7 @@ test("preflight reports local runtime checks without leaking secrets", async () 
       async () => {
         const response = await injectControlApi(app, { method: "GET", url: "/api/preflight" });
         assert.equal(response.statusCode, 200);
-        assert.doesNotMatch(response.body, /test-token/);
+        assert.doesNotMatch(response.body, /test-oauth-access-token/);
 
         const payload = response.json<{
           status: string;
@@ -646,7 +655,8 @@ test("preflight reports local runtime checks without leaking secrets", async () 
 
         assert.equal(payload.mcpContainerName, "memorepo-api");
         assert.ok(["ready", "warning"].includes(payload.status));
-        assert.ok(checkIds.includes("github-token"));
+        assert.ok(checkIds.includes("github-oauth-client"));
+        assert.ok(checkIds.includes("github-connection"));
         assert.ok(checkIds.includes("github-access"));
         assert.ok(checkIds.includes("github-scopes"));
         assert.ok(checkIds.includes("codebase-memory-mcp"));
@@ -666,12 +676,8 @@ test("OAuth-first startup reports an actionable disconnected state without conta
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "oauth-disconnected-"));
   const originalFetch = globalThis.fetch;
-  const previousClientId = process.env.GITHUB_OAUTH_CLIENT_ID;
   let githubRequestCount = 0;
 
-  process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "true";
-  process.env.GITHUB_OAUTH_CLIENT_ID = "public-oauth-client-id";
-  delete process.env.GH_TOKEN;
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   process.env.MEMOREPO_API_CONTAINER_NAME = "memorepo-api";
@@ -680,7 +686,7 @@ test("OAuth-first startup reports an actionable disconnected state without conta
     throw new Error("GitHub should not be contacted before an account is connected");
   }) as typeof fetch;
 
-  const services = createServices();
+  const services = createAppServices();
   (services.cbm as unknown as { version: () => Promise<string> }).version = async () => "codebase-memory-mcp test";
   const app = await createApp(services);
 
@@ -713,13 +719,68 @@ test("OAuth-first startup reports an actionable disconnected state without conta
     assert.equal(githubRequestCount, 0);
   } finally {
     globalThis.fetch = originalFetch;
-    process.env.MEMOREPO_GITHUB_OAUTH_ENABLED = "false";
-    process.env.GH_TOKEN = "test-token";
-    if (previousClientId === undefined) {
-      delete process.env.GITHUB_OAUTH_CLIENT_ID;
-    } else {
-      process.env.GITHUB_OAUTH_CLIENT_ID = previousClientId;
-    }
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("GitHub OAuth routes expose only public device authorization state", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "oauth-routes-"));
+  const originalFetch = globalThis.fetch;
+  let githubRequestCount = 0;
+
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+  globalThis.fetch = (async (input) => {
+    githubRequestCount += 1;
+    assert.equal(String(input), "https://github.com/login/device/code");
+    return jsonResponse({
+      device_code: "private-device-code",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+      expires_in: 900,
+      interval: 5
+    });
+  }) as typeof fetch;
+
+  const services = createAppServices();
+  const app = await createApp(services);
+
+  try {
+    const initialStatus = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
+    assert.deepEqual(initialStatus.json(), {
+      configured: true,
+      connected: false,
+      manageAuthorizationUrl: "https://github.com/settings/connections/applications/test-oauth-client-id"
+    });
+
+    const startResponse = await injectControlApi(app, {
+      method: "POST",
+      url: "/api/github/auth/device",
+      payload: {}
+    });
+    assert.equal(startResponse.statusCode, 200);
+    assert.doesNotMatch(startResponse.body, /private-device-code/);
+    const started = startResponse.json<{ attemptId: string; userCode: string; verificationUri: string }>();
+    assert.equal(started.userCode, "ABCD-1234");
+    assert.equal(started.verificationUri, "https://github.com/login/device");
+
+    const pendingResponse = await injectControlApi(app, {
+      method: "GET",
+      url: `/api/github/auth/device/${started.attemptId}`
+    });
+    assert.equal(pendingResponse.json<{ status: string }>().status, "pending");
+
+    const cancelResponse = await injectControlApi(app, {
+      method: "DELETE",
+      url: `/api/github/auth/device/${started.attemptId}`
+    });
+    assert.equal(cancelResponse.statusCode, 204);
+    assert.equal(githubRequestCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
     await app.close();
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -729,7 +790,6 @@ test("OAuth-first startup reports an actionable disconnected state without conta
 test("job controls cancel pending jobs, retry terminal jobs, and reject running cancellation", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "job-controls-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   process.env.MEMOREPO_JOB_CONCURRENCY = "1";
@@ -813,7 +873,6 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
 test("space-wide jobs serialize against other jobs of the same space", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "space-serialization-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   process.env.MEMOREPO_JOB_CONCURRENCY = "3";
@@ -881,7 +940,6 @@ test("space-wide jobs serialize against other jobs of the same space", async () 
 test("job runner marks abandoned running jobs failed on startup recovery", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "job-recovery-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -919,7 +977,6 @@ test("job runner marks abandoned running jobs failed on startup recovery", () =>
 test("GitHub repository resolution returns actionable SAML errors", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-saml-error-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -956,7 +1013,6 @@ test("GitHub repository resolution returns actionable SAML errors", async () => 
 test("filesystem reconciliation updates missing active clones", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "reconcile-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1009,7 +1065,6 @@ test("filesystem reconciliation updates missing active clones", () => {
 test("failed first snapshot does not activate a partial snapshot", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-first-failure-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1052,7 +1107,6 @@ test("failed first snapshot does not activate a partial snapshot", async () => {
 test("failed replacement snapshot keeps the previous active snapshot", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-replacement-failure-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1106,7 +1160,6 @@ test("failed replacement snapshot keeps the previous active snapshot", async () 
 test("space snapshots can be listed and pruned by retention", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-prune-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
   process.env.MEMOREPO_SNAPSHOT_RETENTION = "2";
@@ -1187,7 +1240,6 @@ test("space snapshots can be listed and pruned by retention", async () => {
 test("managed space deletion removes local artifacts and database records", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "delete-managed-space-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1288,7 +1340,6 @@ test("managed space deletion removes local artifacts and database records", asyn
 test("managed space deletion keeps files when its database transaction fails", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "delete-managed-space-rollback-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1318,7 +1369,6 @@ test("managed space deletion keeps files when its database transaction fails", a
 test("garbage collection removes failed snapshots, old jobs, stale indexes, and removed clone files", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "maintenance-gc-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1460,7 +1510,6 @@ test("garbage collection removes failed snapshots, old jobs, stale indexes, and 
 test("repository removal revokes the active snapshot before a replacement can be served", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-remove-revoke-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -1511,7 +1560,6 @@ test("repository removal revokes the active snapshot before a replacement can be
 test("MCP graph tools route multi-repo spaces through the CBM snapshot store", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "mcp-multi-repo-scope-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2650,7 +2698,6 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 test("empty spaces can be deleted with local MCP connections and tool stats", () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "delete-space-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2697,7 +2744,6 @@ test("empty spaces can be deleted with local MCP connections and tool stats", ()
 test("space API responses do not expose managed filesystem paths", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "public-space-contract-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2730,7 +2776,6 @@ test("space API responses do not expose managed filesystem paths", async () => {
 test("HTTP boundary rejects untrusted browser requests before mutations run", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "http-boundary-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2856,7 +2901,6 @@ test("HTTP boundary rejects untrusted browser requests before mutations run", as
 test("HTTP rate limits run before authentication and preserve CORS error details", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "http-rate-limit-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2897,7 +2941,6 @@ test("HTTP rate limits run before authentication and preserve CORS error details
 test("route errors return actionable messages", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "route-errors-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2926,7 +2969,6 @@ test("route errors return actionable messages", async () => {
 test("unknown resources return 404 and invalid payloads return readable 400 messages", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "error-mapping-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -2967,7 +3009,6 @@ test("unknown resources return 404 and invalid payloads return readable 400 mess
 test("job event stream replays events over SSE with CORS headers for the dashboard origin", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "job-events-sse-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
@@ -3008,7 +3049,6 @@ test("job event stream replays events over SSE with CORS headers for the dashboa
 test("GitHub status route reports invalid credentials without failing the request", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-status-"));
-  process.env.GH_TOKEN = "test-token";
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 

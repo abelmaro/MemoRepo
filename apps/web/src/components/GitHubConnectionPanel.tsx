@@ -157,7 +157,6 @@ export function GitHubConnectionPanel() {
               disabled={
                 connectMutation.isPending ||
                 connectionQuery.isPending ||
-                connection?.enabled === false ||
                 connection?.configured === false
               }
             >
@@ -194,15 +193,13 @@ export function GitHubConnectionPanel() {
               </span>
             </div>
           </div>
-        ) : connection && (!connection.enabled || !connection.configured) ? (
+        ) : connection && !connection.configured ? (
           <div className="diagnostics-warning" role="alert">
-            {!connection.enabled
-              ? "GitHub OAuth is not enabled for this installation."
-              : "Configure the public GitHub OAuth client ID before connecting."}
+            Configure the public GitHub OAuth client ID before connecting.
           </div>
         ) : (
           <p className="github-connection-copy">
-            Authorize MemoRepo in GitHub without creating or storing a personal access token in your environment.
+            Authorize MemoRepo directly in GitHub without storing a manually generated credential in your environment.
           </p>
         )}
 
@@ -324,7 +321,6 @@ export function GitHubConnectionPanel() {
 function connectionSummary(connection: GitHubConnectionStatus | undefined, pending: boolean): string {
   if (pending) return "Checking connection…";
   if (!connection) return "Connection unavailable";
-  if (!connection.enabled) return "OAuth disabled";
   if (!connection.configured) return "OAuth client not configured";
   if (!connection.connected) return "Not connected";
   return `Connected as @${connection.viewer?.login ?? "unknown"}`;

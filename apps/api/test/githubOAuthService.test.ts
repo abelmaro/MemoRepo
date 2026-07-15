@@ -23,7 +23,7 @@ test("device flow starts once and does not expose the private device code", asyn
       interval: 5
     });
   };
-  const service = new GitHubOAuthService("client-id", true, memoryStore(), {
+  const service = new GitHubOAuthService("client-id", memoryStore(), {
     fetch: fetchStub as typeof fetch,
     now: () => Date.parse("2026-07-15T12:00:00.000Z"),
     createAttemptId: () => "gha_test-attempt"
@@ -61,7 +61,7 @@ test("device flow honors pending and slow-down intervals before storing a verifi
     { access_token: "gho_verified-secret", token_type: "bearer", scope: "repo" },
     { id: 42, login: "octocat", name: "The Octocat", avatar_url: "https://avatars.example/octocat" }
   ];
-  const service = new GitHubOAuthService("client-id", true, store, {
+  const service = new GitHubOAuthService("client-id", store, {
     fetch: (async () => jsonResponse(responses.shift())) as typeof fetch,
     now: () => now,
     createAttemptId: () => "gha_test-attempt"
@@ -100,7 +100,7 @@ test("device flow rejects missing scope and unknown attempts", async () => {
     },
     { access_token: "gho_under-scoped", token_type: "bearer", scope: "" }
   ];
-  const service = new GitHubOAuthService("client-id", true, memoryStore(), {
+  const service = new GitHubOAuthService("client-id", memoryStore(), {
     fetch: (async () => jsonResponse(responses.shift())) as typeof fetch,
     now: () => now,
     createAttemptId: () => "gha_test-attempt"
@@ -132,7 +132,7 @@ test("device flow reaches terminal states for denial, local cancellation, and ex
     },
     { error: "access_denied" }
   ];
-  const deniedService = new GitHubOAuthService("client-id", true, memoryStore(), {
+  const deniedService = new GitHubOAuthService("client-id", memoryStore(), {
     fetch: (async () => jsonResponse(deniedResponses.shift())) as typeof fetch,
     now: () => now,
     createAttemptId: () => "gha_denied-attempt"
@@ -144,7 +144,7 @@ test("device flow reaches terminal states for denial, local cancellation, and ex
     error: "GitHub authorization was denied"
   });
 
-  const cancelledService = new GitHubOAuthService("client-id", true, memoryStore(), {
+  const cancelledService = new GitHubOAuthService("client-id", memoryStore(), {
     fetch: (async () =>
       jsonResponse({
         device_code: "private-device-code",
@@ -163,7 +163,7 @@ test("device flow reaches terminal states for denial, local cancellation, and ex
     error: "GitHub authorization was cancelled locally"
   });
 
-  const expiredService = new GitHubOAuthService("client-id", true, memoryStore(), {
+  const expiredService = new GitHubOAuthService("client-id", memoryStore(), {
     fetch: (async () =>
       jsonResponse({
         device_code: "private-device-code",
@@ -183,13 +183,9 @@ test("device flow reaches terminal states for denial, local cancellation, and ex
   });
 });
 
-test("device flow requires an enabled and configured OAuth client", async () => {
+test("device flow requires a configured OAuth client", async () => {
   await assert.rejects(
-    () => new GitHubOAuthService("client-id", false, memoryStore()).startDeviceAuthorization(),
-    (error: unknown) => error instanceof GitHubOAuthRequestError && error.statusCode === 409
-  );
-  await assert.rejects(
-    () => new GitHubOAuthService(null, true, memoryStore()).startDeviceAuthorization(),
+    () => new GitHubOAuthService(null, memoryStore()).startDeviceAuthorization(),
     (error: unknown) => error instanceof GitHubOAuthRequestError && error.statusCode === 503
   );
 });

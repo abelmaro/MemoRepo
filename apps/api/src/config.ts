@@ -6,9 +6,7 @@ export interface AppConfig {
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
-  githubToken: string | null;
   githubOAuthClientId: string | null;
-  githubOAuthEnabled: boolean;
   memorepoHome: string;
   secretsDir: string;
   githubCredentialKeyPath: string;
@@ -41,20 +39,6 @@ function positiveIntEnv(name: string, fallback: number): number {
     return fallback;
   }
   return value;
-}
-
-function booleanEnv(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]?.trim().toLowerCase();
-  if (!raw) {
-    return fallback;
-  }
-  if (["1", "true", "yes", "on"].includes(raw)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(raw)) {
-    return false;
-  }
-  throw new Error(`${name} must be a boolean value`);
 }
 
 export function corsOrigins(config: AppConfig): string[] {
@@ -96,9 +80,7 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
-    githubToken: process.env.GH_TOKEN?.trim() || null,
     githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || null,
-    githubOAuthEnabled: booleanEnv("MEMOREPO_GITHUB_OAUTH_ENABLED", true),
     memorepoHome,
     secretsDir,
     githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),

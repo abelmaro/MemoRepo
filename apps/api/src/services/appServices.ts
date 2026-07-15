@@ -23,14 +23,9 @@ export function createServices() {
     database,
     new CredentialCipher(config.githubCredentialKeyPath)
   );
-  const githubCredentials = new GitHubCredentialProvider(
-    githubCredentialStore,
-    config.githubOAuthEnabled,
-    config.githubToken
-  );
+  const githubCredentials = new GitHubCredentialProvider(githubCredentialStore);
   const githubOAuth = new GitHubOAuthService(
     config.githubOAuthClientId,
-    config.githubOAuthEnabled,
     githubCredentialStore
   );
   const github = new GitHubService(database, githubCredentials);

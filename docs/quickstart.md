@@ -2,7 +2,20 @@
 
 This guide takes a local user from a clean checkout to a working read-only MCP connection.
 
-## 1. Prepare Runtime
+## 1. Register A GitHub OAuth App
+
+In GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App** and register one app for this MemoRepo installation:
+
+- **Application name:** a recognizable name such as `MemoRepo Local`
+- **Homepage URL:** `http://127.0.0.1:5173`
+- **Authorization callback URL:** `http://127.0.0.1:5173`
+- **Enable Device Flow:** checked
+
+The callback field is required when registering the app, but MemoRepo's Device Flow does not redirect to it. Copy the app's **Client ID** after registration. MemoRepo does not use the Client Secret.
+
+Only authorize a device code that you initiated from your local MemoRepo dashboard, and verify the expected application name on GitHub before approving it. GitHub documents the registration steps in [Creating an OAuth app](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) and the protocol in [Authorizing OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
+
+## 2. Prepare Runtime
 
 Install Docker Desktop or Docker Engine.
 
@@ -24,10 +37,10 @@ PowerShell 7:
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 ```
 
-Edit `.env` and set both secrets:
+Edit `.env` and set the public OAuth Client ID plus the local control secret:
 
 ```bash
-GH_TOKEN=your-github-token
+GITHUB_OAUTH_CLIENT_ID=your-oauth-client-id
 MEMOREPO_CONTROL_TOKEN=your-random-control-token
 ```
 
@@ -37,7 +50,7 @@ On Linux, create the `MEMOREPO_HOME` directory yourself before the first `docker
 
 Keep `MEMOREPO_API_CONTAINER_NAME=memorepo-api` unless you also change `container_name` in `docker-compose.yml`.
 
-## 2. Start MemoRepo
+## 3. Start MemoRepo
 
 ```bash
 docker compose up --build
@@ -51,26 +64,28 @@ http://127.0.0.1:5173
 
 Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it only in `sessionStorage` for that browser tab.
 
-The dashboard preflight panel should show the local runtime checks. Fix failed checks before adding repositories.
+The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; a GitHub connection warning is expected until the next step.
 
-## 3. Check GitHub Access
+## 4. Connect GitHub
 
-Use the GitHub access panel to confirm:
+Open **System health**, choose **Connect GitHub**, and follow the modal:
 
-- the token is accepted;
-- repositories are visible;
-- organization repositories are visible when expected;
-- SAML SSO warnings are resolved for protected organizations.
+- copy the one-time user code;
+- open GitHub's official device page from the modal;
+- confirm the expected OAuth App and requested `repo` scope;
+- approve the code and return to MemoRepo.
 
-If repositories are missing, authorize the token for the relevant organization SSO flow or adjust the token scopes.
+MemoRepo validates the GitHub profile before storing the credential and automatically queues the first repository sync. The connection panel then shows the account, granted scopes, and visible repository counts.
 
-## 4. Sync Repositories
+If organization repositories are missing, review the organization's OAuth App policy and complete any required SAML SSO authorization. The OAuth scope cannot grant access the connected GitHub user does not already have.
 
-Click `Sync GitHub`.
+## 5. Sync Repositories
+
+The first sync starts after connection. Use `Sync GitHub` later whenever you want to refresh the repository catalog.
 
 MemoRepo stores repository metadata in SQLite. It does not clone repositories during this sync; cloning starts when a repository is added to a space.
 
-## 5. Create A Space
+## 6. Create A Space
 
 Click `New Space` and choose a name that matches the agent context you want, such as:
 
@@ -80,7 +95,7 @@ analytics
 
 A space isolates repository membership, snapshots, and MCP connections.
 
-## 6. Add A Repository
+## 7. Add A Repository
 
 Click `Add repo`.
 
@@ -93,7 +108,7 @@ https://github.com/owner/repo
 
 MemoRepo will enqueue jobs to clone, checkout, index, and build the first space snapshot. Open the job log to follow progress.
 
-## 7. Connect An Agent
+## 8. Connect An Agent
 
 Click `Connect agent`.
 
@@ -107,7 +122,7 @@ docker exec -i -e MEMOREPO_MCP_TOKEN=... memorepo-api node /app/dist/cli/mcp.js 
 
 For HTTP clients, use the local endpoint and bearer token shown in the config.
 
-## 8. Recommended Agent Workflow
+## 9. Recommended Agent Workflow
 
 For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 
@@ -121,13 +136,19 @@ When using the MCP server from an agent:
 
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
-## 9. When Something Fails
+## 10. When Something Fails
 
-Use the preflight panel first. It checks GitHub token presence, GitHub access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
+Use the preflight panel first. It checks OAuth App configuration, GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
 
 Then open the failed job log. Job logs usually contain the failing GitHub, Git, indexing, or snapshot operation.
 
-## 10. Keep Local State Tidy
+## 11. Manage Or Revoke GitHub Access
+
+**Disconnect locally** deletes MemoRepo's encrypted credential while keeping existing clones, indexes, and snapshots available. It does not revoke the authorization at GitHub. Use **Manage authorization on GitHub** in the connection panel to review or revoke the OAuth App itself.
+
+If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key is no longer available and you must reconnect GitHub. Back up the data directory and secrets volume together if you need restorable credentials.
+
+## 12. Keep Local State Tidy
 
 Use the `Data lifecycle` panel inside a space to:
 
@@ -144,7 +165,7 @@ MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
 ```
 
-## 11. Manage Jobs
+## 13. Manage Jobs
 
 Recent jobs are shown at the bottom of the dashboard. Open a job to inspect logs, dependencies, and dependent jobs.
 

@@ -21,7 +21,7 @@ describe("GitHubConnectionPanel", () => {
   it("starts device authorization without exposing the private device code", async () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/github/auth/status") {
-        return Promise.resolve({ enabled: true, configured: true, connected: false });
+        return Promise.resolve({ configured: true, connected: false });
       }
       if (path === "/api/github/auth/device" && init?.method === "POST") {
         return Promise.resolve({
@@ -57,7 +57,6 @@ describe("GitHubConnectionPanel", () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/github/auth/status") {
         return Promise.resolve({
-          enabled: true,
           configured: true,
           connected: true,
           viewer: {

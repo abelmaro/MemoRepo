@@ -73,7 +73,6 @@ export type DeviceAuthorizationStatus =
   | { status: "denied" | "expired" | "failed"; error: string };
 
 export interface GitHubOAuthConnectionStatus {
-  enabled: boolean;
   configured: boolean;
   connected: boolean;
   viewer?: PublicGitHubViewer;
@@ -108,7 +107,6 @@ export class GitHubOAuthService {
 
   constructor(
     private readonly clientId: string | null,
-    private readonly enabled: boolean,
     private readonly credentialStore: GitHubCredentialWriter,
     options: GitHubOAuthServiceOptions = {}
   ) {
@@ -229,7 +227,6 @@ export class GitHubOAuthService {
   connectionStatus(): GitHubOAuthConnectionStatus {
     const metadata = this.credentialStore.getMetadata();
     return {
-      enabled: this.enabled,
       configured: Boolean(this.clientId),
       connected: Boolean(metadata),
       ...(this.clientId
@@ -245,9 +242,6 @@ export class GitHubOAuthService {
   }
 
   private assertAvailable(): void {
-    if (!this.enabled) {
-      throw new GitHubOAuthRequestError("GitHub OAuth authentication is not enabled", 409);
-    }
     if (!this.clientId) {
       throw new GitHubOAuthRequestError("GitHub OAuth client ID is not configured", 503);
     }
@@ -411,7 +405,7 @@ function publicStatus(attempt: DeviceAuthorizationAttempt): DeviceAuthorizationS
   };
 }
 
-function connectionDetails(metadata: GitHubCredentialMetadata): Omit<GitHubOAuthConnectionStatus, "enabled" | "configured" | "connected"> {
+function connectionDetails(metadata: GitHubCredentialMetadata): Omit<GitHubOAuthConnectionStatus, "configured" | "connected"> {
   return {
     viewer: {
       id: metadata.githubUserId,
