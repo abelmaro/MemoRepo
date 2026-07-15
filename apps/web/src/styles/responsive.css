@@ -152,6 +152,15 @@
     width: 100%;
   }
 
+  .system-alert {
+    flex-wrap: wrap;
+  }
+
+  .system-alert > .primary-button {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
   .repo-section-header,
   .management-header,
   .modal-intro,

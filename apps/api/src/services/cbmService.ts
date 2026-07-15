@@ -37,8 +37,7 @@ export class CbmService {
       args: ["--version"],
       env: createCbmEnvironment(),
       inheritEnv: false,
-      timeoutMs: 30_000,
-      sensitiveValues: [this.config.githubToken]
+      timeoutMs: 30_000
     });
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || "codebase-memory-mcp --version failed");
@@ -111,7 +110,7 @@ export class CbmService {
       return existing;
     }
 
-    const session = new CbmMcpSession(cacheDir, [this.config.githubToken], () => {
+    const session = new CbmMcpSession(cacheDir, [], () => {
       if (this.sessions.get(key) === session) {
         this.sessions.delete(key);
       }
@@ -130,7 +129,6 @@ export class CbmService {
       env: createCbmEnvironment(cacheDir),
       inheritEnv: false,
       timeoutMs: options.timeoutMs,
-      sensitiveValues: [this.config.githubToken],
       onOutput: options.onOutput
     });
 

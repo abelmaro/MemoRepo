@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AppConfig } from "../config.js";
 import { assertInside } from "../domain/paths.js";
 import { createSafeProcessEnvironment, runProcess } from "./process.js";
+import type { GitHubCredentialProvider } from "./githubCredentialProvider.js";
 
 export interface GitCommandContext {
   cwd?: string | undefined;
@@ -18,7 +19,10 @@ export interface RemoteBranchState {
 export class GitService {
   private askPassPath: string | null = null;
 
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly credentials: GitHubCredentialProvider
+  ) {}
 
   async cloneRepository(remoteUrl: string, targetPath: string, context: GitCommandContext = {}): Promise<void> {
     const safeTarget = assertInside(this.config.memorepoHome, targetPath);
@@ -100,18 +104,19 @@ export class GitService {
 
   private async git(args: string[], context: GitCommandContext) {
     const askPassPath = this.ensureAskPass();
+    const accessToken = this.credentials.getAccessToken();
     const result = await runProcess({
       command: "git",
       args,
       cwd: context.cwd,
       timeoutMs: context.timeoutMs,
-      sensitiveValues: [this.config.githubToken],
+      sensitiveValues: [accessToken],
       onOutput: context.onOutput,
       env: {
         ...createSafeProcessEnvironment(),
         GIT_ASKPASS: askPassPath,
         GIT_TERMINAL_PROMPT: "0",
-        GH_TOKEN: this.config.githubToken
+        MEMOREPO_GIT_CREDENTIAL: accessToken
       },
       inheritEnv: false
     });
@@ -141,7 +146,7 @@ export class GitService {
         "#!/bin/sh",
         "case \"$1\" in",
         "  *Username*) printf '%s\\n' 'x-access-token' ;;",
-        "  *) printf '%s\\n' \"$GH_TOKEN\" ;;",
+        "  *) printf '%s\\n' \"$MEMOREPO_GIT_CREDENTIAL\" ;;",
         "esac",
         ""
       ].join("\n"),

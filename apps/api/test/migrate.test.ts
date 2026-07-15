@@ -11,6 +11,8 @@ test("migrate creates and versions a new database", () => {
     assert.equal(schemaVersion(sqlite), CURRENT_SCHEMA_VERSION);
     assert.ok(tableNames(sqlite).has("spaces"));
     assert.ok(tableNames(sqlite).has("jobs"));
+    assert.ok(tableNames(sqlite).has("github_oauth_credentials"));
+    assert.ok(columnNames(sqlite, "github_oauth_credentials").has("token_ciphertext"));
     assert.ok(columnNames(sqlite, "jobs").has("deduplication_key"));
     assert.ok(indexNames(sqlite).has("jobs_active_deduplication_unique"));
   } finally {

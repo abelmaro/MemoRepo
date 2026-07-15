@@ -59,14 +59,15 @@ RUN apt-get update \
 COPY --from=cbm /codebase-memory-mcp /usr/local/bin/codebase-memory-mcp
 COPY --from=build --chown=node:node /opt/memorepo-api /app
 
-RUN mkdir -p /var/lib/memorepo \
-  && chown node:node /var/lib/memorepo \
+RUN mkdir -p /var/lib/memorepo /var/lib/memorepo-secrets \
+  && chown node:node /var/lib/memorepo /var/lib/memorepo-secrets \
   && git config --system --add safe.directory '/var/lib/memorepo/spaces/*'
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV MEMOREPO_HOME=/var/lib/memorepo
+ENV MEMOREPO_SECRETS_DIR=/var/lib/memorepo-secrets
 
 EXPOSE 8787
 

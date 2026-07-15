@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertCircle, CheckCircle2, GitBranch, Loader2, Plus } from "lucide-react";
+import { Activity, AlertCircle, CheckCircle2, GitBranch, Github, Loader2, Plus } from "lucide-react";
 import { api, type McpConnection, type Space, type SpaceRepository } from "../lib/api";
 import type { SnapshotStateSummary } from "../lib/snapshotState";
 import { QueryErrorState } from "./QueryErrorState";
@@ -17,6 +17,7 @@ interface StatusStripProps {
   snapshotSummary: SnapshotStateSummary;
   onConnectAgent: () => void;
   onAddRepository: () => void;
+  onSignInGitHub: () => void;
   onOpenSnapshotJob: (jobId: string) => void;
   operationsDisabled: boolean;
 }
@@ -28,6 +29,7 @@ export function StatusStrip({
   snapshotSummary,
   onConnectAgent,
   onAddRepository,
+  onSignInGitHub,
   onOpenSnapshotJob,
   operationsDisabled,
 }: StatusStripProps) {
@@ -48,8 +50,9 @@ export function StatusStrip({
   const updatingRepositoryCount = repositories.filter((repository) =>
     [repository.clone_status, repository.index_status].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status.toLowerCase()))
   ).length;
+  const githubDisconnected = systemQuery.data?.github.connected === false;
   const systemProblems = [
-    systemQuery.data && !systemQuery.data.github.connected ? systemQuery.data.github.error ?? "GitHub is not connected." : null,
+    githubDisconnected ? "GitHub isn't connected. Sign in to sync repositories." : null,
     systemQuery.data && !systemQuery.data.codebaseMemory.installed ? systemQuery.data.codebaseMemory.error ?? "codebase-memory-mcp is unavailable." : null
   ].filter(Boolean) as string[];
 
@@ -154,10 +157,16 @@ export function StatusStrip({
       {systemProblems.length > 0 ? (
         <div className="system-alert" role="alert">
           <AlertCircle size={18} />
-          <div>
+          <div className="system-alert-copy">
             <strong>System setup needs attention</strong>
             <span>{systemProblems.join(" ")}</span>
           </div>
+          {githubDisconnected ? (
+            <button className="primary-button compact-button" type="button" onClick={onSignInGitHub}>
+              <Github size={16} />
+              <span>Sign in with GitHub</span>
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>

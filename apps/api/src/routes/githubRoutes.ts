@@ -2,6 +2,30 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 export async function githubRoutes(app: FastifyInstance) {
+  app.get("/api/github/auth/status", async () => {
+    return app.services.githubOAuth.connectionStatus();
+  });
+
+  app.post("/api/github/auth/device", async () => {
+    return app.services.githubOAuth.startDeviceAuthorization();
+  });
+
+  app.get("/api/github/auth/device/:attemptId", async (request) => {
+    const params = z.object({ attemptId: z.string().min(8).max(128) }).parse(request.params);
+    return app.services.githubOAuth.getDeviceAuthorizationStatus(params.attemptId);
+  });
+
+  app.delete("/api/github/auth/device/:attemptId", async (request, reply) => {
+    const params = z.object({ attemptId: z.string().min(8).max(128) }).parse(request.params);
+    app.services.githubOAuth.cancelDeviceAuthorization(params.attemptId);
+    return reply.code(204).send();
+  });
+
+  app.delete("/api/github/auth", async (_request, reply) => {
+    app.services.githubOAuth.disconnect();
+    return reply.code(204).send();
+  });
+
   app.get("/api/github/status", async () => {
     return app.services.github
       .getViewer()

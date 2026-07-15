@@ -1,13 +1,19 @@
 import path from "node:path";
 import { ensurePrivateDir, initializePrivateFileCreation } from "./domain/permissions.js";
 
+// GitHub OAuth Client IDs are public identifiers. Official MemoRepo builds ship this value so
+// end users can authorize GitHub without registering an application or editing their environment.
+export const MEMOREPO_GITHUB_OAUTH_CLIENT_ID = "Ov23libToTurEq9tXh9c";
+
 export interface AppConfig {
   apiHost: string;
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
-  githubToken: string;
+  githubOAuthClientId: string;
   memorepoHome: string;
+  secretsDir: string;
+  githubCredentialKeyPath: string;
   dataDir: string;
   spacesDir: string;
   indexesDir: string;
@@ -25,14 +31,6 @@ export interface AppConfig {
 
 function absolutePath(input: string): string {
   return path.isAbsolute(input) ? input : path.resolve(process.cwd(), input);
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim().length === 0) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
 }
 
 function positiveIntEnv(name: string, fallback: number): number {
@@ -54,6 +52,7 @@ export function corsOrigins(config: AppConfig): string[] {
 export function loadConfig(): AppConfig {
   initializePrivateFileCreation();
   const memorepoHome = absolutePath(process.env.MEMOREPO_HOME ?? ".memorepo");
+  const secretsDir = absolutePath(process.env.MEMOREPO_SECRETS_DIR ?? path.join(memorepoHome, "secrets"));
   const dataDir = path.join(memorepoHome, "data");
   const spacesDir = path.join(memorepoHome, "spaces");
   const indexesDir = path.join(memorepoHome, "indexes");
@@ -65,6 +64,7 @@ export function loadConfig(): AppConfig {
 
   for (const dir of [
     memorepoHome,
+    secretsDir,
     dataDir,
     spacesDir,
     indexesDir,
@@ -84,8 +84,10 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
-    githubToken: requiredEnv("GH_TOKEN"),
+    githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || MEMOREPO_GITHUB_OAUTH_CLIENT_ID,
     memorepoHome,
+    secretsDir,
+    githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),
     dataDir,
     spacesDir,
     indexesDir,

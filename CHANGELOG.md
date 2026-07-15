@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-15
+
+### Added
+
+- Add dashboard-driven GitHub OAuth Device Flow with one active local account, connection status, automatic repository sync, local disconnect, and a direct link to review or revoke the authorization on GitHub.
+- Add authenticated, encrypted storage for the GitHub OAuth access token with a separate persistent encryption-key volume.
+- Include MemoRepo's public OAuth Client ID so users can authorize the official integration without registering an application or configuring GitHub credentials.
+
+### Changed
+
+- **Breaking:** Remove manual GitHub token authentication. Existing installations must update MemoRepo, restart it, and sign in with GitHub from **System health**; no GitHub environment credential is required.
+- Route GitHub REST and Git operations through the stored OAuth credential and allow the application to start safely before an account is connected.
+- Report account connection, granted scopes, visible repositories, and organization policy warnings through system preflight.
+
+### Security
+
+- Keep the private device code in API memory, validate the authorized GitHub identity before persistence, encrypt the access token with AES-256-GCM, and avoid exposing credentials in API responses, logs, Git remotes, CBM subprocesses, or generated MCP configs.
+
 ## [0.1.9] - 2026-07-12
 
 ### Changed
@@ -121,7 +139,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Security
 
 - Verify the SHA-256 digest of downloaded `codebase-memory-mcp` archives before extraction.
-- Prevent CBM child processes from inheriting `GH_TOKEN` and unrelated environment secrets.
+- Prevent CBM child processes from inheriting GitHub credentials and unrelated environment secrets.
 
 ## [0.1.1] - 2026-07-09
 

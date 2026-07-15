@@ -3,6 +3,9 @@ import { loadConfig } from "../config.js";
 import { createDatabase } from "../db/connection.js";
 import { CbmService } from "./cbmService.js";
 import { GitService } from "./gitService.js";
+import { GitHubCredentialProvider } from "./githubCredentialProvider.js";
+import { CredentialCipher, GitHubCredentialStore } from "./githubCredentialStore.js";
+import { GitHubOAuthService } from "./githubOAuthService.js";
 import { GitHubService } from "./githubService.js";
 import { JobRunner } from "./jobRunner.js";
 import { McpGateway } from "./mcpGateway.js";
@@ -16,8 +19,17 @@ export type AppServices = ReturnType<typeof createServices>;
 export function createServices() {
   const config = loadConfig();
   const database = createDatabase(config);
-  const github = new GitHubService(database, config);
-  const git = new GitService(config);
+  const githubCredentialStore = new GitHubCredentialStore(
+    database,
+    new CredentialCipher(config.githubCredentialKeyPath)
+  );
+  const githubCredentials = new GitHubCredentialProvider(githubCredentialStore);
+  const githubOAuth = new GitHubOAuthService(
+    config.githubOAuthClientId,
+    githubCredentialStore
+  );
+  const github = new GitHubService(database, githubCredentials);
+  const git = new GitService(config, githubCredentials);
   const cbm = new CbmService(config);
   const spaces = new SpaceService(database, config, cbm);
   const snapshots = new SnapshotService(database, config, cbm);
@@ -28,7 +40,22 @@ export function createServices() {
 
   operations.registerJobHandlers();
 
-  return { config, database, github, git, cbm, spaces, snapshots, jobs, operations, mcp, maintenance };
+  return {
+    config,
+    database,
+    githubCredentialStore,
+    githubCredentials,
+    githubOAuth,
+    github,
+    git,
+    cbm,
+    spaces,
+    snapshots,
+    jobs,
+    operations,
+    mcp,
+    maintenance
+  };
 }
 
 declare module "fastify" {

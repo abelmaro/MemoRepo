@@ -33,6 +33,20 @@ export const githubRepositories = sqliteTable("github_repositories", {
   updatedAt: text("updated_at").notNull()
 });
 
+export const githubOauthCredentials = sqliteTable("github_oauth_credentials", {
+  id: text("id").primaryKey(),
+  githubUserId: integer("github_user_id").notNull(),
+  login: text("login").notNull(),
+  name: text("name"),
+  avatarUrl: text("avatar_url").notNull(),
+  tokenCiphertext: text("token_ciphertext").notNull(),
+  tokenType: text("token_type").notNull(),
+  scopesJson: text("scopes_json").notNull(),
+  connectedAt: text("connected_at").notNull(),
+  lastValidatedAt: text("last_validated_at"),
+  updatedAt: text("updated_at").notNull()
+});
+
 export const spaceRepositories = sqliteTable(
   "space_repositories",
   {
@@ -173,6 +187,7 @@ export const mcpToolStats = sqliteTable(
 
 export const databaseTables = {
   spaces,
+  github_oauth_credentials: githubOauthCredentials,
   github_repositories: githubRepositories,
   space_repositories: spaceRepositories,
   repo_indexes: repoIndexes,
@@ -185,6 +200,7 @@ export const databaseTables = {
 
 export const schema = {
   spaces,
+  githubOauthCredentials,
   githubRepositories,
   spaceRepositories,
   repoIndexes,

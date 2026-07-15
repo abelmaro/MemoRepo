@@ -1,16 +1,13 @@
-import type { AppConfig } from "../config.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { createId } from "../domain/ids.js";
 import { parseGitHubRepositoryLocator, type GitHubRepositoryInput } from "../domain/github.js";
 import { nowIso } from "../domain/time.js";
 import type { AppDatabase } from "../db/connection.js";
+import type { GitHubCredentialProvider } from "./githubCredentialProvider.js";
 
 interface GitHubOwnerPayload {
   login: string;
-}
-
-interface GitHubOrganizationPayload {
-  login: string;
+  type?: string;
 }
 
 interface GitHubRepositoryPayload {
@@ -68,11 +65,13 @@ interface GitHubAccessDiagnostics {
 export class GitHubService {
   constructor(
     private readonly database: AppDatabase,
-    private readonly config: AppConfig
+    private readonly credentials: GitHubCredentialProvider
   ) {}
 
   async getViewer(): Promise<GitHubUserPayload> {
-    return this.request<GitHubUserPayload>("https://api.github.com/user");
+    const viewer = await this.request<GitHubUserPayload>("https://api.github.com/user");
+    this.credentials.markValidated();
+    return viewer;
   }
 
   async syncRepositories(): Promise<GitHubSyncResult> {
@@ -88,6 +87,7 @@ export class GitHubService {
   async diagnoseAccess(): Promise<GitHubAccessDiagnostics> {
     const viewerResponse = await this.fetch("https://api.github.com/user");
     const viewer = (await viewerResponse.json()) as GitHubUserPayload;
+    this.credentials.markValidated();
     const collection = await this.collectVisibleRepositories();
 
     return {
@@ -123,40 +123,20 @@ export class GitHubService {
       repositoriesById.set(repository.id, repository);
     }
 
-    const organizations = await this.paginate<GitHubOrganizationPayload>("https://api.github.com/user/orgs?per_page=100");
-    const organizationAccess: GitHubOrganizationAccess[] = [];
-    if (userRepositories.length === 0 && organizations.length === 0) {
-      warnings.push(
-        "GitHub token authenticated but exposes no repositories or organizations; check repo scope, organization access, and SAML SSO authorization."
-      );
-    }
-
-    for (const organization of organizations) {
-      try {
-        const organizationRepositories = await this.paginate<GitHubRepositoryPayload>(
-          `https://api.github.com/orgs/${encodeURIComponent(organization.login)}/repos?per_page=100&type=all&sort=full_name`
-        );
-        for (const repository of organizationRepositories) {
-          repositoriesById.set(repository.id, repository);
-        }
-        organizationAccess.push({
-          login: organization.login,
-          status: "visible",
-          repositoryCount: organizationRepositories.length
-        });
-      } catch (error) {
-        if (error instanceof GitHubRequestError && [403, 404].includes(error.status)) {
-          organizationAccess.push({
-            login: organization.login,
-            status: "inaccessible",
-            repositoryCount: null,
-            error: error.message
-          });
-          warnings.push(`Skipped ${organization.login}: ${error.message}`);
-          continue;
-        }
-        throw error;
+    const organizationCounts = new Map<string, number>();
+    for (const repository of userRepositories) {
+      if (repository.owner.type === "Organization") {
+        organizationCounts.set(repository.owner.login, (organizationCounts.get(repository.owner.login) ?? 0) + 1);
       }
+    }
+    const organizationAccess: GitHubOrganizationAccess[] = [...organizationCounts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([login, repositoryCount]) => ({ login, status: "visible", repositoryCount }));
+
+    if (userRepositories.length === 0) {
+      warnings.push(
+        "GitHub authenticated successfully but no repositories are visible; review the repo scope, organization OAuth policy, and SAML SSO authorization."
+      );
     }
 
     const repositories = [...repositoriesById.values()].sort((left, right) => left.full_name.localeCompare(right.full_name));
@@ -248,7 +228,10 @@ export class GitHubService {
 
     while (nextUrl) {
       const response = await this.fetch(nextUrl);
-      const body = (await response.json()) as T[];
+      const body = await response.json();
+      if (!Array.isArray(body)) {
+        throw new Error("GitHub returned an invalid paginated response");
+      }
       results.push(...body);
       nextUrl = parseNextLink(response.headers.get("link"));
     }
@@ -262,10 +245,11 @@ export class GitHubService {
   }
 
   private async fetch(url: string): Promise<Response> {
+    const accessToken = this.credentials.getAccessToken();
     const response = await fetch(url, {
       headers: {
         accept: "application/vnd.github+json",
-        authorization: `Bearer ${this.config.githubToken}`,
+        authorization: `Bearer ${accessToken}`,
         "x-github-api-version": "2022-11-28",
         "user-agent": "MemoRepo"
       }
@@ -273,6 +257,9 @@ export class GitHubService {
 
     if (!response.ok) {
       const body = await response.text();
+      if (response.status === 401) {
+        this.credentials.invalidateOAuthCredential();
+      }
       throw new GitHubRequestError(response.status, body);
     }
 
@@ -295,7 +282,7 @@ function formatGitHubError(status: number, body: string): string {
   const ssoUrl = parsed.ssoUrl;
 
   if (ssoUrl) {
-    return `GitHub request failed ${status}: ${message} Authorize this PAT for SAML SSO: ${ssoUrl}`;
+    return `GitHub request failed ${status}: ${message} Authorize this GitHub connection for SAML SSO: ${ssoUrl}`;
   }
 
   if (parsed.documentationUrl) {

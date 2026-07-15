@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 interface Migration {
   version: number;
@@ -11,6 +11,7 @@ const migrations: Migration[] = [
   { version: 1, up: createInitialSchema },
   { version: 2, up: addJobDeduplication },
   { version: 3, up: normalizeSnapshotStatuses },
+  { version: 4, up: addGitHubOAuthCredentials },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -205,6 +206,24 @@ function normalizeSnapshotStatuses(sqlite: Database.Database): void {
         FROM spaces
         WHERE spaces.active_snapshot_id = space_snapshots.id
       );
+  `);
+}
+
+function addGitHubOAuthCredentials(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS github_oauth_credentials (
+      id TEXT PRIMARY KEY,
+      github_user_id INTEGER NOT NULL,
+      login TEXT NOT NULL,
+      name TEXT,
+      avatar_url TEXT NOT NULL,
+      token_ciphertext TEXT NOT NULL,
+      token_type TEXT NOT NULL,
+      scopes_json TEXT NOT NULL,
+      connected_at TEXT NOT NULL,
+      last_validated_at TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 

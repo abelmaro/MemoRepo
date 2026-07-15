@@ -20,11 +20,11 @@ The Node workspaces can be run directly for development, but productive local us
 
 ## Configuration Contract
 
-MemoRepo expects these runtime inputs:
+MemoRepo accepts these runtime inputs:
 
-- `GH_TOKEN`: a GitHub personal access token used by the API container.
 - `MEMOREPO_CONTROL_TOKEN`: a 43-128-character URL-safe value generated from at least 32 random bytes, used to authenticate the local control API and unlock the dashboard.
 - `MEMOREPO_HOME`: the local state root for SQLite data, managed clones, indexes, logs, temporary files, and helper scripts.
+- `MEMOREPO_SECRETS_DIR`: the separate location for the local credential-encryption key. Docker Compose maps this to the `memorepo-secrets` named volume.
 - `API_PORT`: the local API port, defaulting to `8787`.
 - `MEMOREPO_PUBLIC_API_URL`: the base URL agents on the host use in generated HTTP MCP configs. Docker Compose derives it from `API_PORT`; set it manually only for unusual setups.
 - `WEB_PORT`: the local dashboard port, defaulting to `5173`.
@@ -35,6 +35,8 @@ MemoRepo expects these runtime inputs:
 - `MEMOREPO_JOB_RETENTION_DAYS`: the default age threshold for deleting terminal jobs during garbage collection, defaulting to `30`.
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
 - `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
+
+Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure GitHub credentials. Fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as an optional development override; no Client Secret is used.
 
 `MEMOREPO_HOME` defaults to `./.memorepo` for a simple first run. For regular use, place it outside the repository source tree.
 
@@ -47,7 +49,7 @@ Managed repository:
 A GitHub repository cloned by MemoRepo under `MEMOREPO_HOME`. The API owns this clone and may reset or clean it during checkout and reindex operations.
 
 GitHub repository record:
-The SQLite metadata MemoRepo stores for a repository visible to `GH_TOKEN`. It includes owner, name, visibility flags, default branch, and GitHub URLs.
+The SQLite metadata MemoRepo stores for a repository visible to the connected GitHub account. It includes owner, name, visibility flags, default branch, and GitHub URLs.
 
 Space repository:
 The membership record linking one GitHub repository to one space. It tracks local clone state, selected branch, selected commit, index state, branch list, and removal state.
@@ -72,7 +74,7 @@ A local token plus generated client configuration for one space. Tokens are stor
 
 ## What MemoRepo Does
 
-- Discovers GitHub repositories visible to `GH_TOKEN`.
+- Discovers GitHub repositories visible to the connected account and granted OAuth scope.
 - Creates local spaces that group repositories for agent context.
 - Clones repositories into MemoRepo-managed paths.
 - Checks out selected remote branches.
@@ -90,7 +92,7 @@ A local token plus generated client configuration for one space. Tokens are stor
 - It does not commit, push, merge, or open pull requests.
 - It does not provide a writable agent gateway.
 - It does not replace GitHub access control.
-- It does not manage GitHub tokens for users.
+- It does not create GitHub identities, bypass repository permissions, or override organization OAuth policies.
 - It does not host a public multi-user deployment by default.
 - It does not expose arbitrary filesystem browsing.
 - It does not guarantee a snapshot reflects remote changes until reindexing succeeds.
@@ -168,6 +170,8 @@ The important categories are:
 - `tmp`: temporary files.
 - `bin`: helper scripts such as `git-askpass.sh`.
 
+The GitHub access token is encrypted before it is stored in SQLite. Its randomly generated encryption key lives under `MEMOREPO_SECRETS_DIR`, outside `MEMOREPO_HOME` in the default Docker layout. A backup intended to preserve the connection must protect and restore both locations together; losing the key requires reconnecting GitHub.
+
 Repository and snapshot indexes can be regenerated. SQLite contains the durable operational record and should be backed up before destructive maintenance.
 
 Deleting a space through the managed-data flow removes that space's managed clones, snapshot artifacts, repository index artifacts, jobs, repository membership, local MCP connections, and the space record. It does not delete GitHub repositories.
@@ -182,7 +186,9 @@ The dashboard stores the control token only in the current tab's `sessionStorage
 
 API and dashboard responses set defensive content security, framing, referrer, content-type, and no-store cache policies. MemoRepo creates new private artifacts with a restrictive process umask and applies owner-only directory and database modes when the backing storage supports POSIX permissions. Docker Desktop bind mounts backed by Windows may not expose POSIX mode changes, so host access controls remain part of the local trust boundary.
 
-`GH_TOKEN` is used only by the API container. Git remotes are stored as clean HTTPS URLs, and credentials are injected through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus the Git credential variables required for that operation. CBM child processes use the same system allowlist without `GH_TOKEN`, Git credential environment variables, or unrelated application secrets.
+GitHub authorization uses OAuth Device Flow for the single local user. The private device code exists only in API memory while authorization is pending. After GitHub returns an access token, MemoRepo validates the user profile and stores the token encrypted with AES-256-GCM; the encryption key is generated locally with owner-only permissions where the host filesystem supports them. Official builds include the public OAuth App Client ID, and no Client Secret is used.
+
+Git remotes are stored as clean HTTPS URLs, and the decrypted credential is supplied ephemerally through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus only the credential variables required for that operation. CBM child processes receive no GitHub credential variables or unrelated application secrets. Disconnecting locally deletes the encrypted credential; revoking the OAuth authorization remains an explicit action in GitHub settings.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
 
