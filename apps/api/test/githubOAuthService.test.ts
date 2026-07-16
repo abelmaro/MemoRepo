@@ -121,6 +121,30 @@ test("device flow rejects missing scope and unknown attempts", async () => {
   assert.equal(service.connectionStatus().connected, false);
 });
 
+test("GH_TOKEN reports a connected state and prevents OAuth authorization", async () => {
+  let requested = false;
+  const service = new GitHubOAuthService(
+    "client-id",
+    memoryStore(),
+    {
+      fetch: (async () => {
+        requested = true;
+        return jsonResponse({});
+      }) as typeof fetch,
+      environmentTokenConfigured: true
+    }
+  );
+
+  assert.deepEqual(service.connectionStatus(), { authenticationMode: "token", connected: true });
+  await assert.rejects(
+    () => service.startDeviceAuthorization(),
+    (error: unknown) =>
+      error instanceof GitHubOAuthRequestError && error.statusCode === 409 && error.message.includes("GH_TOKEN")
+  );
+  assert.equal(requested, false);
+  assert.equal(service.disconnect(), false);
+});
+
 test("device flow reaches terminal states for denial, local cancellation, and expiry", async () => {
   let now = 1_000;
   const deniedResponses = [

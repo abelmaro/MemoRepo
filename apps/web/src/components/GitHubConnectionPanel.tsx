@@ -212,7 +212,9 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
   }
 
   const connection = connectionQuery.data;
-  const connected = connection?.connected === true && connection.viewer;
+  const connected = connection?.connected === true;
+  const connectedAccount = connected && connection.viewer;
+  const usesEnvironmentToken = connection?.authenticationMode === "token";
 
   return (
     <>
@@ -225,7 +227,7 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
               <span>{connectionSummary(connection, connectionQuery.isPending)}</span>
             </div>
           </div>
-          {connected ? (
+          {usesEnvironmentToken ? null : connectedAccount ? (
             <button className="secondary-button compact-button danger" type="button" onClick={() => setDisconnectOpen(true)}>
               <LogOut size={16} />
               <span>Disconnect</span>
@@ -251,7 +253,12 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
           />
         ) : null}
 
-        {connected ? (
+        {usesEnvironmentToken ? (
+          <div className="diagnostics-warning" role="status">
+            <strong>GH_TOKEN configured</strong>
+            <span>MemoRepo is using the token from the environment; OAuth sign-in is not required.</span>
+          </div>
+        ) : connectedAccount ? (
           <div className="github-account-card">
             <img src={connection.viewer!.avatarUrl} alt="" />
             <div>
@@ -288,7 +295,7 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
         {disconnectMutation.error ? <div className="inline-alert error">{errorMessage(disconnectMutation.error)}</div> : null}
         {feedback ? <div className="inline-alert" role="status">{feedback}</div> : null}
 
-        {connected && connection.manageAuthorizationUrl ? (
+        {connectedAccount && connection.manageAuthorizationUrl ? (
           <a
             className="text-button with-icon github-manage-link"
             href={connection.manageAuthorizationUrl}
@@ -360,7 +367,7 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
         </Modal>
       ) : null}
 
-      {disconnectOpen && connected ? (
+      {disconnectOpen && connectedAccount ? (
         <Modal title="Disconnect GitHub" onClose={() => !disconnectMutation.isPending && setDisconnectOpen(false)}>
           <div className="confirmation-dialog">
             <p>
@@ -399,6 +406,7 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
 function connectionSummary(connection: GitHubConnectionStatus | undefined, pending: boolean): string {
   if (pending) return "Checking connection…";
   if (!connection) return "Connection unavailable";
+  if (connection.authenticationMode === "token") return "Connected with GH_TOKEN";
   if (!connection.connected) return "Not connected";
   return `Connected as @${connection.viewer?.login ?? "unknown"}`;
 }

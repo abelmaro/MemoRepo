@@ -12,9 +12,15 @@ export class GitHubNotConnectedError extends Error {
 }
 
 export class GitHubCredentialProvider {
-  constructor(private readonly store: GitHubCredentialWriter) {}
+  constructor(
+    private readonly store: GitHubCredentialWriter,
+    private readonly environmentToken: string | null = null
+  ) {}
 
   getAccessToken(): string {
+    if (this.environmentToken) {
+      return this.environmentToken;
+    }
     const credential = this.store.get();
     if (!credential) {
       throw new GitHubNotConnectedError();
@@ -23,19 +29,28 @@ export class GitHubCredentialProvider {
   }
 
   getConnectionMetadata(): GitHubCredentialMetadata | null {
-    return this.store.getMetadata();
+    return this.environmentToken ? null : this.store.getMetadata();
   }
 
   getSensitiveValues(): string[] {
-    const accessToken = this.store.get()?.accessToken;
-    return accessToken ? [accessToken] : [];
+    return [
+      ...new Set(
+        [this.environmentToken, this.store.get()?.accessToken].filter((value): value is string => Boolean(value))
+      )
+    ];
+  }
+
+  usesEnvironmentToken(): boolean {
+    return Boolean(this.environmentToken);
   }
 
   markValidated(timestamp = new Date().toISOString()): void {
-    this.store.markValidated(timestamp);
+    if (!this.environmentToken) {
+      this.store.markValidated(timestamp);
+    }
   }
 
   invalidateOAuthCredential(): boolean {
-    return this.store.delete();
+    return this.environmentToken ? false : this.store.delete();
   }
 }

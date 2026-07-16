@@ -23,10 +23,11 @@ export function createServices() {
     database,
     new CredentialCipher(config.githubCredentialKeyPath)
   );
-  const githubCredentials = new GitHubCredentialProvider(githubCredentialStore);
+  const githubCredentials = new GitHubCredentialProvider(githubCredentialStore, config.githubToken);
   const githubOAuth = new GitHubOAuthService(
     config.githubOAuthClientId,
-    githubCredentialStore
+    githubCredentialStore,
+    { environmentTokenConfigured: githubCredentials.usesEnvironmentToken() }
   );
   const github = new GitHubService(database, githubCredentials);
   const git = new GitService(config, githubCredentials);

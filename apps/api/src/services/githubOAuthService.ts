@@ -73,6 +73,7 @@ export type DeviceAuthorizationStatus =
   | { status: "denied" | "expired" | "failed"; error: string };
 
 export interface GitHubOAuthConnectionStatus {
+  authenticationMode: "token" | "oauth";
   connected: boolean;
   viewer?: PublicGitHubViewer;
   scopes?: string[];
@@ -86,6 +87,7 @@ interface GitHubOAuthServiceOptions {
   now?: () => number;
   createAttemptId?: () => string;
   requestTimeoutMs?: number;
+  environmentTokenConfigured?: boolean;
 }
 
 export class GitHubOAuthRequestError extends Error {
@@ -103,6 +105,7 @@ export class GitHubOAuthService {
   private readonly now: () => number;
   private readonly createAttemptId: () => string;
   private readonly requestTimeoutMs: number;
+  private readonly environmentTokenConfigured: boolean;
 
   constructor(
     private readonly clientId: string,
@@ -113,9 +116,13 @@ export class GitHubOAuthService {
     this.now = options.now ?? Date.now;
     this.createAttemptId = options.createAttemptId ?? (() => `gha_${randomBytes(24).toString("base64url")}`);
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.environmentTokenConfigured = options.environmentTokenConfigured ?? false;
   }
 
   async startDeviceAuthorization(): Promise<DeviceAuthorizationStart> {
+    if (this.environmentTokenConfigured) {
+      throw new GitHubOAuthRequestError("GitHub is already configured with GH_TOKEN", 409);
+    }
     const now = this.now();
     if (this.activeAttempt?.status === "pending" && this.activeAttempt.expiresAt > now) {
       return this.publicStart(this.activeAttempt);
@@ -223,8 +230,12 @@ export class GitHubOAuthService {
   }
 
   connectionStatus(): GitHubOAuthConnectionStatus {
+    if (this.environmentTokenConfigured) {
+      return { authenticationMode: "token", connected: true };
+    }
     const metadata = this.credentialStore.getMetadata();
     return {
+      authenticationMode: "oauth",
       connected: Boolean(metadata),
       manageAuthorizationUrl: `https://github.com/settings/connections/applications/${encodeURIComponent(this.clientId)}`,
       ...(metadata ? connectionDetails(metadata) : {})
@@ -233,6 +244,9 @@ export class GitHubOAuthService {
 
   disconnect(): boolean {
     this.activeAttempt = null;
+    if (this.environmentTokenConfigured) {
+      return false;
+    }
     return this.credentialStore.delete();
   }
 
@@ -394,7 +408,9 @@ function publicStatus(attempt: DeviceAuthorizationAttempt): DeviceAuthorizationS
   };
 }
 
-function connectionDetails(metadata: GitHubCredentialMetadata): Omit<GitHubOAuthConnectionStatus, "configured" | "connected"> {
+function connectionDetails(
+  metadata: GitHubCredentialMetadata
+): Omit<GitHubOAuthConnectionStatus, "authenticationMode" | "connected"> {
   return {
     viewer: {
       id: metadata.githubUserId,

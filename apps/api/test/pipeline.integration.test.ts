@@ -19,6 +19,7 @@ const TEST_CONTROL_TOKEN = "test-control-token-0123456789abcdef0123456789abcdef"
 const TEST_GITHUB_ACCESS_TOKEN = "test-oauth-access-token";
 process.env.MEMOREPO_CONTROL_TOKEN = TEST_CONTROL_TOKEN;
 process.env.GITHUB_OAUTH_CLIENT_ID = "test-oauth-client-id";
+delete process.env.GH_TOKEN;
 
 function createServices() {
   const services = createAppServices();
@@ -748,6 +749,7 @@ test("GitHub OAuth routes expose only public device authorization state", async 
   try {
     const initialStatus = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
     assert.deepEqual(initialStatus.json(), {
+      authenticationMode: "oauth",
       connected: false,
       manageAuthorizationUrl: "https://github.com/settings/connections/applications/test-oauth-client-id"
     });
@@ -777,6 +779,38 @@ test("GitHub OAuth routes expose only public device authorization state", async 
     assert.equal(githubRequestCount, 1);
   } finally {
     globalThis.fetch = originalFetch;
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("GH_TOKEN marks GitHub connected and disables the OAuth login route", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "token-auth-routes-"));
+  const token = "github-token-from-env";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+  process.env.GH_TOKEN = token;
+
+  const services = createAppServices();
+  const app = await createApp(services);
+
+  try {
+    const statusResponse = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
+    assert.deepEqual(statusResponse.json(), { authenticationMode: "token", connected: true });
+    assert.doesNotMatch(statusResponse.body, new RegExp(token));
+    assert.equal(services.githubCredentials.getAccessToken(), token);
+
+    const loginResponse = await injectControlApi(app, {
+      method: "POST",
+      url: "/api/github/auth/device",
+      payload: {}
+    });
+    assert.equal(loginResponse.statusCode, 409);
+    assert.match(loginResponse.body, /already configured with GH_TOKEN/);
+  } finally {
+    delete process.env.GH_TOKEN;
     await app.close();
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);

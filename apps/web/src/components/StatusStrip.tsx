@@ -5,7 +5,12 @@ import type { SnapshotStateSummary } from "../lib/snapshotState";
 import { QueryErrorState } from "./QueryErrorState";
 
 interface SystemState {
-  github: { connected: boolean; viewer?: { login: string }; error?: string };
+  github: {
+    authenticationMode: "token" | "oauth";
+    connected: boolean;
+    viewer?: { login: string };
+    error?: string;
+  };
   codebaseMemory: { installed: boolean; version?: string; error?: string };
   jobConcurrency: number;
 }
@@ -51,8 +56,13 @@ export function StatusStrip({
     [repository.clone_status, repository.index_status].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status.toLowerCase()))
   ).length;
   const githubDisconnected = systemQuery.data?.github.connected === false;
+  const githubUsesEnvironmentToken = systemQuery.data?.github.authenticationMode === "token";
   const systemProblems = [
-    githubDisconnected ? "GitHub isn't connected. Sign in to sync repositories." : null,
+    githubDisconnected
+      ? githubUsesEnvironmentToken
+        ? systemQuery.data?.github.error ?? "GitHub access through GH_TOKEN could not be validated."
+        : "GitHub isn't connected. Sign in to sync repositories."
+      : null,
     systemQuery.data && !systemQuery.data.codebaseMemory.installed ? systemQuery.data.codebaseMemory.error ?? "codebase-memory-mcp is unavailable." : null
   ].filter(Boolean) as string[];
 
@@ -161,7 +171,7 @@ export function StatusStrip({
             <strong>System setup needs attention</strong>
             <span>{systemProblems.join(" ")}</span>
           </div>
-          {githubDisconnected ? (
+          {githubDisconnected && !githubUsesEnvironmentToken ? (
             <button className="primary-button compact-button" type="button" onClick={onSignInGitHub}>
               <Github size={16} />
               <span>Sign in with GitHub</span>

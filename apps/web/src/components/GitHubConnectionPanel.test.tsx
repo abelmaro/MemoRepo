@@ -20,6 +20,24 @@ afterEach(() => {
 });
 
 describe("GitHubConnectionPanel", () => {
+  it("does not request OAuth login when GH_TOKEN is configured", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/api/github/auth/status") {
+        return Promise.resolve({ authenticationMode: "token", connected: true });
+      }
+      if (path === "/api/github/diagnostics") {
+        return Promise.resolve({ connected: true, visibleRepositoryCount: 3, visibleOrganizationCount: 1 });
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText("GH_TOKEN configured")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+    expect(screen.getByText("Connected with GH_TOKEN")).toBeTruthy();
+  });
+
   it("starts device authorization without exposing the private device code", async () => {
     const replace = vi.fn();
     vi.spyOn(window, "open").mockReturnValue({

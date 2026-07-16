@@ -30,6 +30,14 @@ Edit `.env` and set the local control secret:
 MEMOREPO_CONTROL_TOKEN=your-random-control-token
 ```
 
+To use an existing GitHub personal access token and skip OAuth login, also set:
+
+```bash
+GH_TOKEN=your-github-token
+```
+
+`GH_TOKEN` must be able to read every repository you want to index. Leave it empty to use the default OAuth Device Flow. When both an environment token and a stored OAuth credential exist, `GH_TOKEN` takes priority.
+
 Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork maintainers and contributors can optionally set `GITHUB_OAUTH_CLIENT_ID` to use a different OAuth App during development.
 
 For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
@@ -52,11 +60,13 @@ http://127.0.0.1:5173
 
 Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it only in `sessionStorage` for that browser tab.
 
-The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; a GitHub connection warning is expected until the next step.
+The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; when `GH_TOKEN` is empty, a GitHub connection warning is expected until the next step.
 
-## 3. Sign In With GitHub
+## 3. Connect GitHub
 
-Open **System health**, choose **Sign in with GitHub**, and follow the modal:
+If `GH_TOKEN` is configured, MemoRepo validates and uses it automatically. System health displays **GH_TOKEN configured** and does not request OAuth login; continue to the next step.
+
+If `GH_TOKEN` is empty, open **System health**, choose **Sign in with GitHub**, and follow the modal:
 
 - MemoRepo attempts to copy the one-time user code and opens GitHub's official device page;
 - if the browser blocks the page, use **Continue on GitHub** from the modal;

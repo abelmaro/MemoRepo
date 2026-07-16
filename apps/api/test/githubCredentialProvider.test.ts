@@ -22,7 +22,7 @@ const metadata: GitHubCredentialMetadata = {
   updatedAt: "2026-07-15T12:00:00.000Z"
 };
 
-test("credential provider exclusively uses stored OAuth credentials", () => {
+test("credential provider uses stored OAuth credentials when GH_TOKEN is absent", () => {
   const credential: StoredGitHubCredential = { ...metadata, accessToken: "gho_oauth-secret" };
   const provider = new GitHubCredentialProvider(reader(credential));
 
@@ -34,6 +34,17 @@ test("credential provider exclusively uses stored OAuth credentials", () => {
   assert.equal(provider.getConnectionMetadata()?.lastValidatedAt, "2026-07-15T12:05:00.000Z");
   assert.equal(provider.invalidateOAuthCredential(), true);
   assert.throws(() => provider.getAccessToken(), GitHubNotConnectedError);
+});
+
+test("credential provider gives GH_TOKEN priority without mutating stored OAuth credentials", () => {
+  const credential: StoredGitHubCredential = { ...metadata, accessToken: "gho_oauth-secret" };
+  const provider = new GitHubCredentialProvider(reader(credential), "github-token-from-env");
+
+  assert.equal(provider.getAccessToken(), "github-token-from-env");
+  assert.equal(provider.getConnectionMetadata(), null);
+  assert.deepEqual(provider.getSensitiveValues(), ["github-token-from-env", "gho_oauth-secret"]);
+  assert.equal(provider.usesEnvironmentToken(), true);
+  assert.equal(provider.invalidateOAuthCredential(), false);
 });
 
 test("credential provider fails with an actionable conflict when disconnected", () => {
