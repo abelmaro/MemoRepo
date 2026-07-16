@@ -56,6 +56,7 @@ export interface GitHubDiagnostics {
 }
 
 export interface GitHubConnectionStatus {
+  authenticationMode: "token" | "oauth";
   connected: boolean;
   viewer?: GitHubOAuthViewer;
   scopes?: string[];

@@ -24,7 +24,7 @@ export async function systemRoutes(app: FastifyInstance) {
       .catch((error: unknown) => ({ installed: false, error: publicError(app, error) }));
 
     return {
-      github,
+      github: { ...github, authenticationMode: connection.authenticationMode },
       codebaseMemory: cbm,
       jobConcurrency: app.services.jobs.getConcurrency()
     };

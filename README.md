@@ -13,7 +13,7 @@ MemoRepo is meant to be run by one developer or one local workstation environmen
 - Docker Desktop
 - A 43-128-character URL-safe control token in `MEMOREPO_CONTROL_TOKEN`, generated from at least 32 random bytes
 
-MemoRepo uses GitHub's Device Flow for its single local user. Official builds include MemoRepo's public OAuth Client ID, so users do not register an application, configure a client secret, or generate a GitHub credential manually.
+MemoRepo uses GitHub's Device Flow for its single local user by default. Official builds include MemoRepo's public OAuth Client ID, so users do not register an application or configure a client secret. An existing personal access token can instead be supplied through `GH_TOKEN`.
 
 ## Supported Local Environments
 
@@ -33,7 +33,7 @@ For a first productive setup, follow [docs/quickstart.md](docs/quickstart.md).
 cp .env.example .env
 ```
 
-Set `MEMOREPO_CONTROL_TOKEN` in `.env`, then run:
+Set `MEMOREPO_CONTROL_TOKEN` in `.env`. Optionally set `GH_TOKEN` to use an existing GitHub token without OAuth login, then run:
 
 ```bash
 docker compose up --build
@@ -45,7 +45,7 @@ Open the dashboard:
 http://127.0.0.1:5173
 ```
 
-Unlock the dashboard, open **System health**, and choose **Sign in with GitHub**. MemoRepo will show a one-time code and open GitHub's official device authorization page.
+Unlock the dashboard and open **System health**. If `GH_TOKEN` is empty, choose **Sign in with GitHub**; otherwise MemoRepo uses the token from `.env` and does not request OAuth login.
 
 Persistent local state lives under `MEMOREPO_HOME`, which defaults to `./.memorepo`.
 
@@ -85,8 +85,8 @@ MemoRepo is a single-user local tool. It has no user accounts or roles, but it d
 - The API rejects unrecognized HTTP hostnames, browser origins outside the dashboard allowlist, cross-site browser requests, and non-JSON POST/PUT/PATCH calls. State-changing control requests also require an explicit CSRF header, and API/MCP request classes have separate per-IP rate limits.
 - API and dashboard responses use defensive content, framing, referrer, content-type, and no-store cache policies. On POSIX-capable storage, MemoRepo also restricts managed directories and SQLite artifacts to the service account.
 - Each MCP connection has its own space-scoped bearer token. The dashboard does not send the control token to `/mcp`, which accepts connection tokens instead; treat generated MCP configs as secrets and revoke connections you no longer use.
-- GitHub Device Flow runs through the local control API. The private device code remains in API memory, the resulting access token is encrypted at rest, and the encryption key is stored separately in the `memorepo-secrets` Docker volume. Official builds ship MemoRepo's public OAuth Client ID and do not use a client secret.
-- Git child processes receive an allowlisted environment plus an ephemeral credential only for the Git operation. CBM child processes receive no GitHub or unrelated application credentials, and generated MCP configs never include the OAuth access token.
+- GitHub Device Flow runs through the local control API when `GH_TOKEN` is not configured. The private device code remains in API memory, the resulting access token is encrypted at rest, and the encryption key is stored separately in the `memorepo-secrets` Docker volume. Official builds ship MemoRepo's public OAuth Client ID and do not use a client secret.
+- `GH_TOKEN` stays in the API environment and takes priority over a stored OAuth credential. Git child processes receive an allowlisted environment plus an ephemeral credential only for the Git operation. CBM child processes receive no GitHub or unrelated application credentials, and generated MCP configs never include either credential.
 - The MCP gateway is read-only, scoped to one space's immutable snapshot, rejects filesystem path arguments, and sanitizes internal paths out of responses.
 
 If you need multi-user access, network exposure, or tenant isolation, MemoRepo is not the right tool as-is.
@@ -108,7 +108,7 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 - The API container is the only component that mutates managed clones.
 - Repositories are cloned per space.
 - SQLite is the source of truth for spaces, repositories, jobs, snapshots, and MCP connections.
-- Git remotes stay clean HTTPS URLs; the connected OAuth credential is supplied ephemerally through `GIT_ASKPASS`.
+- Git remotes stay clean HTTPS URLs; the active GitHub credential is supplied ephemerally through `GIT_ASKPASS`.
 - The MCP gateway is read-only and serves the active immutable snapshot for a single space.
 - Native CBM read tools such as `search_graph`, `semantic_query`, `trace_path`, `get_code_snippet`, `get_architecture`, `get_graph_schema`, `search_code`, and `query_graph` are exposed with MemoRepo scope and safety policy.
 - Multi-repository spaces are served from one CBM snapshot store so CBM can use cross-repo graph intelligence.

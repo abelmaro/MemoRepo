@@ -10,6 +10,7 @@ export interface AppConfig {
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
+  githubToken: string | null;
   githubOAuthClientId: string;
   memorepoHome: string;
   secretsDir: string;
@@ -84,6 +85,7 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
+    githubToken: process.env.GH_TOKEN?.trim() || null,
     githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || MEMOREPO_GITHUB_OAUTH_CLIENT_ID,
     memorepoHome,
     secretsDir,

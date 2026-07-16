@@ -22,7 +22,7 @@ it("offers GitHub sign-in directly from the disconnected system alert", async ()
   apiMock.mockImplementation((path: string) => {
     if (path === "/api/system") {
       return Promise.resolve({
-        github: { connected: false },
+        github: { authenticationMode: "oauth", connected: false },
         codebaseMemory: { installed: true, version: "1.0.0" },
         jobConcurrency: 2
       });
@@ -60,4 +60,52 @@ it("offers GitHub sign-in directly from the disconnected system alert", async ()
   expect(screen.getByText("GitHub isn't connected. Sign in to sync repositories.")).toBeTruthy();
   fireEvent.click(signInButton);
   expect(onSignInGitHub).toHaveBeenCalledTimes(1);
+});
+
+it("does not offer OAuth login when GH_TOKEN access fails", async () => {
+  const onSignInGitHub = vi.fn();
+  apiMock.mockImplementation((path: string) => {
+    if (path === "/api/system") {
+      return Promise.resolve({
+        github: {
+          authenticationMode: "token",
+          connected: false,
+          error: "GitHub rejected GH_TOKEN."
+        },
+        codebaseMemory: { installed: true, version: "1.0.0" },
+        jobConcurrency: 2
+      });
+    }
+    if (path === "/api/spaces/space_1/mcp-connections") {
+      return Promise.resolve({ connections: [] });
+    }
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <StatusStrip
+        space={{
+          id: "space_1",
+          name: "Demo",
+          slug: "demo",
+          active_snapshot_id: null,
+          snapshot_status: "empty"
+        }}
+        repositories={[]}
+        loading={false}
+        snapshotSummary={{ state: "ready", excludedRepositoryCount: 0, latestSnapshotJob: null }}
+        onConnectAgent={vi.fn()}
+        onAddRepository={vi.fn()}
+        onSignInGitHub={onSignInGitHub}
+        onOpenSnapshotJob={vi.fn()}
+        operationsDisabled={false}
+      />
+    </QueryClientProvider>
+  );
+
+  expect(await screen.findByText("GitHub rejected GH_TOKEN.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+  expect(onSignInGitHub).not.toHaveBeenCalled();
 });

@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-16
+
+### Added
+
+- Restore optional `GH_TOKEN` authentication for local installations. When the variable is non-empty, MemoRepo uses it for GitHub REST and Git operations instead of requesting OAuth Device Flow login.
+
+### Changed
+
+- Give `GH_TOKEN` priority over any locally stored OAuth credential and show the active authentication mode in System health.
+
+### Security
+
+- Keep `GH_TOKEN` out of API responses, unrelated child-process environments, Git remotes, and generated MCP configurations; pass it ephemerally only to authenticated Git operations.
+
 ## [0.2.0] - 2026-07-15
 
 ### Added
