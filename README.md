@@ -49,9 +49,9 @@ http://127.0.0.1:5173
 
 Unlock the dashboard and open **System health**. If `GH_TOKEN` is empty, choose **Sign in with GitHub**; otherwise MemoRepo uses the token from `.env` and does not request OAuth login.
 
-Persistent local state lives under `MEMOREPO_HOME`, which defaults to `./.memorepo`.
+Persistent local state lives under `MEMOREPO_HOME`. Docker Compose uses the `memorepo-data` named volume for new installations to avoid host bind-mount overhead during indexing; existing `.env` files without `MEMOREPO_STORAGE` keep using their configured `MEMOREPO_HOME` bind mount.
 
-For day-to-day use, prefer setting `MEMOREPO_HOME` to a path outside this repository so managed clones, indexes, and SQLite state do not sit next to the source tree.
+For direct Node development, prefer setting `MEMOREPO_HOME` to a path outside this repository so managed clones, indexes, and SQLite state do not sit next to the source tree.
 
 ## Ask this Space
 
@@ -63,7 +63,7 @@ The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGEN
 
 - Chats are consultation-only and can query only the selected space through MemoRepo's read-only snapshot tools.
 - Each chat is pinned to the exact immutable snapshot that was active when it started.
-- Snapshot builds materialize every recorded repository commit inside the snapshot artifact and index that copy, so later managed-clone changes cannot alter a retained snapshot's source-backed answers.
+- Snapshot builds materialize each recorded repository commit once in a content-addressed immutable source store and index that exact tree. Later managed-clone changes cannot alter a retained snapshot's source-backed answers, and replacement snapshots reuse unchanged commit trees without copying them again.
 - Snapshot materialization intentionally rejects tracked symbolic links. Replace them with regular files or directories before indexing a repository.
 - MemoRepo's transcript database stores visible user and assistant messages, source references, the selected model settings, and per-turn diagnostic totals for stop reason, tokens, provider rounds, and tool calls. It does not copy raw reasoning or internal tool payloads into that transcript.
 - A retained older snapshot remains available to its existing chats. If that snapshot is pruned, its transcript remains readable but cannot be continued.

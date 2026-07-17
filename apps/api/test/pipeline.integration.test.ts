@@ -1261,12 +1261,46 @@ test("snapshot source materializes the exact selected commit independently of th
     const snapshotSource = manifest.repositories[0]!.localPath;
 
     assert.notEqual(path.resolve(snapshotSource), path.resolve(repository.local_path));
-    assert.ok(path.resolve(snapshotSource).startsWith(path.resolve(row.artifact_path) + path.sep));
+    assert.ok(path.resolve(snapshotSource).startsWith(path.resolve(services.config.revisionSourcesDir) + path.sep));
     assert.equal(fs.readFileSync(path.join(snapshotSource, "README.md"), "utf8"), committedContent);
     assert.equal(fs.existsSync(path.join(snapshotSource, ".git")), false);
 
     fs.writeFileSync(path.join(repository.local_path, "README.md"), "# uncommitted-live-edit\n", "utf8");
     assert.equal(fs.readFileSync(path.join(snapshotSource, "README.md"), "utf8"), committedContent);
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("replacement snapshots reuse an immutable source for the same repository commit", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-source-reuse-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Source Reuse Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4502,
+      owner: "example",
+      name: "reused-source"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+
+    Object.defineProperty(services.snapshots, "materializeRepository", {
+      value: async () => {
+        throw new Error("unchanged source was materialized again");
+      }
+    });
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const snapshots = services.snapshots.listSpaceSnapshots(space.id).snapshots;
+    assert.equal(snapshots.length, 2);
+    assert.equal(snapshots[0]?.status, "active");
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -1375,6 +1409,10 @@ test("repository removal during a replacement build cannot reactivate removed co
     });
     stubCbmSnapshots(services);
     await services.snapshots.buildSpaceSnapshot(space.id);
+
+    const activeBeforeRemoval = services.snapshots.getActiveSnapshot(space.id) as { manifest_json: string };
+    const activeManifest = JSON.parse(activeBeforeRemoval.manifest_json) as { repositories: Array<{ localPath: string }> };
+    fs.rmSync(path.dirname(activeManifest.repositories[0]!.localPath), { recursive: true, force: true });
 
     let markMaterializationStarted!: () => void;
     const materializationStarted = new Promise<void>((resolve) => {
@@ -1786,21 +1824,62 @@ test("garbage collection removes failed snapshots, old jobs, stale indexes, and 
       createdAt: olderTimestamp
     });
 
+    const retainedRevisionSource = path.join(
+      services.config.revisionSourcesDir,
+      "6301",
+      "retained-commit",
+      "active-index"
+    );
+    const orphanRevisionSource = path.join(
+      services.config.revisionSourcesDir,
+      "6302",
+      "orphan-commit",
+      "removed-index"
+    );
+    fs.mkdirSync(retainedRevisionSource, { recursive: true });
+    fs.mkdirSync(orphanRevisionSource, { recursive: true });
+    fs.writeFileSync(path.join(retainedRevisionSource, "source.ts"), "retained\n");
+    fs.writeFileSync(path.join(orphanRevisionSource, "source.ts"), "orphan\n");
+    const retainedSnapshotId = createId("snp");
+    const retainedSnapshotPath = path.join(services.config.snapshotIndexesDir, retainedSnapshotId);
+    fs.mkdirSync(retainedSnapshotPath, { recursive: true });
+    insertRecord(services.database, "space_snapshots", {
+      id: retainedSnapshotId,
+      spaceId: space.id,
+      version: 2,
+      status: "inactive",
+      artifactPath: retainedSnapshotPath,
+      manifestJson: JSON.stringify({
+        snapshotId: retainedSnapshotId,
+        version: 2,
+        createdAt: timestamp,
+        repositories: [{ localPath: retainedRevisionSource }]
+      }),
+      createdAt: timestamp,
+      activatedAt: timestamp,
+      error: null,
+      sizeBytes: 0
+    });
+
     const summary = services.maintenance.summary(1);
     assert.equal(summary.candidates.failedSnapshots, 1);
     assert.equal(summary.candidates.removedClones, 1);
     assert.equal(summary.candidates.oldJobs, 1);
     assert.equal(summary.candidates.orphanRepoIndexDirectories, 1);
+    assert.equal(summary.candidates.orphanRevisionSources, 1);
 
     const result = services.maintenance.runGarbageCollection(1);
     assert.equal(result.failedSnapshots.count, 1);
     assert.equal(result.removedClones.count, 1);
     assert.equal(result.oldJobs.count, 1);
     assert.equal(result.orphanRepoIndexDirectories.count, 1);
+    assert.equal(result.orphanRevisionSources.count, 1);
     assert.equal(fs.existsSync(removedRepository.local_path), false);
     assert.equal(fs.existsSync(removedIndexPath), false);
     assert.equal(fs.existsSync(orphanIndexPath), false);
     assert.equal(fs.existsSync(failedSnapshotPath), false);
+    assert.equal(fs.existsSync(orphanRevisionSource), false);
+    assert.equal(fs.existsSync(retainedRevisionSource), true);
 
     const cleanedRepository = services.spaces.getSpaceRepository(removedRepository.id);
     assert.equal(cleanedRepository.clone_status, "cleaned");
@@ -3679,10 +3758,12 @@ function stubCbmSnapshots(services: ReturnType<typeof createServices>, failingRe
     ) => Promise<{ status: string }>;
   };
 
-  cbm.indexRepository = async (repoPath) => {
+  cbm.indexRepository = async (repoPath, cacheDir) => {
     if (failingRepositoryPath && path.basename(repoPath) === path.basename(failingRepositoryPath)) {
       throw new Error(`index failed for ${repoPath}`);
     }
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, `${path.basename(repoPath)}.index`), "indexed\n", "utf8");
     return { project: path.basename(repoPath), status: "indexed", nodes: 1, edges: 0 };
   };
   cbm.buildCrossRepoLinks = async () => ({ status: "linked" });

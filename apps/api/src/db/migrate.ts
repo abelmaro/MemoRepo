@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 interface Migration {
   version: number;
@@ -15,6 +15,7 @@ const migrations: Migration[] = [
   { version: 5, up: addAgentChats },
   { version: 6, up: addAgentChats },
   { version: 7, up: addAgentTurnMetrics },
+  { version: 8, up: addSnapshotSizes },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -310,6 +311,13 @@ function addAgentTurnMetrics(sqlite: Database.Database): void {
     ALTER TABLE agent_turns ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE agent_turns ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;
   `);
+}
+
+function addSnapshotSizes(sqlite: Database.Database): void {
+  const columns = sqlite.pragma("table_info(space_snapshots)") as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "size_bytes")) {
+    sqlite.exec("ALTER TABLE space_snapshots ADD COLUMN size_bytes INTEGER;");
+  }
 }
 
 function detectLegacySchemaVersion(sqlite: Database.Database): number {

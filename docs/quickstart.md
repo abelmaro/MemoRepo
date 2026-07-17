@@ -42,9 +42,9 @@ Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork m
 
 Docker Compose includes the supported `codebase-memory-mcp` release. If you run the Node workspaces directly for development, install `codebase-memory-mcp` v0.9.0 on `PATH`. MemoRepo fails closed when the runtime cannot verify that `auto_index` and `auto_watch` are both disabled for immutable snapshot caches.
 
-For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
+New Docker Compose installations use the `memorepo-data` named volume from `.env.example`. This avoids Docker Desktop bind-mount overhead during the many small reads and writes performed by Git and the indexer. For direct Node development, set `MEMOREPO_HOME` to a path outside this repository.
 
-On Linux, create the `MEMOREPO_HOME` directory yourself before the first `docker compose up`. The containers run as an unprivileged user, and a directory auto-created by Docker would be owned by root.
+Existing installations remain compatible: when `MEMOREPO_STORAGE` is absent, Compose continues mounting the existing `MEMOREPO_HOME` path. To opt into the faster named volume, stop MemoRepo, back up the current state directory, copy its complete contents into the volume named by `MEMOREPO_DATA_VOLUME_NAME` (default `memorepo-data`), set `MEMOREPO_STORAGE=memorepo-data`, and start MemoRepo again. Verify that spaces and chats are present before removing the backup. On Linux bind-mount installations, create the host directory yourself before first startup because the containers run as an unprivileged user.
 
 Keep `MEMOREPO_API_CONTAINER_NAME=memorepo-api` unless you also change `container_name` in `docker-compose.yml`.
 
@@ -138,7 +138,7 @@ Chats are read-only, are pinned to the active immutable snapshot at creation tim
 
 Every turn records its final provider stop reason, provider round count, tool-call count, and token totals. These diagnostics help distinguish a naturally concise answer from provider length termination or a bounded investigation; raw reasoning and tool payloads are not retained.
 
-Each snapshot indexes an exact-commit source copy stored inside its own artifact. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot.
+Each snapshot indexes exact-commit trees stored in MemoRepo's content-addressed immutable source store. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot, while unchanged commits avoid another full source copy.
 
 Snapshot materialization intentionally rejects tracked symbolic links. Replace them with regular files or directories before adding or reindexing that repository.
 
@@ -172,10 +172,10 @@ If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key 
 
 Use the `Data lifecycle` panel inside a space to:
 
-- inspect snapshots and their approximate size;
+- inspect snapshots and their approximate index-artifact size; shared immutable revision trees are counted separately as garbage-collection candidates when no retained snapshot references them;
 - prune inactive snapshots while always keeping the active snapshot;
-- run garbage collection for failed snapshot artifacts, removed clones, stale repo index records, orphan repo index directories, and old terminal jobs;
-- delete a space together with MemoRepo-managed local data.
+- run garbage collection for failed snapshot artifacts, removed clones, stale repo index records, orphan repo index directories, unreferenced revision trees, and old terminal jobs;
+- delete a space together with its space-scoped MemoRepo data; revision trees still referenced by another retained snapshot remain shared, and newly unreferenced trees are removed by garbage collection.
 
 The defaults come from:
 
@@ -183,6 +183,8 @@ The defaults come from:
 MEMOREPO_SNAPSHOT_RETENTION=3
 MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
+MEMOREPO_CBM_INDEX_CONCURRENCY=1
+MEMOREPO_CBM_INTERACTIVE_CONCURRENCY=2
 ```
 
 ## 13. Manage Jobs
@@ -195,7 +197,7 @@ MemoRepo supports:
 - cancelling pending jobs before they start or requesting cancellation of an active Git, indexing, or snapshot subprocess;
 - automatically marking abandoned running jobs as failed after an API restart;
 - returning the existing active job when the submitted job type, scope, dependency, and canonical payload match exactly;
-- configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`.
+- configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`, heavyweight index concurrency with `MEMOREPO_CBM_INDEX_CONCURRENCY`, and independent query capacity with `MEMOREPO_CBM_INTERACTIVE_CONCURRENCY`.
 
 Active cancellation is cooperative: MemoRepo signals the current subprocess, escalates if it does not stop, and records the job as cancelled after the handler exits. A running row recovered without an active process cannot be cancelled safely and is marked failed during startup recovery instead.
 

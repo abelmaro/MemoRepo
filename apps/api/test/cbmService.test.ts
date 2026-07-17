@@ -510,7 +510,10 @@ test("CBM bounds concurrent isolated agent sessions", async () => {
   const operations = Array.from({ length: 5 }, () => deferred<{ results: unknown[] }>());
   let sessionsCreated = 0;
   const fourSessionsStarted = deferred<void>();
-  const service = new CbmService({ memorepoHome: root } as AppConfig, immutableConfigRunner);
+  const service = new CbmService(
+    { memorepoHome: root, cbmInteractiveConcurrency: 4 } as AppConfig,
+    immutableConfigRunner
+  );
   Object.defineProperty(service, "isolatedSession", {
     value: () => {
       const operation = operations[sessionsCreated];
@@ -545,6 +548,94 @@ test("CBM bounds concurrent isolated agent sessions", async () => {
 
     for (const operation of operations.slice(1)) operation.resolve({ results: [] });
     await Promise.all(calls.slice(1));
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CBM reuses one isolated session for every tool call in an agent turn", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-cbm-turn-session-"));
+  let sessionsCreated = 0;
+  let closeCalls = 0;
+  let toolCalls = 0;
+  const service = new CbmService(
+    { memorepoHome: root, cbmInteractiveConcurrency: 4 } as AppConfig,
+    immutableConfigRunner
+  );
+  Object.defineProperty(service, "isolatedSession", {
+    value: () => {
+      sessionsCreated += 1;
+      return {
+        callTool: async () => ({ results: [{ call: ++toolCalls }] }),
+        close: async () => {
+          closeCalls += 1;
+        }
+      };
+    }
+  });
+
+  try {
+    const controller = new AbortController();
+    const cacheDir = path.join(root, "cache");
+    assert.deepEqual(
+      await service.tool("search_code", { pattern: "first" }, cacheDir, 10_000, controller.signal, "turn-one"),
+      { results: [{ call: 1 }] }
+    );
+    assert.deepEqual(
+      await service.tool("search_code", { pattern: "second" }, cacheDir, 10_000, controller.signal, "turn-one"),
+      { results: [{ call: 2 }] }
+    );
+    assert.equal(sessionsCreated, 1);
+    assert.equal(closeCalls, 0);
+
+    await service.closeTurnSession("turn-one");
+    assert.equal(closeCalls, 1);
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CBM serializes background indexing while leaving interactive capacity independent", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-cbm-index-lane-"));
+  const firstIndex = deferred<ReturnType<typeof processResult>>();
+  const secondIndex = deferred<ReturnType<typeof processResult>>();
+  const firstStarted = deferred<void>();
+  const secondStarted = deferred<void>();
+  let indexCalls = 0;
+  const service = new CbmService(
+    { memorepoHome: root, cbmIndexConcurrency: 1, cbmInteractiveConcurrency: 2 } as AppConfig,
+    async (options) => {
+      if (options.args[0] === "cli" && options.args[1] === "index_repository") {
+        indexCalls += 1;
+        if (indexCalls === 1) {
+          firstStarted.resolve();
+          return firstIndex.promise;
+        }
+        secondStarted.resolve();
+        return secondIndex.promise;
+      }
+      if (options.args[0] === "cli" && options.args[1] === "list_projects") {
+        return processResult(JSON.stringify({ projects: [] }));
+      }
+      return immutableConfigRunner();
+    }
+  );
+
+  try {
+    const cacheDir = path.join(root, "cache");
+    const first = service.indexRepository(path.join(root, "repo-one"), cacheDir);
+    const second = service.indexRepository(path.join(root, "repo-two"), cacheDir);
+    await firstStarted.promise;
+    await Promise.resolve();
+    assert.equal(indexCalls, 1);
+
+    firstIndex.resolve(processResult(JSON.stringify({ status: "indexed" })));
+    await secondStarted.promise;
+    assert.equal(indexCalls, 2);
+    secondIndex.resolve(processResult(JSON.stringify({ status: "indexed" })));
+    await Promise.all([first, second]);
   } finally {
     await service.close();
     await rm(root, { recursive: true, force: true });

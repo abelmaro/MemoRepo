@@ -20,6 +20,7 @@ export interface AppConfig {
   indexesDir: string;
   repoIndexesDir: string;
   snapshotIndexesDir: string;
+  revisionSourcesDir: string;
   logsDir: string;
   tmpDir: string;
   binDir: string;
@@ -33,6 +34,8 @@ export interface AppConfig {
   snapshotRetentionDefault: number;
   jobRetentionDaysDefault: number;
   jobConcurrency: number;
+  cbmIndexConcurrency: number;
+  cbmInteractiveConcurrency: number;
 }
 
 function absolutePath(input: string): string {
@@ -64,6 +67,7 @@ export function loadConfig(): AppConfig {
   const indexesDir = path.join(memorepoHome, "indexes");
   const repoIndexesDir = path.join(indexesDir, "r");
   const snapshotIndexesDir = path.join(indexesDir, "s");
+  const revisionSourcesDir = path.join(indexesDir, "c");
   const logsDir = path.join(memorepoHome, "logs");
   const tmpDir = path.join(memorepoHome, "tmp");
   const binDir = path.join(memorepoHome, "bin");
@@ -76,6 +80,7 @@ export function loadConfig(): AppConfig {
     indexesDir,
     repoIndexesDir,
     snapshotIndexesDir,
+    revisionSourcesDir,
     logsDir,
     tmpDir,
     binDir
@@ -100,6 +105,7 @@ export function loadConfig(): AppConfig {
     indexesDir,
     repoIndexesDir,
     snapshotIndexesDir,
+    revisionSourcesDir,
     logsDir,
     tmpDir,
     binDir,
@@ -114,6 +120,8 @@ export function loadConfig(): AppConfig {
     agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 96),
     snapshotRetentionDefault: positiveIntEnv("MEMOREPO_SNAPSHOT_RETENTION", 3),
     jobRetentionDaysDefault: positiveIntEnv("MEMOREPO_JOB_RETENTION_DAYS", 30),
-    jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2)
+    jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2),
+    cbmIndexConcurrency: positiveIntEnv("MEMOREPO_CBM_INDEX_CONCURRENCY", 1),
+    cbmInteractiveConcurrency: positiveIntEnv("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", 2)
   };
 }

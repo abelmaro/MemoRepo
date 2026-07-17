@@ -43,7 +43,7 @@ MemoRepo internally paginates each project as needed, then aggregates projectles
 ## Common Limits
 
 - Tools read from the active snapshot, not live working trees.
-- Snapshot indexing reads exact-commit source copies stored inside the snapshot artifact. Later managed-clone changes cannot alter retained source-backed results.
+- Snapshot indexing reads exact-commit trees from MemoRepo's content-addressed immutable source store. Later managed-clone changes cannot alter retained source-backed results, and unchanged commits are reused without another source copy.
 - MemoRepo verifies that CBM `auto_index` and `auto_watch` are disabled before first use of each snapshot cache and fails closed if that immutable configuration cannot be confirmed.
 - If no active snapshot exists, tools return `no_active_snapshot`.
 - A stale active snapshot remains queryable until a successful reindex activates a replacement.

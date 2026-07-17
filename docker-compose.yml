@@ -24,6 +24,8 @@ services:
       MEMOREPO_AGENT_MODEL_ID: ${MEMOREPO_AGENT_MODEL_ID:-}
       MEMOREPO_AGENT_MAX_RUN_SECONDS: ${MEMOREPO_AGENT_MAX_RUN_SECONDS:-600}
       MEMOREPO_AGENT_MAX_TOOL_CALLS: ${MEMOREPO_AGENT_MAX_TOOL_CALLS:-96}
+      MEMOREPO_CBM_INDEX_CONCURRENCY: ${MEMOREPO_CBM_INDEX_CONCURRENCY:-1}
+      MEMOREPO_CBM_INTERACTIVE_CONCURRENCY: ${MEMOREPO_CBM_INTERACTIVE_CONCURRENCY:-2}
       MEMOREPO_PUBLIC_API_URL: http://127.0.0.1:${API_PORT:-8787}
       FRONTEND_ORIGIN: http://127.0.0.1:${WEB_PORT:-5173}
       MEMOREPO_RATE_LIMIT_WINDOW_MS: ${MEMOREPO_RATE_LIMIT_WINDOW_MS:-60000}
@@ -33,7 +35,9 @@ services:
       MEMOREPO_API_SSE_RATE_LIMIT_MAX: ${MEMOREPO_API_SSE_RATE_LIMIT_MAX:-30}
       MEMOREPO_MCP_RATE_LIMIT_MAX: ${MEMOREPO_MCP_RATE_LIMIT_MAX:-120}
     volumes:
-      - ${MEMOREPO_HOME:-./.memorepo}:/var/lib/memorepo
+      # New installs use a Docker-managed volume for faster index I/O. Existing .env files
+      # without MEMOREPO_STORAGE keep their MEMOREPO_HOME bind mount unchanged.
+      - ${MEMOREPO_STORAGE:-${MEMOREPO_HOME:-memorepo-data}}:/var/lib/memorepo
       - memorepo-secrets:/var/lib/memorepo-secrets
     ports:
       - "127.0.0.1:${API_PORT:-8787}:8787"
@@ -64,4 +68,6 @@ services:
       retries: 3
 
 volumes:
+  memorepo-data:
+    name: ${MEMOREPO_DATA_VOLUME_NAME:-memorepo-data}
   memorepo-secrets:

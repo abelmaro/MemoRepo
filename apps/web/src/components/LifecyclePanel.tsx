@@ -163,6 +163,7 @@ export function LifecyclePanel({
             <span>Removed clones: {maintenance?.candidates.removedClones ?? 0}</span>
             <span>Old jobs: {maintenance?.candidates.oldJobs ?? 0}</span>
             <span>Repo indexes: {(maintenance?.candidates.oldRepoIndexRecords ?? 0) + (maintenance?.candidates.removedRepositoryIndexes ?? 0)}</span>
+            <span>Revision sources: {maintenance?.candidates.orphanRevisionSources ?? 0}</span>
           </div>
           <div className="compact-controls lifecycle-actions">
             <label>
@@ -268,6 +269,7 @@ function maintenanceResultBytes(result: MaintenanceResult): number {
   return (
     result.removedRepositoryIndexes.bytes +
     result.orphanRepoIndexDirectories.bytes +
+    result.orphanRevisionSources.bytes +
     result.failedSnapshots.bytes +
     result.removedClones.bytes
   );

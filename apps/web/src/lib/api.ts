@@ -183,6 +183,7 @@ export interface MaintenanceSummary {
     oldRepoIndexRecords: number;
     removedRepositoryIndexes: number;
     orphanRepoIndexDirectories: number;
+    orphanRevisionSources: number;
     failedSnapshots: number;
     oldJobs: number;
     removedClones: number;
@@ -201,6 +202,7 @@ export interface MaintenanceResult {
   oldRepoIndexRecords: { count: number };
   removedRepositoryIndexes: { count: number; bytes: number };
   orphanRepoIndexDirectories: { count: number; bytes: number };
+  orphanRevisionSources: { count: number; bytes: number };
   failedSnapshots: { count: number; bytes: number };
   oldJobs: { count: number };
   removedClones: { count: number; bytes: number; skipped: number };

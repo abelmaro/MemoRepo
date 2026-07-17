@@ -1497,6 +1497,7 @@ function testConfig(root = "C:\\private"): AppConfig {
     indexesDir: path.join(root, "indexes"),
     repoIndexesDir: path.join(root, "indexes", "r"),
     snapshotIndexesDir: path.join(root, "indexes", "s"),
+    revisionSourcesDir: path.join(root, "indexes", "c"),
     logsDir: path.join(root, "logs"),
     tmpDir: path.join(root, "tmp"),
     binDir: path.join(root, "bin"),
@@ -1507,7 +1508,9 @@ function testConfig(root = "C:\\private"): AppConfig {
     agentCredentialPath: path.join(root, "secrets", "agent-credentials.json"),
     snapshotRetentionDefault: 3,
     jobRetentionDaysDefault: 30,
-    jobConcurrency: 2
+    jobConcurrency: 2,
+    cbmIndexConcurrency: 1,
+    cbmInteractiveConcurrency: 2
   };
 }
 

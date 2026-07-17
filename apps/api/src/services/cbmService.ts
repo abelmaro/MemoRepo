@@ -5,9 +5,10 @@ import type { AppConfig } from "../config.js";
 import { ensureInsideDir } from "../domain/paths.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { redactSensitive } from "../domain/sanitize.js";
-import { createSafeProcessEnvironment, runProcess } from "./process.js";
+import { createSafeProcessEnvironment, runProcess, type ProcessResult } from "./process.js";
 
-const ISOLATED_CBM_CONCURRENCY = 4;
+const DEFAULT_INTERACTIVE_CBM_CONCURRENCY = 2;
+const DEFAULT_INDEX_CBM_CONCURRENCY = 1;
 const MAX_MCP_STDERR_CHARS = 64 * 1024;
 const MAX_MCP_HEADER_BYTES = 16 * 1024;
 const MAX_MCP_BODY_BYTES = 32 * 1024 * 1024;
@@ -40,14 +41,23 @@ export class CbmService {
   private readonly sessions = new Map<string, CbmMcpSession>();
   private readonly isolatedSessions = new Set<CbmMcpSession>();
   private readonly trackedSessions = new Map<CbmMcpSession, string>();
-  private readonly isolatedPermits = new AbortablePermitPool(ISOLATED_CBM_CONCURRENCY);
+  private readonly turnSessions = new Map<string, Promise<TurnSessionEntry>>();
+  private readonly isolatedPermits: AbortablePermitPool;
+  private readonly indexPermits: AbortablePermitPool;
   private readonly immutableCacheConfiguration = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
     private readonly runCbmProcess: typeof runProcess = runProcess,
     private readonly createMcpProcess: CbmMcpProcessFactory = spawnCbmMcpProcess
-  ) {}
+  ) {
+    this.isolatedPermits = new AbortablePermitPool(
+      positiveConcurrency(config.cbmInteractiveConcurrency, DEFAULT_INTERACTIVE_CBM_CONCURRENCY)
+    );
+    this.indexPermits = new AbortablePermitPool(
+      positiveConcurrency(config.cbmIndexConcurrency, DEFAULT_INDEX_CBM_CONCURRENCY)
+    );
+  }
 
   async version(): Promise<string> {
     const result = await this.runCbmProcess({
@@ -107,12 +117,20 @@ export class CbmService {
     input: Record<string, unknown>,
     cacheDir: string,
     timeoutMs = 10_000,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    turnSessionId?: string
   ): Promise<T> {
     throwIfAborted(signal);
     const resolvedCacheDir = ensureInsideDir(this.config.memorepoHome, cacheDir);
     fs.mkdirSync(resolvedCacheDir, { recursive: true });
     await this.ensureImmutableCacheConfiguration(resolvedCacheDir);
+    if (turnSessionId) {
+      const entry = await this.turnSession(turnSessionId, resolvedCacheDir, signal);
+      const operation = entry.session.callTool<T>(tool, input, timeoutMs);
+      return signal
+        ? abortableSessionCall(operation, signal, () => entry.session.close())
+        : operation;
+    }
     if (!signal) {
       return this.session(resolvedCacheDir).callTool<T>(tool, input, timeoutMs);
     }
@@ -148,10 +166,19 @@ export class CbmService {
     await Promise.all(sessions.map((session) => session.close()));
   }
 
+  async closeTurnSession(turnSessionId: string): Promise<void> {
+    const pending = this.turnSessions.get(turnSessionId);
+    if (!pending) return;
+    this.turnSessions.delete(turnSessionId);
+    const entry = await pending.catch(() => null);
+    await entry?.session.close();
+  }
+
   async close(): Promise<void> {
     const sessions = new Set(this.trackedSessions.keys());
     this.sessions.clear();
     this.isolatedSessions.clear();
+    this.turnSessions.clear();
     await Promise.all(Array.from(sessions, (session) => session.close()));
     this.trackedSessions.clear();
   }
@@ -174,15 +201,53 @@ export class CbmService {
     return session;
   }
 
-  private isolatedSession(cacheDir: string): CbmMcpSession {
+  private isolatedSession(cacheDir: string, onClosed: () => void = () => {}): CbmMcpSession {
     const key = normalizePath(cacheDir);
     const session = new CbmMcpSession(cacheDir, [], () => {
       this.isolatedSessions.delete(session);
       this.trackedSessions.delete(session);
+      onClosed();
     }, this.createMcpProcess);
     this.isolatedSessions.add(session);
     this.trackedSessions.set(session, key);
     return session;
+  }
+
+  private turnSession(turnSessionId: string, cacheDir: string, signal?: AbortSignal): Promise<TurnSessionEntry> {
+    const cacheKey = normalizePath(cacheDir);
+    const existing = this.turnSessions.get(turnSessionId);
+    if (existing) {
+      return existing.then((entry) => {
+        if (entry.cacheKey !== cacheKey) throw new Error("Agent turn session changed snapshot cache");
+        return entry;
+      });
+    }
+
+    const permitSignal = signal ?? new AbortController().signal;
+    let pending!: Promise<TurnSessionEntry>;
+    pending = (async () => {
+      const release = await this.isolatedPermits.acquire(permitSignal);
+      let released = false;
+      const releaseSession = () => {
+        if (released) return;
+        released = true;
+        release();
+        if (this.turnSessions.get(turnSessionId) === pending) this.turnSessions.delete(turnSessionId);
+      };
+      try {
+        throwIfAborted(signal);
+        const session = this.isolatedSession(cacheDir, releaseSession);
+        return { cacheKey, session };
+      } catch (error) {
+        releaseSession();
+        throw error;
+      }
+    })();
+    this.turnSessions.set(turnSessionId, pending);
+    void pending.catch(() => {
+      if (this.turnSessions.get(turnSessionId) === pending) this.turnSessions.delete(turnSessionId);
+    });
+    return pending;
   }
 
   private async cli<T>(tool: string, input: Record<string, unknown>, options: CbmCommandOptions): Promise<T> {
@@ -190,15 +255,22 @@ export class CbmService {
     fs.mkdirSync(cacheDir, { recursive: true });
     await this.ensureImmutableCacheConfiguration(cacheDir);
 
-    const result = await this.runCbmProcess({
-      command: "codebase-memory-mcp",
-      args: ["cli", tool, JSON.stringify(input)],
-      env: createCbmEnvironment(cacheDir),
-      inheritEnv: false,
-      timeoutMs: options.timeoutMs,
-      onOutput: options.onOutput,
-      signal: options.signal
-    });
+    const permitSignal = options.signal ?? new AbortController().signal;
+    const release = tool === "index_repository" ? await this.indexPermits.acquire(permitSignal) : () => {};
+    let result: ProcessResult;
+    try {
+      result = await this.runCbmProcess({
+        command: "codebase-memory-mcp",
+        args: ["cli", tool, JSON.stringify(input)],
+        env: createCbmEnvironment(cacheDir),
+        inheritEnv: false,
+        timeoutMs: options.timeoutMs,
+        onOutput: options.onOutput,
+        signal: options.signal
+      });
+    } finally {
+      release();
+    }
 
     if (result.exitCode !== 0) {
       const detail = sanitizePublicMessage(
@@ -268,6 +340,15 @@ export class CbmService {
       }
     }
   }
+}
+
+interface TurnSessionEntry {
+  cacheKey: string;
+  session: CbmMcpSession;
+}
+
+function positiveConcurrency(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 function cbmBooleanSettings(output: string): Map<string, boolean> {

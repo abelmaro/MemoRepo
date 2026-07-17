@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AppDatabase } from "../db/connection.js";
 import { publicJobSelectColumns } from "../db/jobProjection.js";
-import { insertRecord, updateRecord } from "../db/sql.js";
+import { insertRecord, updateRecord, type SqlValue } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
 import { createId } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
@@ -28,6 +28,7 @@ export type JobHandler = (payload: Record<string, unknown>, context: JobContext)
 export const JOB_EVENT_MESSAGE_MAX_BYTES = 16 * 1024;
 export const JOB_LOG_EVENT_MAX_COUNT = 500;
 const JOB_LOG_TRUNCATED_EVENT_TYPE = "log_truncated";
+const JOB_LOG_FLUSH_INTERVAL_MS = 100;
 
 export class JobRunner {
   readonly events = new EventEmitter();
@@ -38,6 +39,8 @@ export class JobRunner {
   private logEventCounts = new Map<string, number>();
   private saturatedLogJobs = new Set<string>();
   private activeControllers = new Map<string, AbortController>();
+  private pendingLogEvents = new Map<string, JobEventRecord[]>();
+  private logFlushTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly database: AppDatabase,
@@ -68,6 +71,11 @@ export class JobRunner {
       clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.logFlushTimer) {
+      clearTimeout(this.logFlushTimer);
+      this.logFlushTimer = null;
+    }
+    this.flushAllLogEvents();
   }
 
   enqueue(input: EnqueueJobInput) {
@@ -167,6 +175,7 @@ export class JobRunner {
   }
 
   getJobEvents(jobId: string) {
+    this.flushLogEvents(jobId);
     return this.database.sqlite.prepare("SELECT * FROM job_events WHERE job_id = ? ORDER BY created_at ASC").all(jobId);
   }
 
@@ -380,13 +389,22 @@ export class JobRunner {
       return;
     }
     const boundedMessage = truncateEventMessage(message);
-    const record = {
+    const record: JobEventRecord = {
       id: createId("evt"),
       jobId,
       eventType,
       message: boundedMessage,
       createdAt: nowIso()
     };
+    if (eventType === "log") {
+      const pending = this.pendingLogEvents.get(jobId) ?? [];
+      pending.push(record);
+      this.pendingLogEvents.set(jobId, pending);
+      this.events.emit(jobId, record);
+      this.scheduleLogFlush();
+      return;
+    }
+    this.flushLogEvents(jobId);
     insertRecord(this.database, "job_events", record);
     this.events.emit(jobId, record);
   }
@@ -402,6 +420,7 @@ export class JobRunner {
     }
 
     this.saturatedLogJobs.add(jobId);
+    this.flushLogEvents(jobId);
     const record = {
       id: createId("evt"),
       jobId,
@@ -419,6 +438,39 @@ export class JobRunner {
       .prepare("SELECT COUNT(*) AS count FROM job_events WHERE job_id = ? AND event_type = 'log'")
       .get(jobId) as { count: number };
     return row.count;
+  }
+
+  private scheduleLogFlush(): void {
+    if (this.logFlushTimer) return;
+    this.logFlushTimer = setTimeout(() => {
+      this.logFlushTimer = null;
+      try {
+        this.flushAllLogEvents();
+      } catch {
+        this.scheduleLogFlush();
+      }
+    }, JOB_LOG_FLUSH_INTERVAL_MS);
+    this.logFlushTimer.unref();
+  }
+
+  private flushAllLogEvents(): void {
+    for (const jobId of Array.from(this.pendingLogEvents.keys())) {
+      this.flushLogEvents(jobId);
+    }
+  }
+
+  private flushLogEvents(jobId: string): void {
+    const pending = this.pendingLogEvents.get(jobId);
+    if (!pending || pending.length === 0) return;
+    this.pendingLogEvents.delete(jobId);
+    try {
+      this.database.sqlite.transaction(() => {
+        for (const record of pending) insertRecord(this.database, "job_events", record);
+      })();
+    } catch (error) {
+      this.pendingLogEvents.set(jobId, [...pending, ...(this.pendingLogEvents.get(jobId) ?? [])]);
+      throw error;
+    }
   }
 
   private requireJob(jobId: string): JobRow {
@@ -481,6 +533,14 @@ interface JobRecord {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+}
+
+interface JobEventRecord extends Record<string, SqlValue> {
+  id: string;
+  jobId: string;
+  eventType: string;
+  message: string;
+  createdAt: string;
 }
 
 function createJobDeduplicationKey(job: JobRecord): string {

@@ -207,6 +207,7 @@ function createGatewayFixture() {
   const liveRepositoryPath = path.join(root, "spaces", "gateway-space", "pinned-repository");
   fs.mkdirSync(snapshotSourcePath, { recursive: true });
   fs.mkdirSync(liveRepositoryPath, { recursive: true });
+  fs.mkdirSync(path.join(root, "indexes", "c"), { recursive: true });
   const sqlite = new Database(":memory:");
   migrate(sqlite);
   const database = { sqlite } as AppDatabase;
@@ -347,6 +348,7 @@ function testConfig(root: string): AppConfig {
     indexesDir: path.join(root, "indexes"),
     repoIndexesDir: path.join(root, "indexes", "r"),
     snapshotIndexesDir: path.join(root, "indexes", "s"),
+    revisionSourcesDir: path.join(root, "indexes", "c"),
     logsDir: path.join(root, "logs"),
     tmpDir: path.join(root, "tmp"),
     binDir: path.join(root, "bin"),
@@ -357,7 +359,9 @@ function testConfig(root: string): AppConfig {
     agentCredentialPath: path.join(root, "secrets", "agent-credentials.json"),
     snapshotRetentionDefault: 3,
     jobRetentionDaysDefault: 30,
-    jobConcurrency: 2
+    jobConcurrency: 2,
+    cbmIndexConcurrency: 1,
+    cbmInteractiveConcurrency: 2
   };
 }
 

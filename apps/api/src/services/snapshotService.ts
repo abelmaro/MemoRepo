@@ -4,7 +4,7 @@ import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
-import { assertDeletableManagedPath, managedPathSize, removeManagedPath } from "../domain/files.js";
+import { assertDeletableManagedPath, managedPathSize, managedPathSizeAsync, removeManagedPath } from "../domain/files.js";
 import { createId } from "../domain/ids.js";
 import { assertInside, ensureInsideDir } from "../domain/paths.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
@@ -40,6 +40,8 @@ export interface SnapshotManifest {
 
 export class SnapshotService {
   private readonly pruningSnapshotIds = new Set<string>();
+  private readonly sourceMaterializations = new Map<string, Promise<string>>();
+  private readonly snapshotSizeTasks = new Map<string, Promise<void>>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -51,6 +53,8 @@ export class SnapshotService {
     this.reconcileInterruptedSnapshotBuilds();
     this.recoverInterruptedSnapshotPrunes();
     cleanupStaleSnapshotWorktrees(this.config.memorepoHome);
+    cleanupStaleSnapshotIndexes(this.config.memorepoHome);
+    ensurePlainManagedDirectory(this.config.memorepoHome, this.config.revisionSourcesDir, "Revision source root");
     cleanupOrphanedSnapshotArtifacts(this.database, this.config);
   }
 
@@ -89,7 +93,8 @@ export class SnapshotService {
       manifestJson: JSON.stringify({ snapshotId, version, createdAt, repositories: [] }),
       createdAt,
       activatedAt: null,
-      error: null
+      error: null,
+      sizeBytes: null
     });
 
     this.updateSpaceSnapshotStatus(spaceId, "building");
@@ -102,12 +107,8 @@ export class SnapshotService {
         throwIfAborted(signal);
         const materializeStartedAt = Date.now();
         onOutput?.(`Indexing ${repo.full_name} into snapshot ${versionName}`);
-        const sourcePath = assertInside(
-          this.config.memorepoHome,
-          path.join(artifactPath, "sources", safePathSegment(repo.id), path.basename(repo.local_path))
-        );
-        await this.materializeRepository(this.config.memorepoHome, repo.local_path, repo.selected_commit!, sourcePath, signal);
-        onOutput?.(`Snapshot source materialized in ${formatDuration(Date.now() - materializeStartedAt)}`);
+        const sourcePath = await this.materializeRevisionSource(repo, signal);
+        onOutput?.(`Snapshot source prepared in ${formatDuration(Date.now() - materializeStartedAt)}`);
         const indexStartedAt = Date.now();
         const result = await this.cbm.indexRepository(sourcePath, artifactPath, "fast", onOutput, signal);
         onOutput?.(`Snapshot index for ${repo.full_name} completed in ${formatDuration(Date.now() - indexStartedAt)}`);
@@ -137,6 +138,7 @@ export class SnapshotService {
         createdAt,
         repositories: manifestRepositories
       };
+      const sizeBytes = await managedPathSizeAsync(snapshotRoot, artifactPath, signal);
       const activatedAt = nowIso();
 
       this.database.sqlite.transaction(() => {
@@ -156,7 +158,8 @@ export class SnapshotService {
             status: "active",
             manifestJson: JSON.stringify(manifest),
             activatedAt,
-            error: null
+            error: null,
+            sizeBytes
           },
           "id",
           snapshotId
@@ -230,20 +233,19 @@ export class SnapshotService {
       this.config.snapshotIndexesDir,
       "Snapshot index root"
     );
+    for (const row of rows) {
+      const artifactPath = assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath);
+      if (row.sizeBytes === null) {
+        this.scheduleSnapshotSize(row.id, snapshotRoot, artifactPath);
+      }
+    }
     return {
       snapshots: rows.map((row) => toPublicSnapshot(
         row,
         activeSnapshotId,
-        snapshotRoot,
         this.config.memorepoHome
       )),
-      totalSizeBytes: rows.reduce(
-        (total, row) => total + managedPathSize(
-          snapshotRoot,
-          assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)
-        ),
-        0
-      ),
+      totalSizeBytes: rows.reduce((total, row) => total + (row.sizeBytes ?? 0), 0),
       defaultRetention: this.config.snapshotRetentionDefault
     };
   }
@@ -483,7 +485,8 @@ export class SnapshotService {
           manifest_json AS manifestJson,
           created_at AS createdAt,
           activated_at AS activatedAt,
-          error
+          error,
+          size_bytes AS sizeBytes
         FROM space_snapshots
         WHERE space_id = ?
         ORDER BY version DESC
@@ -507,12 +510,84 @@ export class SnapshotService {
       throw new Error("Space has pending or running jobs");
     }
   }
+
+  private scheduleSnapshotSize(snapshotId: string, snapshotRoot: string, artifactPath: string): void {
+    if (this.snapshotSizeTasks.has(snapshotId)) return;
+    const task = (async () => {
+      const sizeBytes = await managedPathSizeAsync(snapshotRoot, artifactPath);
+      this.database.sqlite
+        .prepare("UPDATE space_snapshots SET size_bytes = ? WHERE id = ? AND size_bytes IS NULL")
+        .run(sizeBytes, snapshotId);
+    })();
+    this.snapshotSizeTasks.set(snapshotId, task);
+    void task.catch(() => undefined).finally(() => {
+      if (this.snapshotSizeTasks.get(snapshotId) === task) this.snapshotSizeTasks.delete(snapshotId);
+    });
+  }
+
+  private materializeRevisionSource(repo: SpaceRepositoryRecord, signal?: AbortSignal): Promise<string> {
+    const sourceRoot = ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      this.config.revisionSourcesDir,
+      "Revision source root"
+    );
+    const repositoryRoot = ensureInsideDir(sourceRoot, path.join(sourceRoot, safePathSegment(repo.github_repository_id)));
+    const commitRoot = assertInside(repositoryRoot, path.join(repositoryRoot, safePathSegment(repo.selected_commit!)));
+    const targetPath = assertInside(commitRoot, path.join(commitRoot, safePathSegment(path.basename(repo.local_path))));
+    const key = path.normalize(targetPath).toLowerCase();
+
+    const existing = this.sourceMaterializations.get(key);
+    if (existing) return waitForSharedMaterialization(existing, signal);
+
+    const materialization = this.createRevisionSource(repo, sourceRoot, commitRoot, targetPath, signal);
+    this.sourceMaterializations.set(key, materialization);
+    void materialization.finally(() => {
+      if (this.sourceMaterializations.get(key) === materialization) this.sourceMaterializations.delete(key);
+    }).catch(() => undefined);
+    return waitForSharedMaterialization(materialization, signal);
+  }
+
+  private async createRevisionSource(
+    repo: SpaceRepositoryRecord,
+    sourceRoot: string,
+    commitRoot: string,
+    targetPath: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    if (isPlainDirectoryInside(sourceRoot, targetPath)) return targetPath;
+    if (fs.existsSync(commitRoot)) {
+      await fs.promises.rm(assertDeletableManagedPath(sourceRoot, commitRoot), { recursive: true, force: true });
+    }
+
+    ensureInsideDir(sourceRoot, path.dirname(commitRoot));
+    const temporaryRoot = assertInside(
+      sourceRoot,
+      path.join(path.dirname(commitRoot), `.tmp-${path.basename(commitRoot)}-${createId("src").slice(-8)}`)
+    );
+    const temporaryTarget = assertInside(temporaryRoot, path.join(temporaryRoot, path.basename(targetPath)));
+    try {
+      await this.materializeRepository(
+        this.config.memorepoHome,
+        repo.local_path,
+        repo.selected_commit!,
+        temporaryTarget,
+        signal
+      );
+      throwIfAborted(signal);
+      await fs.promises.rename(temporaryRoot, commitRoot);
+      return targetPath;
+    } catch (error) {
+      if (isPlainDirectoryInside(sourceRoot, targetPath)) return targetPath;
+      throw error;
+    } finally {
+      await fs.promises.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
 }
 
 function toPublicSnapshot(
   row: SnapshotRow,
   activeSnapshotId: string | null,
-  snapshotRoot: string,
   memorepoHome: string
 ): PublicSnapshot {
   return {
@@ -521,7 +596,7 @@ function toPublicSnapshot(
     status: row.status,
     active: row.id === activeSnapshotId,
     repositoryCount: snapshotRepositoryCount(row.manifestJson),
-    sizeBytes: managedPathSize(snapshotRoot, assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)),
+    sizeBytes: row.sizeBytes ?? 0,
     createdAt: row.createdAt,
     activatedAt: row.activatedAt,
     error: row.error ? sanitizePublicMessage(row.error, [memorepoHome]) : null
@@ -601,7 +676,7 @@ function safePathSegment(value: string): string {
   return segment || "repository";
 }
 
-async function materializeGitRepository(
+export async function materializeGitRepository(
   memorepoHome: string,
   repositoryPath: string,
   commit: string,
@@ -613,51 +688,88 @@ async function materializeGitRepository(
   ensureInsideDir(memorepoHome, path.dirname(target));
   if (fs.existsSync(target)) throw new Error("Snapshot source target already exists");
 
-  const stagingParent = snapshotWorktreeRoot(memorepoHome);
-  const staging = assertDeletableManagedPath(
-    memorepoHome,
-    path.join(stagingParent, `w-${createId("tmp").slice(-8)}`)
+  const indexRoot = snapshotIndexRoot(memorepoHome);
+  const temporaryIndex = assertDeletableManagedPath(
+    indexRoot,
+    path.join(indexRoot, `i-${createId("tmp").slice(-16)}`)
   );
-  let worktreeRegistered = false;
   let materialized = false;
 
   try {
     throwIfAborted(signal);
-    const added = await runGit(repository, ["worktree", "add", "--detach", staging, commit], signal);
-    if (added.exitCode !== 0) throw new Error("Git could not create the snapshot source worktree");
-    worktreeRegistered = true;
+    await assertGitTreeCanBeMaterialized(repository, commit, signal);
 
-    fs.cpSync(staging, target, {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-      filter(source) {
-        const relative = path.relative(staging, source);
-        if (relative === ".git") return false;
-        if (fs.lstatSync(source).isSymbolicLink()) {
-          throw new Error("Snapshot source contains a symbolic link");
-        }
-        return true;
-      }
-    });
+    const indexEnvironment = { GIT_INDEX_FILE: temporaryIndex };
+    const readTree = await runGit(repository, ["read-tree", commit], signal, indexEnvironment);
+    if (readTree.exitCode !== 0) throw new Error("Git could not read the selected snapshot commit");
+
+    const checkout = await runGit(
+      repository,
+      ["checkout-index", "--all", "--force", `--prefix=${gitPath(target)}/`],
+      signal,
+      indexEnvironment
+    );
+    if (checkout.exitCode !== 0) throw new Error("Git could not materialize the selected snapshot commit");
     throwIfAborted(signal);
+    if (!fs.existsSync(target)) throw new Error("Git did not create the snapshot source target");
     materialized = true;
   } catch (error) {
-    if (fs.existsSync(target)) removeManagedPath(memorepoHome, target);
+    await fs.promises.rm(target, { recursive: true, force: true }).catch(() => undefined);
     throw new Error("Could not materialize the selected repository commit for the snapshot", { cause: error });
   } finally {
-    if (worktreeRegistered) {
-      const removed = await runGit(repository, ["worktree", "remove", "--force", staging]).catch(() => null);
-      if (!removed || removed.exitCode !== 0) {
-        if (fs.existsSync(staging)) removeManagedPath(memorepoHome, staging);
-        await runGit(repository, ["worktree", "prune"]).catch(() => null);
-      }
-    } else if (fs.existsSync(staging)) {
-      removeManagedPath(memorepoHome, staging);
-    }
+    await fs.promises.rm(temporaryIndex, { force: true }).catch(() => undefined);
   }
 
   if (!materialized) throw new Error("Snapshot source materialization did not complete");
+}
+
+function isPlainDirectoryInside(root: string, target: string): boolean {
+  try {
+    const safeTarget = assertDeletableManagedPath(root, target);
+    const stat = fs.lstatSync(safeTarget);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const realRoot = fs.realpathSync(root);
+    return isStrictlyInsidePath(realRoot, fs.realpathSync(safeTarget));
+  } catch {
+    return false;
+  }
+}
+
+async function waitForSharedMaterialization(materialization: Promise<string>, signal?: AbortSignal): Promise<string> {
+  throwIfAborted(signal);
+  if (!signal) return materialization;
+
+  return await new Promise<string>((resolve, reject) => {
+    const abort = () => reject(abortError(signal));
+    signal.addEventListener("abort", abort, { once: true });
+    materialization.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+function abortError(signal: AbortSignal): Error {
+  const error = signal.reason instanceof Error ? new Error(signal.reason.message) : new Error("Operation cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+async function assertGitTreeCanBeMaterialized(
+  repositoryPath: string,
+  commit: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const tree = await runGit(
+    repositoryPath,
+    ["ls-tree", "-r", "--full-tree", commit],
+    signal,
+    undefined,
+    64 * 1024 * 1024
+  );
+  if (tree.exitCode !== 0 || tree.stdoutTruncated) {
+    throw new Error("Git could not safely inspect the selected snapshot commit");
+  }
+  if (tree.stdout.split(/\r?\n/).some((entry) => entry.startsWith("120000 "))) {
+    throw new Error("Snapshot source contains a symbolic link");
+  }
 }
 
 function cleanupStaleSnapshotWorktrees(memorepoHome: string): void {
@@ -673,6 +785,18 @@ function cleanupStaleSnapshotWorktrees(memorepoHome: string): void {
 
 function snapshotWorktreeRoot(memorepoHome: string): string {
   return ensurePlainManagedDirectory(memorepoHome, path.join(memorepoHome, "tmp", "snapshot-worktrees"), "Snapshot worktree root");
+}
+
+function snapshotIndexRoot(memorepoHome: string): string {
+  return ensurePlainManagedDirectory(memorepoHome, path.join(memorepoHome, "tmp", "snapshot-indexes"), "Snapshot index root");
+}
+
+function cleanupStaleSnapshotIndexes(memorepoHome: string): void {
+  const indexRoot = snapshotIndexRoot(memorepoHome);
+  for (const entry of fs.readdirSync(indexRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^i-[0-9a-f]{16}$/i.test(entry.name)) continue;
+    fs.rmSync(assertDeletableManagedPath(indexRoot, path.join(indexRoot, entry.name)), { force: true });
+  }
 }
 
 function cleanupOrphanedSnapshotArtifacts(database: AppDatabase, config: AppConfig): void {
@@ -745,19 +869,29 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+function gitPath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
 function isStrictlyInsidePath(root: string, target: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-function runGit(repositoryPath: string, args: string[], signal?: AbortSignal) {
+function runGit(
+  repositoryPath: string,
+  args: string[],
+  signal?: AbortSignal,
+  environment?: NodeJS.ProcessEnv,
+  maxCaptureBytes = 64 * 1024
+) {
   return runProcess({
     command: "git",
     args: ["-C", repositoryPath, "-c", "core.autocrlf=false", ...args],
-    env: createSafeProcessEnvironment(),
+    env: { ...createSafeProcessEnvironment(), ...environment },
     inheritEnv: false,
     timeoutMs: 120_000,
-    maxCaptureBytes: 64 * 1024,
+    maxCaptureBytes,
     maxLineBytes: 4 * 1024,
     signal
   });
@@ -784,6 +918,7 @@ interface SnapshotRow {
   createdAt: string;
   activatedAt: string | null;
   error: string | null;
+  sizeBytes: number | null;
 }
 
 interface PublicSnapshot {

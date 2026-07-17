@@ -16,8 +16,13 @@ export class SnapshotQueryService {
     snapshotId: string,
     toolName: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    turnSessionId?: string
   ) {
-    return this.gateway.callSnapshotTool(spaceId, snapshotId, toolName, args, signal);
+    return this.gateway.callSnapshotTool(spaceId, snapshotId, toolName, args, signal, turnSessionId);
+  }
+
+  closeTurn(turnSessionId: string): Promise<void> {
+    return this.gateway.closeSnapshotToolSession?.(turnSessionId) ?? Promise.resolve();
   }
 }
