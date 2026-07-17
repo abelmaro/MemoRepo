@@ -7,6 +7,10 @@ export class SnapshotQueryService {
     return this.gateway.toolDefinitionsForSnapshot(spaceId, snapshotId);
   }
 
+  instructions(spaceId: string, snapshotId: string) {
+    return this.gateway.instructionsForSnapshot(spaceId, snapshotId);
+  }
+
   call(
     spaceId: string,
     snapshotId: string,

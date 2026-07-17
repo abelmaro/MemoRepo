@@ -133,10 +133,10 @@ it("supports pending provider login without a URL, code, or instructions", async
 it("switches the provider and model through the runtime selection API", async () => {
   const firstCatalog = {
     providers: [
-      { id: "provider-a", name: "Provider A", models: [{ id: "model-a", name: "Model A" }] },
-      { id: "provider-b", name: "Provider B", models: [{ id: "model-b", name: "Model B" }] }
+      { id: "provider-a", name: "Provider A", models: [{ id: "model-a", name: "Model A", capabilities: {} }] },
+      { id: "provider-b", name: "Provider B", models: [{ id: "model-b", name: "Model B", capabilities: {} }] }
     ],
-    selected: { providerId: "provider-a", modelId: "model-a" }
+    selected: { providerId: "provider-a", modelId: "model-a", settings: {} }
   };
   apiMock.mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/api/agent/models" && !init) return Promise.resolve(firstCatalog);
@@ -169,6 +169,81 @@ it("switches the provider and model through the runtime selection API", async ()
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ providerId: "provider-b", modelId: "model-b" }) })
   ));
   expect(screen.getByRole("button", { name: "Resize Ask this Space" })).toBeTruthy();
+});
+
+it("keeps advanced settings closed and updates supported verbosity and effort", async () => {
+  const catalog = {
+    providers: [{
+      id: "provider-a",
+      name: "Provider A",
+      models: [{
+        id: "model-a",
+        name: "Model A",
+        capabilities: {
+          verbosity: { options: ["low", "medium", "high"], default: "medium" },
+          effort: { options: ["low", "medium", "high"], default: "medium" }
+        }
+      }]
+    }],
+    selected: { providerId: "provider-a", modelId: "model-a", settings: { verbosity: "medium", effort: "medium" } }
+  };
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models" && !init) return Promise.resolve(catalog);
+    if (path === "/api/agent/model" && init?.method === "PUT") {
+      return Promise.resolve({ ...catalog, selected: JSON.parse(String(init.body)) });
+    }
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [] });
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  const summary = await screen.findByText("Advanced");
+  const disclosure = summary.closest("details") as HTMLDetailsElement;
+  expect(disclosure.open).toBe(false);
+  fireEvent.click(summary);
+  expect(disclosure.open).toBe(true);
+  expect(screen.getByLabelText("Verbosity")).toBeTruthy();
+  expect(screen.getByLabelText("Reasoning effort")).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText("Verbosity"), { target: { value: "high" } });
+  await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+    "/api/agent/model",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({
+        providerId: "provider-a",
+        modelId: "model-a",
+        settings: { verbosity: "high", effort: "medium" }
+      })
+    })
+  ));
+});
+
+it("does not render unsupported advanced controls", async () => {
+  const catalog = {
+    providers: [{
+      id: "provider-a",
+      name: "Provider A",
+      models: [{
+        id: "model-a",
+        name: "Model A",
+        capabilities: { verbosity: { options: ["low", "high"], default: "low" } }
+      }]
+    }],
+    selected: { providerId: "provider-a", modelId: "model-a", settings: { verbosity: "low" } }
+  };
+  apiMock.mockImplementation((path: string) => {
+    if (path === "/api/agent/models") return Promise.resolve(catalog);
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [] });
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByText("Advanced"));
+  expect(screen.getByLabelText("Verbosity")).toBeTruthy();
+  expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
 });
 
 it("keeps a disconnected provider's pruned snapshot transcript readable and clearly non-continuable", async () => {
@@ -397,8 +472,23 @@ function chatFixture(id: string, title: string) {
 
 function modelCatalog(providerId: string, providerName: string, modelId: string, modelName: string) {
   return {
-    providers: [{ id: providerId, name: providerName, models: [{ id: modelId, name: modelName }] }],
-    selected: { providerId, modelId }
+    providers: [{ id: providerId, name: providerName, models: [{ id: modelId, name: modelName, capabilities: {} }] }],
+    selected: { providerId, modelId, settings: {} }
+  };
+}
+
+function connectedStatus() {
+  return {
+    configured: true,
+    available: true,
+    connected: true,
+    providerId: "provider-a",
+    providerName: "Provider A",
+    modelId: "model-a",
+    modelName: "Model A",
+    authSource: "stored",
+    version: "1.0.0",
+    message: null
   };
 }
 

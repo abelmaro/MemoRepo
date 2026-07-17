@@ -102,6 +102,10 @@ test("emits a successful lifecycle and forwards deltas and tool execution", asyn
       success: result.ok
     });
     await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: "one match." });
+    await input.onProviderTurn({
+      stopReason: "stop",
+      usage: { input: 120, output: 42, reasoning: 18, cacheRead: 20, cacheWrite: 4, total: 204 }
+    });
   });
   const runtime = new AgentRuntime(adapter);
 
@@ -121,7 +125,14 @@ test("emits a successful lifecycle and forwards deltas and tool execution", asyn
     type: "run.completed",
     runId: "run-1",
     status: "completed",
-    error: null
+    error: null,
+    metrics: {
+      stopReason: "stop",
+      providerRoundCount: 1,
+      lengthStopCount: 0,
+      toolCallCount: 1,
+      usage: { input: 120, output: 42, reasoning: 18, cacheRead: 20, cacheWrite: 4, total: 204 }
+    }
   });
   assert.deepEqual(
     events.values.map((event) => event.type),
@@ -166,7 +177,8 @@ test("retries a failed terminal consumer, observes the detached run, and release
       type: "run.completed",
       runId: "run-1",
       status: "failed",
-      error: "Agent event handling failed"
+      error: "Agent event handling failed",
+      metrics: emptyMetrics()
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(
@@ -197,7 +209,8 @@ test("does not expose adapter error details through terminal events", async () =
     type: "run.completed",
     runId: "run-1",
     status: "failed",
-    error: "Agent run failed"
+    error: "Agent run failed",
+    metrics: emptyMetrics()
   });
   await runtime.close();
 });
@@ -253,7 +266,8 @@ test("interrupt aborts the adapter run and completes it as interrupted", async (
     type: "run.completed",
     runId: "run-1",
     status: "interrupted",
-    error: null
+    error: null,
+    metrics: emptyMetrics()
   });
   await runtime.close();
 });
@@ -269,7 +283,8 @@ test("fails a run that exceeds its deadline and releases the session", async () 
     type: "run.completed",
     runId: "run-1",
     status: "failed",
-    error: "Agent run exceeded the configured 1-second limit (MR-AGENT-TIME-LIMIT)"
+    error: "Agent run exceeded the configured 1-second limit (MR-AGENT-TIME-LIMIT)",
+    metrics: emptyMetrics()
   });
 
   const next = collectEvents();
@@ -452,6 +467,16 @@ function collectEvents() {
       if (event.type === "run.completed") completed.resolve(event);
     }
   };
+}
+
+function emptyMetrics() {
+  return {
+    stopReason: null,
+    providerRoundCount: 0,
+    lengthStopCount: 0,
+    toolCallCount: 0,
+    usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  } as const;
 }
 
 async function rejectWhenAborted(signal: AbortSignal): Promise<never> {

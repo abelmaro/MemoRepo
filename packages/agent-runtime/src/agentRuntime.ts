@@ -1,5 +1,13 @@
 import type { AgentRuntimeAdapter } from "./agentRuntimeAdapter.js";
-import type { AgentLoginAttempt, AgentProviderStatus, AgentRunInput, AgentRuntimeEvent } from "./contracts.js";
+import type {
+  AgentLoginAttempt,
+  AgentProviderStatus,
+  AgentProviderTurnObservation,
+  AgentRunInput,
+  AgentRunMetrics,
+  AgentRuntimeEvent,
+  AgentTokenUsage
+} from "./contracts.js";
 
 interface ActiveRun {
   sessionId: string;
@@ -181,6 +189,7 @@ export class AgentRuntime {
     };
     let failure: unknown = null;
     let toolCalls = 0;
+    const providerObservations: AgentProviderTurnObservation[] = [];
     const deadline = setTimeout(() => {
       abort.abort(
         new AgentRunLimitError(
@@ -216,7 +225,10 @@ export class AgentRuntime {
           return input.requestTool(request, abort.signal);
         },
         signal: abort.signal,
-        onEvent: emit
+        onEvent: emit,
+        onProviderTurn: (observation) => {
+          providerObservations.push(observation);
+        }
       });
     } catch (error) {
       failure = error;
@@ -232,7 +244,8 @@ export class AgentRuntime {
       type: "run.completed",
       runId: input.runId,
       status: failure === null ? "completed" : interrupted ? "interrupted" : "failed",
-      error: failure === null || interrupted ? null : limited ? abort.signal.reason.message : publicRuntimeError()
+      error: failure === null || interrupted ? null : limited ? abort.signal.reason.message : publicRuntimeError(),
+      metrics: runMetrics(providerObservations, toolCalls)
     };
     // AgentService durably closes the turn inside this callback. Release the
     // runtime session first so a client reacting to that terminal event cannot
@@ -250,9 +263,34 @@ export class AgentRuntime {
       type: "run.completed",
       runId: input.runId,
       status: terminal.status === "interrupted" ? "interrupted" : "failed",
-      error: terminal.status === "interrupted" ? null : "Agent event handling failed"
+      error: terminal.status === "interrupted" ? null : "Agent event handling failed",
+      metrics: terminal.metrics
     }).catch(() => undefined);
   }
+}
+
+function runMetrics(observations: AgentProviderTurnObservation[], toolCallCount: number): AgentRunMetrics {
+  return {
+    stopReason: observations.at(-1)?.stopReason ?? null,
+    providerRoundCount: observations.length,
+    lengthStopCount: observations.filter((observation) => observation.stopReason === "length").length,
+    toolCallCount,
+    usage: observations.reduce<AgentTokenUsage>(
+      (total, observation) => ({
+        input: total.input + observation.usage.input,
+        output: total.output + observation.usage.output,
+        reasoning: total.reasoning + observation.usage.reasoning,
+        cacheRead: total.cacheRead + observation.usage.cacheRead,
+        cacheWrite: total.cacheWrite + observation.usage.cacheWrite,
+        total: total.total + observation.usage.total
+      }),
+      emptyTokenUsage()
+    )
+  };
+}
+
+function emptyTokenUsage(): AgentTokenUsage {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 }
 
 export class AgentRuntimeUnavailableError extends Error {

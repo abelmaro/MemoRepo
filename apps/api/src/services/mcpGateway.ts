@@ -10,14 +10,20 @@ import { createId, createSecretToken, sha256 } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
 import type { SnapshotManifest, SnapshotManifestRepository } from "./snapshotService.js";
+import {
+  buildSnapshotInstructions,
+  SNAPSHOT_QUERY_GRAPH_MAX_ROWS,
+  SNAPSHOT_SEARCH_RESULT_MAX,
+  snapshotToolWorkflow
+} from "./snapshotAgentInstructions.js";
 import type { SpaceService } from "./spaceService.js";
 
-const QUERY_GRAPH_MAX_ROWS = 25;
+const QUERY_GRAPH_MAX_ROWS = SNAPSHOT_QUERY_GRAPH_MAX_ROWS;
 const ENGINE_RESULT_WINDOW = 250;
 const QUERY_GRAPH_MAX_OFFSET = ENGINE_RESULT_WINDOW - 1;
 const QUERY_GRAPH_TIMEOUT_MS = 10_000;
 const MCP_RESPONSE_MAX_BYTES = 50_000;
-const SEARCH_RESULT_MAX_LIMIT = 25;
+const SEARCH_RESULT_MAX_LIMIT = SNAPSHOT_SEARCH_RESULT_MAX;
 const SEARCH_CODE_SCOPED_MAX_OFFSET = ENGINE_RESULT_WINDOW - 1;
 const GLOBAL_SEARCH_CODE_CANDIDATE_TARGET = ENGINE_RESULT_WINDOW - 1;
 const LAST_USED_WRITE_INTERVAL_MS = 60_000;
@@ -208,6 +214,19 @@ export class McpGateway {
     });
   }
 
+  async instructionsForSnapshot(spaceId: string, snapshotId: string): Promise<string> {
+    return this.spacesService.withSpaceReader(spaceId, async () => {
+      const { space, snapshot, manifest } = this.snapshotContextById(spaceId, snapshotId);
+      if (!snapshot || !manifest) throw new Error("The pinned snapshot is unavailable");
+      return buildSnapshotInstructions({
+        spaceName: space.name,
+        snapshotVersion: snapshot.version,
+        stale: space.snapshotStatus === "stale",
+        repositories: manifest.repositories
+      });
+    });
+  }
+
   async callSnapshotTool(
     spaceId: string,
     snapshotId: string,
@@ -306,8 +325,6 @@ export class McpGateway {
   }
 
   private async buildInstructions(spaceSlug: string, token: string): Promise<string> {
-    const recommendedFlow = `Recommended flow: get_graph_schema before custom Cypher; use an advertised search tool to locate symbols, then trace_path or get_code_snippet. Tool availability is negotiated with the installed CBM engine. Search limits cap at ${SEARCH_RESULT_MAX_LIMIT} results and query_graph at ${QUERY_GRAPH_MAX_ROWS} rows.`;
-
     try {
       return await this.spacesService.withSpaceReaderBySlug(spaceSlug, async () => {
         const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
@@ -318,24 +335,19 @@ export class McpGateway {
           ].join("\n");
         }
 
-        const stale = space.snapshotStatus === "stale";
-        const repositories = manifest.repositories
-          .map((repo) => `- ${repo.fullName} (project: ${repo.projectName}, branch: ${repo.branch}, commit: ${repo.commit.slice(0, 12)})`)
-          .join("\n");
-
-        return [
-          `MemoRepo serves read-only code intelligence for the "${space.name}" space from immutable snapshot v${snapshot.version}${stale ? " (stale: repositories changed after this snapshot was built)" : ""}.`,
-          `Repositories in this snapshot:\n${repositories}`,
-          'Pass "project" to scope a tool to one repository; omit it to search across all of them.',
-          recommendedFlow
-        ].join("\n\n");
+        return buildSnapshotInstructions({
+          spaceName: space.name,
+          snapshotVersion: snapshot.version,
+          stale: space.snapshotStatus === "stale",
+          repositories: manifest.repositories
+        });
       });
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode === 409) throw error;
       return [
         `MemoRepo serves read-only code intelligence for the "${spaceSlug}" space from an immutable snapshot.`,
         "Start with list_space_repositories to see repositories and project names.",
-        recommendedFlow
+        snapshotToolWorkflow()
       ].join("\n\n");
     }
   }

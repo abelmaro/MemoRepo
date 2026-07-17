@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 interface Migration {
   version: number;
@@ -14,6 +14,7 @@ const migrations: Migration[] = [
   { version: 4, up: addGitHubOAuthCredentials },
   { version: 5, up: addAgentChats },
   { version: 6, up: addAgentChats },
+  { version: 7, up: addAgentTurnMetrics },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -289,6 +290,25 @@ function addAgentChats(sqlite: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS agent_turns_active_chat_unique
       ON agent_turns(chat_id)
       WHERE status IN ('pending', 'running');
+  `);
+}
+
+function addAgentTurnMetrics(sqlite: Database.Database): void {
+  sqlite.exec(`
+    ALTER TABLE agent_turns ADD COLUMN provider_id TEXT;
+    ALTER TABLE agent_turns ADD COLUMN model_id TEXT;
+    ALTER TABLE agent_turns ADD COLUMN effort TEXT;
+    ALTER TABLE agent_turns ADD COLUMN verbosity TEXT;
+    ALTER TABLE agent_turns ADD COLUMN stop_reason TEXT;
+    ALTER TABLE agent_turns ADD COLUMN provider_round_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN length_stop_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN tool_call_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;
   `);
 }
 

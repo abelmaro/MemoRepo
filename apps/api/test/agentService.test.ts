@@ -53,6 +53,8 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
     const sent = await service.sendMessage("spc_test", created.chat.id, "Where is the answer built?");
     assert.equal(runtime.runs[0]?.input.sessionId, created.chat.id);
     assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /snapshot version 1/);
+    assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /Investigation protocol/);
+    assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /Gateway workflow for the pinned snapshot/);
     assert.deepEqual(runtime.runs[0]?.input.tools.map((tool) => tool.name), ["search_code"]);
 
     const blocked = await runtime.requestTool(sent.turn.id, "delete_file", {});
@@ -74,7 +76,18 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
       tool: { name: "search_code", arguments: { query: "answerQuestion" } }
     });
 
-    assert.equal(service.getTurn(sent.turn.id).status, "completed");
+    assert.deepEqual(service.getTurn(sent.turn.id), {
+      ...sent.turn,
+      status: "completed",
+      metrics: {
+        stopReason: "stop",
+        providerRoundCount: 2,
+        lengthStopCount: 0,
+        toolCallCount: 1,
+        usage: { input: 120, output: 50, reasoning: 20, cacheRead: 10, cacheWrite: 0, total: 200 }
+      },
+      finishedAt: service.getTurn(sent.turn.id).finishedAt
+    });
     assert.deepEqual(queryLog.calls, [
       {
         spaceId: "spc_test",
@@ -1194,7 +1207,19 @@ class FakeAgentRuntime implements AgentRuntimePort {
     }
     await run.input.onEvent({ type: "assistant.delta", runId, delta: options.answer });
     run.finished = true;
-    await run.input.onEvent({ type: "run.completed", runId, status: "completed", error: null });
+    await run.input.onEvent({
+      type: "run.completed",
+      runId,
+      status: "completed",
+      error: null,
+      metrics: {
+        stopReason: "stop",
+        providerRoundCount: 2,
+        lengthStopCount: 0,
+        toolCallCount: options.tool ? 1 : 0,
+        usage: { input: 120, output: 50, reasoning: 20, cacheRead: 10, cacheWrite: 0, total: 200 }
+      }
+    });
   }
 
   async interrupt(runId: string): Promise<void> {
@@ -1204,7 +1229,13 @@ class FakeAgentRuntime implements AgentRuntimePort {
     run.controller.abort(new Error("Agent run interrupted"));
     await Promise.allSettled([...(this.activeToolRequests.get(runId) ?? [])]);
     run.finished = true;
-    await run.input.onEvent({ type: "run.completed", runId, status: "interrupted", error: null });
+    await run.input.onEvent({
+      type: "run.completed",
+      runId,
+      status: "interrupted",
+      error: null,
+      metrics: emptyRunMetrics()
+    });
   }
 
   async close(): Promise<void> {
@@ -1244,6 +1275,9 @@ interface QueryLog {
 function snapshotQueries(log: QueryLog, beforeDefinitions?: (call: number) => Promise<void>): SnapshotQueryService {
   let definitionCall = 0;
   const gateway = {
+    instructionsForSnapshot() {
+      return "Gateway workflow for the pinned snapshot: list repositories, inspect architecture, search, trace, and fetch snippets.";
+    },
     async toolDefinitionsForSnapshot(spaceId: string, snapshotId: string) {
       log.definitions.push({ spaceId, snapshotId });
       await beforeDefinitions?.(++definitionCall);
@@ -1280,6 +1314,16 @@ function snapshotQueries(log: QueryLog, beforeDefinitions?: (call: number) => Pr
     }
   } as unknown as McpGateway;
   return new SnapshotQueryService(gateway);
+}
+
+function emptyRunMetrics() {
+  return {
+    stopReason: null,
+    providerRoundCount: 0,
+    lengthStopCount: 0,
+    toolCallCount: 0,
+    usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  } as const;
 }
 
 function snapshotGuard(calls: string[] = []): Pick<SnapshotService, "assertAgentTurnCanStart"> {

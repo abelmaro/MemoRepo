@@ -1,5 +1,6 @@
 import type {
   AgentLoginAttempt,
+  AgentProviderTurnObservation,
   AgentProviderStatus,
   AgentRunInput,
   AgentRuntimeEvent
@@ -8,6 +9,7 @@ import type {
 export interface AgentAdapterRunInput extends Omit<AgentRunInput, "onEvent"> {
   signal: AbortSignal;
   onEvent(event: Exclude<AgentRuntimeEvent, { type: "run.started" | "run.completed" }>): void | Promise<void>;
+  onProviderTurn(observation: AgentProviderTurnObservation): void | Promise<void>;
 }
 
 export interface AgentRuntimeAdapter {

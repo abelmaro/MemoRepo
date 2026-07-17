@@ -13,14 +13,18 @@ import type {
   TSchema,
   Usage
 } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, hasApi } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { AgentAdapterRunInput, AgentRuntimeAdapter } from "./agentRuntimeAdapter.js";
 import type {
   AgentHistoryMessage,
+  AgentEffort,
   AgentLoginAttempt,
   AgentModelCatalog,
   AgentProviderStatus,
+  AgentRunSettings,
   AgentToolDefinition,
+  AgentVerbosity,
   JsonValue
 } from "./contracts.js";
 
@@ -28,6 +32,9 @@ const RUNTIME_VERSION = "pi-0.80.8";
 const LOGIN_CHALLENGE_TIMEOUT_MS = 30_000;
 const LOGIN_RETENTION_MS = 20 * 60_000;
 const CONNECTION_ID_FIELD = "agentConnectionId";
+const DEFAULT_EFFORT = "medium" as const satisfies AgentEffort;
+const DEFAULT_VERBOSITY = "medium" as const satisfies AgentVerbosity;
+const CODEX_VERBOSITY_OPTIONS: AgentVerbosity[] = ["low", "medium", "high"];
 const SUPPORTED_AUTH_MESSAGE =
   "Ask this Space supports only device OAuth credentials stored by MemoRepo";
 const EXTERNAL_AUTH_LOGOUT_MESSAGE =
@@ -58,6 +65,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
   private authenticationEpoch = 0;
   private lifecycle: "open" | "logging-out" | "closed" = "open";
   private logoutTask: Promise<void> | null = null;
+  private readonly modelSettings = new Map<string, AgentRunSettings>();
 
   constructor(private readonly config: PiAgentRuntimeConfig, models?: Models) {
     this.credentialStore = preserveConnectionIdentity(config.credentialStore);
@@ -65,6 +73,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   catalog(): AgentModelCatalog {
+    const selectedModel = this.models.getModel(this.config.providerId, this.config.modelId);
     return {
       providers: this.models
         .getProviders()
@@ -72,20 +81,36 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
         .map((provider) => ({
           id: provider.id,
           name: provider.name,
-          models: this.models.getModels(provider.id).map((model) => ({ id: model.id, name: model.name }))
+          models: this.models.getModels(provider.id).map((model) => ({
+            id: model.id,
+            name: model.name,
+            capabilities: modelCapabilities(model, this.config.thinkingLevel)
+          }))
         }))
         .filter((provider) => provider.models.length > 0),
-      selected: { providerId: this.config.providerId, modelId: this.config.modelId }
+      selected: {
+        providerId: this.config.providerId,
+        modelId: this.config.modelId,
+        settings: selectedModel ? this.settingsFor(selectedModel) : {}
+      }
     };
   }
 
-  selectModel(providerId: string, modelId: string): void {
+  selectModel(providerId: string, modelId: string, settings?: AgentRunSettings): void {
     if (this.lifecycle !== "open") throw conflict("Agent runtime is not ready for model changes");
     if (this.activeLogin) throw conflict("Wait for agent sign-in to finish before changing models");
     if (this.activeRuns > 0) throw conflict("Wait for active agent runs before changing models");
     const provider = this.models.getProvider(providerId);
     if (!provider?.auth.oauth) throw unavailable(`Pi provider ${providerId} is not available for device OAuth`);
-    if (!this.models.getModel(providerId, modelId)) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
+    const model = this.models.getModel(providerId, modelId);
+    if (!model) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
+    if (settings) {
+      const current = this.modelSettings.get(modelKey(providerId, modelId)) ?? defaultSettings(model, this.config.thinkingLevel);
+      this.modelSettings.set(
+        modelKey(providerId, modelId),
+        validateSettings(model, { ...current, ...settings }, this.config.thinkingLevel)
+      );
+    }
     this.config.providerId = providerId;
     this.config.modelId = modelId;
   }
@@ -251,22 +276,49 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       }
 
       const tools = input.tools.map((tool) => this.toPiTool(input, tool));
+      const settings = this.settingsFor(model);
       const agent = new Agent({
         initialState: {
           systemPrompt: input.systemPrompt,
           model,
-          thinkingLevel: this.config.thinkingLevel ?? "medium",
+          thinkingLevel: settings.effort ?? "off",
           tools,
           messages: input.history.map((message) => toPiMessage(message, model))
         },
         sessionId: input.sessionId,
-        streamFn: (activeModel, context, options) => this.models.streamSimple(activeModel, context, options),
+        streamFn: (activeModel, context, options) => {
+          if (hasApi(activeModel, "openai-codex-responses")) {
+            const { reasoning: _reasoning, ...baseOptions } = options ?? {};
+            const reasoningEffort = toProviderReasoningEffort(settings.effort);
+            return this.models.stream(activeModel, context, {
+              ...baseOptions,
+              reasoningEffort,
+              textVerbosity: settings.verbosity ?? DEFAULT_VERBOSITY
+            });
+          }
+          return this.models.streamSimple(activeModel, context, options);
+        },
         toolExecution: "parallel"
       });
 
       const unsubscribe = agent.subscribe(async (event) => {
-        if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
-        await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: event.assistantMessageEvent.delta });
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          await input.onProviderTurn({
+            stopReason: event.message.stopReason,
+            usage: {
+              input: event.message.usage.input,
+              output: event.message.usage.output,
+              reasoning: event.message.usage.reasoning ?? 0,
+              cacheRead: event.message.usage.cacheRead,
+              cacheWrite: event.message.usage.cacheWrite,
+              total: event.message.usage.totalTokens
+            }
+          });
+          return;
+        }
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: event.assistantMessageEvent.delta });
+        }
       });
       const interrupt = () => agent.abort();
       input.signal.addEventListener("abort", interrupt, { once: true });
@@ -402,6 +454,15 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
     return model;
   }
 
+  private settingsFor(model: Model<Api>): AgentRunSettings {
+    const key = modelKey(model.provider, model.id);
+    const stored = this.modelSettings.get(key);
+    if (stored) return stored;
+    const defaults = defaultSettings(model, this.config.thinkingLevel);
+    this.modelSettings.set(key, defaults);
+    return defaults;
+  }
+
   private toPiTool(input: AgentAdapterRunInput, definition: AgentToolDefinition): AgentTool<TSchema, never> {
     return {
       name: definition.name,
@@ -461,6 +522,79 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       }
     }
   }
+}
+
+function modelCapabilities(model: Model<Api>, configuredEffort?: ThinkingLevel) {
+  const effortOptions = getSupportedThinkingLevels(model) as AgentEffort[];
+  const effortDefault = preferredEffort(effortOptions, configuredEffort);
+  return {
+    ...(effortOptions.length > 1 && effortDefault
+      ? { effort: { options: [...effortOptions], default: effortDefault } }
+      : {}),
+    ...(hasApi(model, "openai-codex-responses")
+      ? { verbosity: { options: [...CODEX_VERBOSITY_OPTIONS], default: DEFAULT_VERBOSITY } }
+      : {})
+  };
+}
+
+function defaultSettings(model: Model<Api>, configuredEffort?: ThinkingLevel): AgentRunSettings {
+  const capabilities = modelCapabilities(model, configuredEffort);
+  return {
+    ...(capabilities.effort ? { effort: capabilities.effort.default } : {}),
+    ...(capabilities.verbosity ? { verbosity: capabilities.verbosity.default } : {})
+  };
+}
+
+function validateSettings(
+  model: Model<Api>,
+  settings: AgentRunSettings,
+  configuredEffort?: ThinkingLevel
+): AgentRunSettings {
+  const capabilities = modelCapabilities(model, configuredEffort);
+  if (settings.effort !== undefined && !capabilities.effort?.options.includes(settings.effort)) {
+    throw invalidSetting(`Effort ${settings.effort} is not supported by ${model.name}`);
+  }
+  if (settings.verbosity !== undefined && !capabilities.verbosity?.options.includes(settings.verbosity)) {
+    throw invalidSetting(`Verbosity ${settings.verbosity} is not supported by ${model.name}`);
+  }
+  return {
+    ...(settings.effort !== undefined ? { effort: settings.effort } : {}),
+    ...(settings.verbosity !== undefined ? { verbosity: settings.verbosity } : {})
+  };
+}
+
+function preferredEffort(options: AgentEffort[], configured?: ThinkingLevel): AgentEffort | undefined {
+  const preferred = (configured ?? DEFAULT_EFFORT) as AgentEffort;
+  if (options.includes(preferred)) return preferred;
+  if (options.includes(DEFAULT_EFFORT)) return DEFAULT_EFFORT;
+  return options.find((option) => option !== "off") ?? options[0];
+}
+
+function modelKey(providerId: string, modelId: string): string {
+  return `${providerId}\0${modelId}`;
+}
+
+function invalidSetting(message: string): Error {
+  return Object.assign(new Error(message), { statusCode: 400 });
+}
+
+function toProviderReasoningEffort(
+  effort: AgentEffort | undefined
+): "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none" {
+  if (effort === undefined) return DEFAULT_EFFORT;
+  const providerEffort: Record<
+    AgentEffort,
+    "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
+  > = {
+    off: "none",
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max"
+  };
+  return providerEffort[effort];
 }
 
 async function loginPrompt(prompt: AuthPrompt): Promise<string> {

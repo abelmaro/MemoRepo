@@ -130,11 +130,13 @@ After a space has an active snapshot, open **Ask this Space**, choose a provider
 
 The connection button remains disabled until you accept the data disclosure. Questions, chat history, snapshot query results, and relevant code excerpts are sent to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
 
-The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or answer is active. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
+The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or answer is active. Open **Advanced** to change verbosity or reasoning effort when the selected model supports them; unsupported controls are omitted. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
 
 Each answer has configurable safety budgets. The supplied defaults are 600 seconds and 96 tool calls; set `MEMOREPO_AGENT_MAX_RUN_SECONDS` or `MEMOREPO_AGENT_MAX_TOOL_CALLS` in `.env` when a larger investigation needs a different bound. Limit failures include the stable codes `MR-AGENT-TIME-LIMIT` or `MR-AGENT-TOOL-LIMIT`.
 
 Chats are read-only, are pinned to the active immutable snapshot at creation time, and remain visible after signing out. If a pinned snapshot is pruned, its transcript remains readable but can no longer be continued.
+
+Every turn records its final provider stop reason, provider round count, tool-call count, and token totals. These diagnostics help distinguish a naturally concise answer from provider length termination or a bounded investigation; raw reasoning and tool payloads are not retained.
 
 Each snapshot indexes an exact-commit source copy stored inside its own artifact. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot.
 

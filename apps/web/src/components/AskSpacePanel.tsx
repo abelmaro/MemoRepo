@@ -27,6 +27,7 @@ import {
   type AgentChat,
   type AgentLogin,
   type AgentModelCatalog,
+  type AgentRunSettings,
   type AgentMessage,
   type AgentSource,
   type AgentStatus,
@@ -140,7 +141,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   });
 
   const selectModelMutation = useMutation({
-    mutationFn: (selection: { providerId: string; modelId: string }) =>
+    mutationFn: (selection: { providerId: string; modelId: string; settings?: AgentRunSettings }) =>
       api<AgentModelCatalog>("/api/agent/model", {
         method: "PUT",
         body: JSON.stringify(selection)
@@ -498,6 +499,10 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
                 const providerId = modelCatalogQuery.data?.selected.providerId;
                 if (providerId) selectModelMutation.mutate({ providerId, modelId });
               }}
+              onSelectSettings={(settings) => {
+                const selection = modelCatalogQuery.data?.selected;
+                if (selection) selectModelMutation.mutate({ ...selection, settings });
+              }}
             />
           )}
           {!compactViewport ? (
@@ -549,6 +554,7 @@ function HistoryView(props: {
   modelSelectionPending: boolean;
   onSelectProvider: (providerId: string) => void;
   onSelectModel: (modelId: string) => void;
+  onSelectSettings: (settings: AgentRunSettings) => void;
 }) {
   return (
     <div className="ask-space-history">
@@ -602,6 +608,9 @@ function HistoryView(props: {
 function ModelSelector(props: Parameters<typeof HistoryView>[0]) {
   const catalog = props.modelCatalog;
   const selectedProvider = catalog?.providers.find((provider) => provider.id === catalog.selected.providerId);
+  const selectedModel = selectedProvider?.models.find((model) => model.id === catalog?.selected.modelId);
+  const capabilities = selectedModel?.capabilities;
+  const hasAdvancedSettings = Boolean(capabilities?.effort || capabilities?.verbosity);
   if (props.modelCatalogLoading) return <PanelLoading label="Loading agent models…" compact />;
   if (!catalog?.providers.length) {
     return props.modelSelectionError ? <PanelError error={props.modelSelectionError} /> : null;
@@ -629,9 +638,71 @@ function ModelSelector(props: Parameters<typeof HistoryView>[0]) {
           {selectedProvider?.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
         </select>
       </label>
+      {hasAdvancedSettings ? (
+        <details
+          className="ask-space-advanced-settings"
+          key={`${catalog.selected.providerId}:${catalog.selected.modelId}`}
+        >
+          <summary>Advanced</summary>
+          <div className="ask-space-advanced-settings-grid">
+            {capabilities?.verbosity ? (
+              <label>
+                <span>Verbosity</span>
+                <select
+                  aria-label="Verbosity"
+                  value={catalog.selected.settings.verbosity ?? capabilities.verbosity.default}
+                  onChange={(event) =>
+                    props.onSelectSettings({
+                      ...catalog.selected.settings,
+                      verbosity: event.target.value as NonNullable<AgentRunSettings["verbosity"]>
+                    })
+                  }
+                  disabled={props.modelSelectionPending}
+                >
+                  {capabilities.verbosity.options.map((option) => (
+                    <option key={option} value={option}>{settingLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {capabilities?.effort ? (
+              <label>
+                <span>Reasoning effort</span>
+                <select
+                  aria-label="Reasoning effort"
+                  value={catalog.selected.settings.effort ?? capabilities.effort.default}
+                  onChange={(event) =>
+                    props.onSelectSettings({
+                      ...catalog.selected.settings,
+                      effort: event.target.value as NonNullable<AgentRunSettings["effort"]>
+                    })
+                  }
+                  disabled={props.modelSelectionPending}
+                >
+                  {capabilities.effort.options.map((option) => (
+                    <option key={option} value={option}>{settingLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
       {props.modelSelectionError ? <PanelError error={props.modelSelectionError} /> : null}
     </section>
   );
+}
+
+function settingLabel(value: string): string {
+  return {
+    off: "Off",
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    xhigh: "Extra high",
+    max: "Maximum"
+  }[value] ?? value;
 }
 
 function AgentStatusCard(props: Parameters<typeof HistoryView>[0]) {

@@ -194,6 +194,34 @@
   margin-top: var(--space-0);
 }
 
+.ask-space-advanced-settings {
+  grid-column: 1 / -1;
+  border-top: var(--border-width-default) solid var(--color-border-subtle);
+  padding-top: var(--space-9);
+}
+
+.ask-space-advanced-settings summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  user-select: none;
+}
+
+.ask-space-advanced-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-10);
+  padding-top: var(--space-10);
+}
+
+@media (max-width: 480px) {
+  .ask-space-advanced-settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .ask-space-account {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

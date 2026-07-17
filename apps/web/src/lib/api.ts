@@ -223,11 +223,42 @@ export interface AgentModelCatalog {
   providers: Array<{
     id: string;
     name: string;
-    models: Array<{ id: string; name: string }>;
+    models: Array<{
+      id: string;
+      name: string;
+      capabilities: {
+        effort?: { options: AgentEffort[]; default: AgentEffort };
+        verbosity?: { options: AgentVerbosity[]; default: AgentVerbosity };
+      };
+    }>;
   }>;
   selected: {
     providerId: string;
     modelId: string;
+    settings: AgentRunSettings;
+  };
+}
+
+export type AgentEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type AgentVerbosity = "low" | "medium" | "high";
+
+export interface AgentRunSettings {
+  effort?: AgentEffort;
+  verbosity?: AgentVerbosity;
+}
+
+export interface AgentRunMetrics {
+  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" | null;
+  providerRoundCount: number;
+  lengthStopCount: number;
+  toolCallCount: number;
+  usage: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
   };
 }
 
@@ -310,6 +341,10 @@ export interface AgentTurn {
   assistantMessageId: string;
   status: "pending" | "running" | "completed" | "interrupted" | "failed";
   error: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  settings: AgentRunSettings;
+  metrics: AgentRunMetrics;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -325,6 +360,7 @@ export type AgentTurnEvent =
       turnId: string;
       status: "completed" | "interrupted" | "failed";
       error: string | null;
+      metrics: AgentRunMetrics;
     };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

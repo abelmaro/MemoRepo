@@ -10,7 +10,16 @@ const chatParams = z.object({ spaceId: id, chatId: id });
 const turnParams = z.object({ spaceId: id, chatId: id, turnId: id });
 const globalTurnParams = z.object({ turnId: id });
 const messageBody = z.object({ message: z.string().trim().min(1).max(16_000) });
-const modelSelectionBody = z.object({ providerId: id, modelId: id });
+const modelSelectionBody = z.object({
+  providerId: id,
+  modelId: id,
+  settings: z
+    .object({
+      effort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+      verbosity: z.enum(["low", "medium", "high"]).optional()
+    })
+    .optional()
+});
 const listQuery = z.object({
   includeArchived: z.enum(["true", "false"]).default("false").transform((value) => value === "true")
 });
@@ -22,8 +31,17 @@ export async function agentRoutes(app: FastifyInstance) {
   app.get("/api/agent/models", async () => app.services.agent.modelCatalog());
 
   app.put("/api/agent/model", async (request) => {
-    const { providerId, modelId } = modelSelectionBody.parse(request.body);
-    return app.services.agent.selectModel(providerId, modelId);
+    const { providerId, modelId, settings } = modelSelectionBody.parse(request.body);
+    return app.services.agent.selectModel(
+      providerId,
+      modelId,
+      settings
+        ? {
+            ...(settings.effort !== undefined ? { effort: settings.effort } : {}),
+            ...(settings.verbosity !== undefined ? { verbosity: settings.verbosity } : {})
+          }
+        : undefined
+    );
   });
 
   app.post("/api/agent/login", async (_request, reply) => {
@@ -141,7 +159,13 @@ export async function agentRoutes(app: FastifyInstance) {
 
     if (ended) return;
     if (!isActive(state.turn.status)) {
-      write({ type: "turn.completed", turnId, status: state.turn.status, error: state.turn.error });
+      write({
+        type: "turn.completed",
+        turnId,
+        status: state.turn.status,
+        error: state.turn.error,
+        metrics: state.turn.metrics
+      });
       close();
       reply.raw.end();
       return;

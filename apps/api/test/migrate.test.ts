@@ -19,6 +19,25 @@ test("migrate creates and versions a new database", () => {
     assert.equal(tableNames(sqlite).has("codex_conversations"), false);
     assert.ok(columnNames(sqlite, "github_oauth_credentials").has("token_ciphertext"));
     assert.ok(columnNames(sqlite, "jobs").has("deduplication_key"));
+    assert.deepEqual(
+      [
+        "provider_id",
+        "model_id",
+        "effort",
+        "verbosity",
+        "stop_reason",
+        "provider_round_count",
+        "length_stop_count",
+        "tool_call_count",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "total_tokens"
+      ].filter((column) => !columnNames(sqlite, "agent_turns").has(column)),
+      []
+    );
     assert.ok(indexNames(sqlite).has("jobs_active_deduplication_unique"));
     assert.ok(indexNames(sqlite).has("agent_chats_space_updated_idx"));
     assert.ok(indexNames(sqlite).has("agent_messages_chat_sequence_unique"));

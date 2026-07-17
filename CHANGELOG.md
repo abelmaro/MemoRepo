@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add capability-aware advanced Ask this Space controls for model verbosity and reasoning effort.
+- Persist per-turn provider stop reasons, token usage, provider round counts, and tool-call counts for answer diagnostics.
+
+### Changed
+
+- Strengthen Ask this Space investigations with the snapshot gateway workflow, evidence verification, pagination, and truncation guidance.
+
 ## [0.3.0] - 2026-07-16
 
 ### Added

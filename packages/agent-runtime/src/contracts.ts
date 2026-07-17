@@ -12,6 +12,38 @@ export interface AgentHistoryMessage {
   timestamp: number;
 }
 
+export type AgentEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type AgentVerbosity = "low" | "medium" | "high";
+
+export interface AgentRunSettings {
+  effort?: AgentEffort;
+  verbosity?: AgentVerbosity;
+}
+
+export type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+export interface AgentTokenUsage {
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+}
+
+export interface AgentProviderTurnObservation {
+  stopReason: AgentStopReason;
+  usage: AgentTokenUsage;
+}
+
+export interface AgentRunMetrics {
+  stopReason: AgentStopReason | null;
+  providerRoundCount: number;
+  lengthStopCount: number;
+  toolCallCount: number;
+  usage: AgentTokenUsage;
+}
+
 export interface AgentToolRequest {
   runId: string;
   sessionId: string;
@@ -34,6 +66,7 @@ export type AgentRuntimeEvent =
       runId: string;
       status: "completed" | "interrupted" | "failed";
       error: string | null;
+      metrics: AgentRunMetrics;
     };
 
 export interface AgentProviderStatus {
@@ -53,6 +86,10 @@ export interface AgentProviderStatus {
 export interface AgentModelOption {
   id: string;
   name: string;
+  capabilities: {
+    effort?: { options: AgentEffort[]; default: AgentEffort };
+    verbosity?: { options: AgentVerbosity[]; default: AgentVerbosity };
+  };
 }
 
 export interface AgentProviderOption {
@@ -66,6 +103,7 @@ export interface AgentModelCatalog {
   selected: {
     providerId: string;
     modelId: string;
+    settings: AgentRunSettings;
   };
 }
 
