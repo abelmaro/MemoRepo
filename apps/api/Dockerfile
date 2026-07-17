@@ -34,12 +34,16 @@ WORKDIR /workspace
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/agent-runtime/package.json packages/agent-runtime/package.json
 
-RUN pnpm install --filter @memorepo/api... --frozen-lockfile
+RUN pnpm install --filter @memorepo/agent-runtime --filter @memorepo/api... --frozen-lockfile
 
+COPY packages/agent-runtime/tsconfig.json packages/agent-runtime/tsconfig.json
+COPY packages/agent-runtime/src packages/agent-runtime/src
 COPY apps/api apps/api
 
-RUN pnpm --filter @memorepo/api build \
+RUN pnpm --filter @memorepo/agent-runtime build \
+  && pnpm --filter @memorepo/api build \
   && pnpm --filter @memorepo/api deploy --prod --legacy /opt/memorepo-api
 
 FROM ${NODE_IMAGE} AS runtime

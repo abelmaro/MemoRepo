@@ -96,7 +96,7 @@ function rateLimitBucket(request: FastifyRequest, expectedDigest: Buffer): RateL
   if (isApiPath(pathname) && !isHealthCheck(request, pathname) && !hasValidControlCredential(request, expectedDigest)) {
     return "auth";
   }
-  if (isJobEventPath(pathname) && request.method === "GET") {
+  if (isEventStreamPath(pathname) && request.method === "GET") {
     return "api-sse";
   }
   if (isApiPath(pathname)) {
@@ -147,6 +147,10 @@ function isMcpPath(pathname: string): boolean {
 
 function isJobEventPath(pathname: string): boolean {
   return /^\/api\/jobs\/[^/]+\/events$/.test(pathname);
+}
+
+function isEventStreamPath(pathname: string): boolean {
+  return isJobEventPath(pathname) || /^\/api\/agent\/turns\/[^/]+\/events$/.test(pathname);
 }
 
 function bearerCredential(value: string | undefined): string | null {

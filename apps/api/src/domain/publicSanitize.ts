@@ -6,7 +6,8 @@ export function sanitizePublicMessage(value: unknown, managedRoots: string[]): s
     if (!root) {
       continue;
     }
-    const variants = new Set([root, path.resolve(root), root.replaceAll("\\", "/"), root.replaceAll("/", "\\")]);
+    const plainVariants = [root, path.resolve(root), root.replaceAll("\\", "/"), root.replaceAll("/", "\\")];
+    const variants = new Set(plainVariants.flatMap((variant) => [variant, JSON.stringify(variant).slice(1, -1)]));
     for (const variant of variants) {
       message = replaceCaseInsensitive(message, variant, "[MANAGED_PATH]");
     }

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 interface Migration {
   version: number;
@@ -12,6 +12,8 @@ const migrations: Migration[] = [
   { version: 2, up: addJobDeduplication },
   { version: 3, up: normalizeSnapshotStatuses },
   { version: 4, up: addGitHubOAuthCredentials },
+  { version: 5, up: addAgentChats },
+  { version: 6, up: addAgentChats },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -224,6 +226,69 @@ function addGitHubOAuthCredentials(sqlite: Database.Database): void {
       last_validated_at TEXT,
       updated_at TEXT NOT NULL
     );
+  `);
+}
+
+function addAgentChats(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS agent_account_sessions (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      account_key TEXT NOT NULL,
+      connected_at TEXT NOT NULL,
+      disconnected_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_chats (
+      id TEXT PRIMARY KEY,
+      space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+      account_session_id TEXT NOT NULL REFERENCES agent_account_sessions(id),
+      snapshot_id TEXT REFERENCES space_snapshots(id) ON DELETE SET NULL,
+      snapshot_version INTEGER NOT NULL,
+      snapshot_meta_json TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_chats_space_updated_idx
+      ON agent_chats(space_id, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_messages (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES agent_chats(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      status TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sources_json TEXT NOT NULL DEFAULT '[]',
+      error TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_messages_chat_sequence_unique
+      ON agent_messages(chat_id, sequence);
+
+    CREATE TABLE IF NOT EXISTS agent_turns (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES agent_chats(id) ON DELETE CASCADE,
+      user_message_id TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
+      assistant_message_id TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_turns_chat_created_idx
+      ON agent_turns(chat_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_turns_active_chat_unique
+      ON agent_turns(chat_id)
+      WHERE status IN ('pending', 'running');
   `);
 }
 

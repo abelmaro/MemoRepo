@@ -43,6 +43,8 @@ MemoRepo internally paginates each project as needed, then aggregates projectles
 ## Common Limits
 
 - Tools read from the active snapshot, not live working trees.
+- Snapshot indexing reads exact-commit source copies stored inside the snapshot artifact. Later managed-clone changes cannot alter retained source-backed results.
+- MemoRepo verifies that CBM `auto_index` and `auto_watch` are disabled before first use of each snapshot cache and fails closed if that immutable configuration cannot be confirmed.
 - If no active snapshot exists, tools return `no_active_snapshot`.
 - A stale active snapshot remains queryable until a successful reindex activates a replacement.
 - Graph calls have a 10 second timeout.
@@ -219,14 +221,6 @@ When source and recursion evidence indicate that the native index may have merge
 
 If a native snippet returns `caller_names`, MemoRepo reconciles the numeric `callers` field with that list and records the correction in `analysis_warnings`.
 
-### `detect_changes`
-
-Runs native CBM change impact analysis.
-
-Arguments:
-
-- `project` optional string.
-
 ### `query_graph`
 
 Runs bounded read-only Cypher against the active space snapshot store.
@@ -262,7 +256,7 @@ The exact broad count `MATCH (n) RETURN count(n)` is answered from snapshot inde
 
 ## Not Exposed
 
-MemoRepo does not expose CBM tools that mutate graph state from agent connections, including `index_repository` and `delete_project`. Indexing and lifecycle changes are owned by MemoRepo jobs and the dashboard.
+MemoRepo does not expose CBM tools that can follow or mutate live repository state from agent connections, including `index_repository`, `delete_project`, and `detect_changes`. Indexing and lifecycle changes are owned by MemoRepo jobs and the dashboard.
 
 Native response hints that recommend unavailable mutation tools are replaced with a read-only notice before being returned to the client.
 

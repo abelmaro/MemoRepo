@@ -74,8 +74,8 @@ export class GitHubService {
     return viewer;
   }
 
-  async syncRepositories(): Promise<GitHubSyncResult> {
-    const collection = await this.collectVisibleRepositories();
+  async syncRepositories(signal?: AbortSignal): Promise<GitHubSyncResult> {
+    const collection = await this.collectVisibleRepositories(signal);
 
     for (const repository of collection.repositories) {
       this.upsertRepository(this.mapRepository(repository));
@@ -112,11 +112,12 @@ export class GitHubService {
     return { repositoryId: stored.id };
   }
 
-  private async collectVisibleRepositories(): Promise<GitHubRepositoryCollection> {
+  private async collectVisibleRepositories(signal?: AbortSignal): Promise<GitHubRepositoryCollection> {
     const repositoriesById = new Map<number, GitHubRepositoryPayload>();
     const warnings: string[] = [];
     const userRepositories = await this.paginate<GitHubRepositoryPayload>(
-      "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name"
+      "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=full_name",
+      signal
     );
 
     for (const repository of userRepositories) {
@@ -222,12 +223,12 @@ export class GitHubService {
     return { ...existing, ...input, topicsJson: JSON.stringify(input.topics), lastSeenAt: timestamp, updatedAt: timestamp };
   }
 
-  private async paginate<T>(url: string): Promise<T[]> {
+  private async paginate<T>(url: string, signal?: AbortSignal): Promise<T[]> {
     const results: T[] = [];
     let nextUrl: string | undefined = url;
 
     while (nextUrl) {
-      const response = await this.fetch(nextUrl);
+      const response = await this.fetch(nextUrl, signal);
       const body = await response.json();
       if (!Array.isArray(body)) {
         throw new Error("GitHub returned an invalid paginated response");
@@ -244,9 +245,10 @@ export class GitHubService {
     return (await response.json()) as T;
   }
 
-  private async fetch(url: string): Promise<Response> {
+  private async fetch(url: string, signal?: AbortSignal): Promise<Response> {
     const accessToken = this.credentials.getAccessToken();
     const response = await fetch(url, {
+      ...(signal ? { signal } : {}),
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${accessToken}`,
@@ -268,17 +270,26 @@ export class GitHubService {
 }
 
 class GitHubRequestError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+
   constructor(
     readonly status: number,
     readonly body: string
   ) {
     super(formatGitHubError(status, body));
+    this.name = "GitHubRequestError";
+    this.code = `MR-GITHUB-UPSTREAM-${status}`;
+    this.statusCode = status >= 500 ? 502 : status;
   }
 }
 
 function formatGitHubError(status: number, body: string): string {
+  if ([502, 503, 504].includes(status)) {
+    return `GitHub is temporarily unavailable (HTTP ${status}). Try again in a few minutes.`;
+  }
   const parsed = parseGitHubErrorBody(body);
-  const message = parsed.message.split("\n")[0]?.trim() || body.slice(0, 240).trim() || "Unknown GitHub error";
+  const message = friendlyGitHubMessage(parsed.message, body);
   const ssoUrl = parsed.ssoUrl;
 
   if (ssoUrl) {
@@ -290,6 +301,12 @@ function formatGitHubError(status: number, body: string): string {
   }
 
   return `GitHub request failed ${status}: ${message}`;
+}
+
+function friendlyGitHubMessage(message: string, body: string): string {
+  const candidate = message.split("\n")[0]?.trim() || body.slice(0, 240).trim();
+  if (!candidate || /<!doctype|<html|<body/i.test(candidate)) return "GitHub returned an unreadable upstream response";
+  return candidate.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Unknown GitHub error";
 }
 
 function parseGitHubErrorBody(body: string): { message: string; documentationUrl?: string; ssoUrl?: string } {

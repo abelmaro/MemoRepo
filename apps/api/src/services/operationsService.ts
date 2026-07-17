@@ -26,7 +26,7 @@ export class OperationsService {
   registerJobHandlers(): void {
     this.jobs.register("sync_github_repositories", async (_payload, context) => {
       context.log("Syncing repositories visible to the connected GitHub account");
-      const result = await this.github.syncRepositories();
+      const result = await this.github.syncRepositories(context.signal);
       context.log(`Synced ${result.count} repositories`);
       for (const warning of result.warnings) {
         context.log(warning);
@@ -37,7 +37,7 @@ export class OperationsService {
       const spaceRepositoryId = stringPayload(payload, "spaceRepositoryId");
       const record = this.spaces.getSpaceRepository(spaceRepositoryId);
       context.log(`Refreshing remote branches for ${record.full_name}`);
-      const branches = await this.git.fetchBranches(record.local_path, { onOutput: context.log });
+      const branches = await this.git.fetchBranches(record.local_path, { onOutput: context.log, signal: context.signal });
       this.updateBranches(spaceRepositoryId, branches);
       context.log(`Found ${branches.length} remote branches`);
     });
@@ -49,9 +49,12 @@ export class OperationsService {
       updateRecord(this.database, "space_repositories", { cloneStatus: "cloning", lastError: null, updatedAt: timestamp }, "id", spaceRepositoryId);
 
       try {
+        const cloneStartedAt = Date.now();
         context.log(`Cloning ${record.full_name}`);
-        await this.git.cloneRepository(record.clone_url, record.local_path, { onOutput: context.log });
-        const branches = await this.git.fetchBranches(record.local_path, { onOutput: context.log });
+        await this.git.cloneRepository(record.clone_url, record.local_path, { onOutput: context.log, signal: context.signal });
+        context.log(`Clone completed in ${formatDuration(Date.now() - cloneStartedAt)}`);
+        const branches = await this.git.listBranches(record.local_path, { signal: context.signal });
+        context.log(`Discovered ${branches.length} remote branches without a redundant network fetch`);
         updateRecord(
           this.database,
           "space_repositories",
@@ -74,6 +77,7 @@ export class OperationsService {
     this.jobs.register("checkout_space_repository", async (payload, context) => {
       const spaceRepositoryId = stringPayload(payload, "spaceRepositoryId");
       const requestedBranch = optionalStringPayload(payload, "branch");
+      const useExistingFetch = payload.useExistingFetch === true;
       const record = this.spaces.getSpaceRepository(spaceRepositoryId);
       const branch = requestedBranch ?? record.selected_branch ?? record.default_branch;
       context.log(`Checking out ${record.full_name} at origin/${branch}`);
@@ -82,12 +86,19 @@ export class OperationsService {
       this.spaces.markSpaceStale(record.space_id);
 
       try {
-        const branches = await this.git.fetchBranches(record.local_path, { onOutput: context.log });
+        const branches = useExistingFetch
+          ? await this.git.listBranches(record.local_path, { signal: context.signal })
+          : await this.git.fetchBranches(record.local_path, { onOutput: context.log, signal: context.signal });
         this.updateBranches(spaceRepositoryId, branches);
         if (!branches.includes(branch)) {
           throw new Error(`Remote branch not found: ${branch}`);
         }
-        const commit = await this.git.checkoutRemoteBranch(record.local_path, branch, { onOutput: context.log });
+        const checkoutStartedAt = Date.now();
+        const commit = await this.git.checkoutFetchedRemoteBranch(record.local_path, branch, {
+          onOutput: context.log,
+          signal: context.signal
+        });
+        context.log(`Checkout completed in ${formatDuration(Date.now() - checkoutStartedAt)}`);
         updateRecord(
           this.database,
           "space_repositories",
@@ -112,13 +123,13 @@ export class OperationsService {
 
     this.jobs.register("index_space_repository", async (payload, context) => {
       const spaceRepositoryId = stringPayload(payload, "spaceRepositoryId");
-      await this.indexSpaceRepository(spaceRepositoryId, context.log);
+      await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
     });
 
     this.jobs.register("rebuild_space_snapshot", async (payload, context) => {
       const spaceId = stringPayload(payload, "spaceId");
       context.log("Building immutable cross-repo snapshot");
-      const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log);
+      const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log, context.signal);
       context.log(`Activated snapshot v${snapshot.version.toString().padStart(6, "0")}`);
     });
 
@@ -132,12 +143,13 @@ export class OperationsService {
       context.log(`Checking ${repositories.length} repositories for remote updates`);
       let updatedRepositories = 0;
       for (const repository of repositories) {
+        throwIfAborted(context.signal);
         const spaceRepositoryId = String(repository.id);
         const branch = String(repository.selected_branch ?? repository.default_branch);
         const fullName = String(repository.full_name);
         const localPath = String(repository.local_path);
         context.log(`Checking ${fullName} at origin/${branch}`);
-        const remote = await this.git.fetchBranchState(localPath, branch, { onOutput: context.log });
+        const remote = await this.git.fetchBranchState(localPath, branch, { onOutput: context.log, signal: context.signal });
         this.updateBranches(spaceRepositoryId, remote.branches);
 
         const selectedCommit = typeof repository.selected_commit === "string" ? repository.selected_commit : null;
@@ -156,7 +168,7 @@ export class OperationsService {
         updateRecord(this.database, "space_repositories", { indexStatus: "stale", lastError: null, updatedAt: nowIso() }, "id", spaceRepositoryId);
         this.spaces.markSpaceStale(spaceId);
 
-        const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log });
+        const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log, signal: context.signal });
         updateRecord(
           this.database,
           "space_repositories",
@@ -172,7 +184,7 @@ export class OperationsService {
           "id",
           spaceRepositoryId
         );
-        await this.indexSpaceRepository(spaceRepositoryId, context.log);
+        await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
         updatedRepositories += 1;
       }
 
@@ -184,7 +196,7 @@ export class OperationsService {
 
       if (snapshotNeedsRebuild) {
         context.log("Building immutable cross-repo snapshot");
-        const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log);
+        const snapshot = await this.snapshots.buildSpaceSnapshot(spaceId, context.log, context.signal);
         context.log(`Activated snapshot v${snapshot.version.toString().padStart(6, "0")}`);
       } else {
         context.log("Active snapshot is already up to date");
@@ -198,6 +210,7 @@ export class OperationsService {
   }
 
   enqueueAddRepository(spaceId: string, githubRepositoryId: string) {
+    this.spaces.assertSpaceAcceptsWork(spaceId);
     const spaceRepository = this.spaces.addRepositoryToSpace(spaceId, githubRepositoryId);
     const cloneJob = this.jobs.enqueue({
       type: "clone_space_repository",
@@ -210,7 +223,7 @@ export class OperationsService {
       spaceId,
       spaceRepositoryId: spaceRepository.id,
       dependsOnJobId: cloneJob.id,
-      payload: { spaceRepositoryId: spaceRepository.id }
+      payload: { spaceRepositoryId: spaceRepository.id, useExistingFetch: true }
     });
     const indexJob = this.jobs.enqueue({
       type: "index_space_repository",
@@ -231,6 +244,7 @@ export class OperationsService {
 
   enqueueCheckout(spaceRepositoryId: string, branch: string) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
+    this.spaces.assertSpaceAcceptsWork(record.space_id);
     const checkoutJob = this.jobs.enqueue({
       type: "checkout_space_repository",
       spaceId: record.space_id,
@@ -255,11 +269,13 @@ export class OperationsService {
 
   enqueueReindexRepository(spaceRepositoryId: string) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
+    this.spaces.assertSpaceAcceptsWork(record.space_id);
     return this.enqueueCheckout(spaceRepositoryId, record.selected_branch ?? record.default_branch);
   }
 
   enqueueRefreshBranches(spaceRepositoryId: string) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
+    this.spaces.assertSpaceAcceptsWork(record.space_id);
     return this.jobs.enqueue({
       type: "refresh_branches",
       spaceId: record.space_id,
@@ -269,11 +285,13 @@ export class OperationsService {
   }
 
   enqueueReindexSpace(spaceId: string) {
+    this.spaces.assertSpaceAcceptsWork(spaceId);
     return this.jobs.enqueue({ type: "reindex_space", spaceId, payload: { spaceId } });
   }
 
   enqueueRemoveRepository(spaceRepositoryId: string) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
+    this.spaces.assertSpaceAcceptsWork(record.space_id);
     const removal = this.spaces.softRemoveSpaceRepository(spaceRepositoryId);
     const remainingRepositories = this.spaces.listSpaceRepositories(record.space_id);
     const snapshotJob =
@@ -288,7 +306,7 @@ export class OperationsService {
     return { ...removal, job: snapshotJob };
   }
 
-  private async indexSpaceRepository(spaceRepositoryId: string, log: (message: string) => void) {
+  private async indexSpaceRepository(spaceRepositoryId: string, log: (message: string) => void, signal?: AbortSignal) {
     const record = this.spaces.getSpaceRepository(spaceRepositoryId);
     if (!record.selected_branch || !record.selected_commit) {
       throw new Error(`${record.full_name} must be checked out before indexing`);
@@ -298,8 +316,9 @@ export class OperationsService {
 
     try {
       const cachePath = path.join(this.config.repoIndexesDir, spaceRepositoryId);
+      const indexStartedAt = Date.now();
       log(`Indexing ${record.full_name}`);
-      const result = await this.cbm.indexRepository(record.local_path, cachePath, "fast", log);
+      const result = await this.cbm.indexRepository(record.local_path, cachePath, "fast", log, signal);
       const projectName = result.project ?? record.local_path.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
       const timestamp = nowIso();
       insertRecord(this.database, "repo_indexes", {
@@ -327,6 +346,7 @@ export class OperationsService {
         spaceRepositoryId
       );
       log(`Indexed ${record.full_name}`);
+      log(`Repository index completed in ${formatDuration(Date.now() - indexStartedAt)}`);
     } catch (error) {
       this.failSpaceRepository(spaceRepositoryId, "indexStatus", error);
       throw error;
@@ -365,4 +385,16 @@ function stringPayload(payload: Record<string, unknown>, key: string): string {
 function optionalStringPayload(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  const error = signal.reason instanceof Error ? new Error(signal.reason.message) : new Error("Operation cancelled");
+  error.name = "AbortError";
+  throw error;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }

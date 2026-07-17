@@ -9,6 +9,7 @@ export interface GitCommandContext {
   cwd?: string | undefined;
   onOutput?: ((line: string) => void) | undefined;
   timeoutMs?: number | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface RemoteBranchState {
@@ -37,11 +38,19 @@ export class GitService {
     }
 
     fs.mkdirSync(path.dirname(safeTarget), { recursive: true });
-    await this.git(["clone", remoteUrl, safeTarget], { onOutput: context.onOutput, timeoutMs: context.timeoutMs ?? 30 * 60_000 });
+    await this.git(["clone", remoteUrl, safeTarget], {
+      onOutput: context.onOutput,
+      timeoutMs: context.timeoutMs ?? 30 * 60_000,
+      signal: context.signal
+    });
   }
 
   async fetchBranches(repoPath: string, context: GitCommandContext = {}): Promise<string[]> {
     await this.git(["fetch", "--prune", "origin"], { ...context, cwd: repoPath, timeoutMs: context.timeoutMs ?? 10 * 60_000 });
+    return this.listBranches(repoPath, context);
+  }
+
+  async listBranches(repoPath: string, context: GitCommandContext = {}): Promise<string[]> {
     const result = await this.git(
       ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
       { ...context, cwd: repoPath, timeoutMs: context.timeoutMs ?? 60_000 }
@@ -112,6 +121,7 @@ export class GitService {
       timeoutMs: context.timeoutMs,
       sensitiveValues: [accessToken],
       onOutput: context.onOutput,
+      signal: context.signal,
       env: {
         ...createSafeProcessEnvironment(),
         GIT_ASKPASS: askPassPath,

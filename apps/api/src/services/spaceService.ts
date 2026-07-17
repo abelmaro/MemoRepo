@@ -5,19 +5,53 @@ import type { AppDatabase } from "../db/connection.js";
 import { publicJobSelectColumns } from "../db/jobProjection.js";
 import { insertRecord, type SqlValue, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
-import { removeManagedPath } from "../domain/files.js";
-import { createId } from "../domain/ids.js";
+import { assertDeletableManagedPath, removeManagedPath, type ManagedPathRemoval } from "../domain/files.js";
+import { createId, sha256 } from "../domain/ids.js";
 import { assertInside, ensureInsideDir, repoPathName } from "../domain/paths.js";
 import { slugify } from "../domain/slug.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
 
 export class SpaceService {
+  private readonly deletionStates = new Map<string, SpaceDeletionState>();
+  private readonly deletionTombstonesDir: string;
+
   constructor(
     private readonly database: AppDatabase,
     private readonly config: AppConfig,
     private readonly cbm: CbmService
-  ) {}
+  ) {
+    ensurePlainManagedDirectory(this.config.memorepoHome, this.config.spacesDir, "Managed spaces root");
+    ensurePlainManagedDirectory(this.config.memorepoHome, this.config.repoIndexesDir, "Repository index root");
+    ensurePlainManagedDirectory(this.config.memorepoHome, this.config.snapshotIndexesDir, "Snapshot index root");
+    this.deletionTombstonesDir = ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      path.join(this.config.tmpDir, "space-deletions"),
+      "Space deletion journal root"
+    );
+    this.recoverSpaceDeletionTombstones();
+  }
+
+  assertSpaceAcceptsWork(spaceId: string): void {
+    if (this.deletionStates.get(spaceId)?.deleting) {
+      throw spaceDeletionConflict();
+    }
+    this.getSpaceById(spaceId);
+  }
+
+  async withSpaceReader<T>(spaceId: string, operation: () => Promise<T> | T): Promise<T> {
+    const release = this.acquireSpaceReader(spaceId);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  async withSpaceReaderBySlug<T>(slug: string, operation: () => Promise<T> | T): Promise<T> {
+    const space = this.getSpaceBySlug(slug);
+    return this.withSpaceReader(space.id, operation);
+  }
 
   listSpaces() {
     return this.database.sqlite
@@ -41,7 +75,8 @@ export class SpaceService {
     const timestamp = nowIso();
     const id = createId("spc");
     const slug = this.createUniqueSlug(name);
-    const rootPath = ensureInsideDir(this.config.memorepoHome, path.join(this.config.spacesDir, slug));
+    const rootName = `${slug}__${sha256(id).slice(0, 32)}`;
+    const rootPath = ensureInsideDir(this.config.memorepoHome, path.join(this.config.spacesDir, rootName));
 
     const record = {
       id,
@@ -60,13 +95,16 @@ export class SpaceService {
   }
 
   renameSpace(id: string, name: string) {
+    this.assertSpaceAcceptsWork(id);
     const timestamp = nowIso();
     updateRecord(this.database, "spaces", { name: name.trim(), updatedAt: timestamp }, "id", id);
     return this.getSpaceById(id);
   }
 
   deleteSpace(id: string) {
+    this.assertSpaceAcceptsWork(id);
     const space = this.getSpaceById(id);
+    this.assertNoActiveAgentTurns(id);
     const counts = this.database.sqlite
       .prepare(
         `
@@ -95,6 +133,14 @@ export class SpaceService {
       toolStatsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_tool_stats WHERE space_id = ?").run(id).changes;
       connectionsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id).changes;
       this.database.sqlite.prepare("DELETE FROM spaces WHERE id = ?").run(id);
+      this.database.sqlite
+        .prepare(
+          `DELETE FROM agent_account_sessions
+           WHERE NOT EXISTS (
+             SELECT 1 FROM agent_chats c WHERE c.account_session_id = agent_account_sessions.id
+           )`
+        )
+        .run();
     })();
 
     const filesExisted = fs.existsSync(safeRootPath);
@@ -106,83 +152,297 @@ export class SpaceService {
   }
 
   async deleteSpaceWithManagedData(id: string) {
-    const space = this.getSpaceById(id);
-    const jobs = this.spaceJobRows(id);
-    const activeJob = jobs.find((job) => job.status === "pending" || job.status === "running");
-    if (activeJob) {
-      throw new Error("Space has pending or running jobs");
-    }
+    const releaseDeletion = this.beginSpaceDeletion(id);
+    try {
+      const space = this.getSpaceById(id);
+      this.assertNoActiveSpaceJobs(id);
+      this.assertNoActiveAgentTurns(id);
 
-    const repositoryIds = this.database.sqlite
-      .prepare("SELECT id FROM space_repositories WHERE space_id = ?")
-      .all(id) as Array<{ id: string }>;
-    const snapshots = this.database.sqlite
-      .prepare("SELECT artifact_path AS artifactPath FROM space_snapshots WHERE space_id = ?")
-      .all(id) as Array<{ artifactPath: string }>;
-    const repoIndexes = this.database.sqlite
-      .prepare(
-        `
-        SELECT DISTINCT ri.cache_path AS cachePath
-        FROM repo_indexes ri
-        JOIN space_repositories sr ON sr.id = ri.space_repository_id
-        WHERE sr.space_id = ?
-      `
-      )
-      .all(id) as Array<{ cachePath: string }>;
-
-    for (const snapshot of snapshots) {
-      await this.cbm.closeSession(snapshot.artifactPath);
-    }
-
-    const deletedAt = nowIso();
-
-    const jobIds = jobs.map((job) => job.id);
-    let connectionsDeleted = 0;
-    let toolStatsDeleted = 0;
-    const transaction = this.database.sqlite.transaction(() => {
-      for (const jobId of jobIds) {
-        this.database.sqlite.prepare("DELETE FROM job_events WHERE job_id = ?").run(jobId);
-      }
-      for (const jobId of jobIds) {
-        this.database.sqlite.prepare("DELETE FROM jobs WHERE id = ?").run(jobId);
-      }
-      toolStatsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_tool_stats WHERE space_id = ?").run(id).changes;
-      connectionsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id).changes;
-      this.database.sqlite
+      const repositories = this.database.sqlite
+        .prepare("SELECT id, local_path AS localPath FROM space_repositories WHERE space_id = ?")
+        .all(id) as Array<{ id: string; localPath: string }>;
+      const snapshots = this.database.sqlite
+        .prepare("SELECT artifact_path AS artifactPath FROM space_snapshots WHERE space_id = ?")
+        .all(id) as Array<{ artifactPath: string }>;
+      const repoIndexes = this.database.sqlite
         .prepare(
           `
-          DELETE FROM repo_indexes
-          WHERE space_repository_id IN (
-            SELECT id FROM space_repositories WHERE space_id = ?
-          )
+          SELECT DISTINCT ri.cache_path AS cachePath
+          FROM repo_indexes ri
+          JOIN space_repositories sr ON sr.id = ri.space_repository_id
+          WHERE sr.space_id = ?
         `
         )
-        .run(id);
-      this.database.sqlite.prepare("DELETE FROM space_snapshots WHERE space_id = ?").run(id);
-      this.database.sqlite.prepare("DELETE FROM space_repositories WHERE space_id = ?").run(id);
-      this.database.sqlite.prepare("DELETE FROM spaces WHERE id = ?").run(id);
-    });
-    transaction();
+        .all(id) as Array<{ cachePath: string }>;
 
-    const removedPaths = [
-      ...removeUniqueManagedPaths(repoIndexes.map((row) => row.cachePath), this.config.memorepoHome),
-      ...removeUniqueManagedPaths(snapshots.map((row) => row.artifactPath), this.config.memorepoHome),
-      removeManagedPath(this.config.memorepoHome, space.rootPath)
-    ];
-    const deletedBytes = removedPaths.reduce((total, item) => total + item.sizeBytes, 0);
+      await this.waitForSpaceReaders(id);
+      for (const snapshot of snapshots) {
+        await this.cbm.closeSession(snapshot.artifactPath);
+      }
 
-    return {
-      deletedAt,
-      spaceId: id,
-      deletedBytes,
-      filesDeleted: removedPaths.filter((item) => item.existed).length,
-      repositoriesDeleted: repositoryIds.length,
-      snapshotsDeleted: snapshots.length,
-      repoIndexPathsDeleted: new Set(repoIndexes.map((row) => row.cachePath)).size,
-      jobsDeleted: jobIds.length,
-      connectionsDeleted,
-      toolStatsDeleted
+      const deletedAt = nowIso();
+      const tombstone = this.createSpaceDeletionTombstone(id, deletedAt, {
+        clonePaths: repositories.map((repository) => repository.localPath),
+        repoIndexPaths: repoIndexes.map((row) => row.cachePath),
+        snapshotArtifactPaths: snapshots.map((row) => row.artifactPath),
+        spaceRootPath: space.rootPath
+      });
+      const tombstonePath = this.writeSpaceDeletionTombstone(tombstone);
+
+      let connectionsDeleted = 0;
+      let jobsDeleted = 0;
+      let toolStatsDeleted = 0;
+      try {
+        // Nothing asynchronous or filesystem-related may be inserted between these checks and the transaction.
+        this.assertNoActiveSpaceJobs(id);
+        this.assertNoActiveAgentTurns(id);
+        this.database.sqlite.transaction(() => {
+          // Repeat under SQLite's transaction lock so another process cannot win the final check/delete race.
+          this.assertNoActiveSpaceJobs(id);
+          this.assertNoActiveAgentTurns(id);
+          this.database.sqlite
+            .prepare(
+              `DELETE FROM job_events
+               WHERE job_id IN (
+                 SELECT j.id
+                 FROM jobs j
+                 LEFT JOIN space_repositories sr ON sr.id = j.space_repository_id
+                 WHERE j.space_id = ? OR sr.space_id = ?
+               )`
+            )
+            .run(id, id);
+          jobsDeleted = this.database.sqlite
+            .prepare(
+              `DELETE FROM jobs
+               WHERE space_id = ?
+                  OR space_repository_id IN (
+                    SELECT id FROM space_repositories WHERE space_id = ?
+                  )`
+            )
+            .run(id, id).changes;
+          toolStatsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_tool_stats WHERE space_id = ?").run(id).changes;
+          connectionsDeleted = this.database.sqlite.prepare("DELETE FROM mcp_connections WHERE space_id = ?").run(id).changes;
+          this.database.sqlite
+            .prepare(
+              `DELETE FROM repo_indexes
+               WHERE space_repository_id IN (
+                 SELECT id FROM space_repositories WHERE space_id = ?
+               )`
+            )
+            .run(id);
+          this.database.sqlite.prepare("DELETE FROM space_snapshots WHERE space_id = ?").run(id);
+          this.database.sqlite.prepare("DELETE FROM space_repositories WHERE space_id = ?").run(id);
+          this.database.sqlite.prepare("DELETE FROM spaces WHERE id = ?").run(id);
+          this.database.sqlite
+            .prepare(
+              `DELETE FROM agent_account_sessions
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM agent_chats c WHERE c.account_session_id = agent_account_sessions.id
+               )`
+            )
+            .run();
+        })();
+      } catch (error) {
+        removeFileIfPresent(tombstonePath);
+        throw error;
+      }
+
+      let cleanup: SpaceDeletionCleanup = { removedPaths: [], pending: true };
+      try {
+        cleanup = this.retrySpaceDeletionCleanup(tombstonePath, tombstone);
+      } catch {
+        // The database deletion already committed; the durable journal preserves cleanup for startup recovery.
+      }
+      return {
+        deletedAt,
+        spaceId: id,
+        deletedBytes: cleanup.removedPaths.reduce((total, item) => total + item.sizeBytes, 0),
+        filesDeleted: cleanup.removedPaths.filter((item) => item.existed).length,
+        cleanupPending: cleanup.pending,
+        repositoriesDeleted: repositories.length,
+        snapshotsDeleted: snapshots.length,
+        repoIndexPathsDeleted: uniqueManagedPaths(repoIndexes.map((row) => row.cachePath)).length,
+        jobsDeleted,
+        connectionsDeleted,
+        toolStatsDeleted
+      };
+    } finally {
+      releaseDeletion();
+    }
+  }
+
+  private assertNoActiveSpaceJobs(spaceId: string): void {
+    const activeJob = this.spaceJobRows(spaceId).find((job) => job.status === "pending" || job.status === "running");
+    if (activeJob) {
+      throw Object.assign(new Error("Space has pending or running jobs"), { statusCode: 409 });
+    }
+  }
+
+  private acquireSpaceReader(spaceId: string): () => void {
+    const state = this.spaceDeletionState(spaceId);
+    if (state.deleting) {
+      throw spaceDeletionConflict();
+    }
+    state.activeReaders += 1;
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      state.activeReaders -= 1;
+      if (state.activeReaders === 0) {
+        for (const resolve of state.readerDrainWaiters) resolve();
+        state.readerDrainWaiters.clear();
+        if (!state.deleting) this.deletionStates.delete(spaceId);
+      }
     };
+  }
+
+  private beginSpaceDeletion(spaceId: string): () => void {
+    const state = this.spaceDeletionState(spaceId);
+    if (state.deleting) {
+      throw spaceDeletionConflict();
+    }
+    state.deleting = true;
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      state.deleting = false;
+      if (state.activeReaders === 0) this.deletionStates.delete(spaceId);
+    };
+  }
+
+  private waitForSpaceReaders(spaceId: string): Promise<void> {
+    const state = this.deletionStates.get(spaceId);
+    if (!state || state.activeReaders === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => state.readerDrainWaiters.add(resolve));
+  }
+
+  private spaceDeletionState(spaceId: string): SpaceDeletionState {
+    const current = this.deletionStates.get(spaceId);
+    if (current) return current;
+    const created: SpaceDeletionState = {
+      deleting: false,
+      activeReaders: 0,
+      readerDrainWaiters: new Set()
+    };
+    this.deletionStates.set(spaceId, created);
+    return created;
+  }
+
+  private createSpaceDeletionTombstone(
+    spaceId: string,
+    createdAt: string,
+    paths: Omit<SpaceDeletionTombstone, "version" | "spaceId" | "createdAt">
+  ): SpaceDeletionTombstone {
+    return {
+      version: 1,
+      spaceId,
+      createdAt,
+      clonePaths: validateManagedDeletionPaths(paths.clonePaths, this.config.spacesDir),
+      repoIndexPaths: validateManagedDeletionPaths(paths.repoIndexPaths, this.config.repoIndexesDir),
+      snapshotArtifactPaths: validateManagedDeletionPaths(paths.snapshotArtifactPaths, this.config.snapshotIndexesDir),
+      spaceRootPath: assertDeletableManagedPath(this.config.spacesDir, paths.spaceRootPath)
+    };
+  }
+
+  private writeSpaceDeletionTombstone(tombstone: SpaceDeletionTombstone): string {
+    const targetPath = path.join(this.deletionTombstonesDir, `${sha256(tombstone.spaceId)}.json`);
+    writeDurableJson(targetPath, tombstone);
+    return targetPath;
+  }
+
+  private retrySpaceDeletionCleanup(tombstonePath: string, tombstone: SpaceDeletionTombstone): SpaceDeletionCleanup {
+    const safeTombstone = this.createSpaceDeletionTombstone(tombstone.spaceId, tombstone.createdAt, tombstone);
+    this.assertNoLiveManagedPathOverlap(safeTombstone);
+    const targets = [
+      ...safeTombstone.repoIndexPaths.map((targetPath) => ({ root: this.config.repoIndexesDir, targetPath })),
+      ...safeTombstone.snapshotArtifactPaths.map((targetPath) => ({ root: this.config.snapshotIndexesDir, targetPath })),
+      ...safeTombstone.clonePaths.map((targetPath) => ({ root: this.config.spacesDir, targetPath })),
+      { root: this.config.spacesDir, targetPath: safeTombstone.spaceRootPath }
+    ];
+    const removedPaths: ManagedPathRemoval[] = [];
+    let cleanupFailed = false;
+    for (const target of targets) {
+      try {
+        removedPaths.push(removeManagedDeletionPath(this.config.memorepoHome, target.root, target.targetPath));
+      } catch {
+        // The durable tombstone keeps failed paths available for the next startup retry.
+        cleanupFailed = true;
+      }
+    }
+
+    const managedPathPending = cleanupFailed
+      || targets.some((target) => managedPathExists(target.root, target.targetPath));
+    const tombstoneRemoved = managedPathPending ? false : removeFileIfPresent(tombstonePath);
+    return { removedPaths, pending: managedPathPending || !tombstoneRemoved };
+  }
+
+  private assertNoLiveManagedPathOverlap(tombstone: SpaceDeletionTombstone): void {
+    const livePaths = this.database.sqlite
+      .prepare(
+        `SELECT root_path AS targetPath FROM spaces
+         UNION ALL SELECT local_path AS targetPath FROM space_repositories
+         UNION ALL SELECT cache_path AS targetPath FROM repo_indexes
+         UNION ALL SELECT artifact_path AS targetPath FROM space_snapshots`
+      )
+      .all() as Array<{ targetPath: string }>;
+    const deletionTargets = uniqueManagedPaths([
+      ...tombstone.clonePaths,
+      ...tombstone.repoIndexPaths,
+      ...tombstone.snapshotArtifactPaths,
+      tombstone.spaceRootPath
+    ]);
+
+    for (const deletionTarget of deletionTargets) {
+      for (const live of livePaths) {
+        if (managedPathsOverlap(deletionTarget, live.targetPath)) {
+          throw new Error("Space deletion journal overlaps live managed data");
+        }
+      }
+    }
+  }
+
+  private recoverSpaceDeletionTombstones(): void {
+    for (const entry of fs.readdirSync(this.deletionTombstonesDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const tombstonePath = path.join(this.deletionTombstonesDir, entry.name);
+      const tombstone = readSpaceDeletionTombstone(tombstonePath);
+      if (!tombstone) continue;
+      if (entry.name !== `${sha256(tombstone.spaceId)}.json`) continue;
+
+      const spaceStillExists = Boolean(this.database.sqlite.prepare("SELECT 1 FROM spaces WHERE id = ?").get(tombstone.spaceId));
+      if (spaceStillExists) {
+        removeFileIfPresent(tombstonePath);
+        continue;
+      }
+      try {
+        this.retrySpaceDeletionCleanup(tombstonePath, tombstone);
+      } catch {
+        // Invalid or unsafe journals remain untouched for explicit operator review.
+      }
+    }
+  }
+
+  private assertNoActiveAgentTurns(spaceId: string): void {
+    const active = this.database.sqlite
+      .prepare(
+        `SELECT 1
+         FROM agent_turns t
+         JOIN agent_chats c ON c.id = t.chat_id
+         WHERE c.space_id = ? AND t.status IN ('pending', 'running')
+         LIMIT 1`
+      )
+      .get(spaceId);
+    if (active) {
+      throw Object.assign(new Error("Wait for active agent answers before deleting this Space"), {
+        statusCode: 409
+      });
+    }
   }
 
   getSpaceById(id: string) {
@@ -619,6 +879,27 @@ interface SpaceJobRow {
   status: string;
 }
 
+interface SpaceDeletionState {
+  deleting: boolean;
+  activeReaders: number;
+  readerDrainWaiters: Set<() => void>;
+}
+
+interface SpaceDeletionTombstone {
+  version: 1;
+  spaceId: string;
+  createdAt: string;
+  clonePaths: string[];
+  repoIndexPaths: string[];
+  snapshotArtifactPaths: string[];
+  spaceRootPath: string;
+}
+
+interface SpaceDeletionCleanup {
+  removedPaths: ManagedPathRemoval[];
+  pending: boolean;
+}
+
 export interface SpaceRepositoryRecord {
   id: string;
   space_id: string;
@@ -651,6 +932,214 @@ export interface SpaceRepositoryRecord {
   pushed_at: string | null;
 }
 
-function removeUniqueManagedPaths(paths: string[], memorepoHome: string) {
-  return Array.from(new Set(paths)).map((targetPath) => removeManagedPath(memorepoHome, targetPath));
+function spaceDeletionConflict(): Error {
+  return Object.assign(new Error("Space deletion is in progress"), { statusCode: 409 });
+}
+
+function validateManagedDeletionPaths(paths: string[], allowedRoot: string): string[] {
+  return uniqueManagedPaths(paths).map((targetPath) => assertDeletableManagedPath(allowedRoot, targetPath));
+}
+
+function uniqueManagedPaths(paths: string[]): string[] {
+  const unique = new Map<string, string>();
+  for (const targetPath of paths) {
+    const resolved = path.resolve(targetPath);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (!unique.has(key)) unique.set(key, resolved);
+  }
+  return [...unique.values()];
+}
+
+function managedPathExists(allowedRoot: string, targetPath: string): boolean {
+  try {
+    fs.lstatSync(assertDeletableManagedPath(allowedRoot, targetPath));
+    return true;
+  } catch (error) {
+    return !isMissingPathError(error);
+  }
+}
+
+function removeManagedDeletionPath(
+  memorepoHome: string,
+  allowedRoot: string,
+  targetPath: string
+): ManagedPathRemoval {
+  const safeRoot = assertDeletableManagedPath(memorepoHome, allowedRoot);
+  const safeTarget = assertDeletableManagedPath(safeRoot, targetPath);
+  const realHome = fs.realpathSync(memorepoHome);
+  const realRoot = assertPlainManagedDirectory(memorepoHome, safeRoot, "Managed deletion root");
+  if (!isStrictlyInsidePath(realHome, realRoot)) {
+    throw new Error("Managed deletion root escapes MEMOREPO_HOME");
+  }
+
+  let targetStat;
+  try {
+    targetStat = fs.lstatSync(safeTarget);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    assertNearestExistingParentInside(safeRoot, realRoot, path.dirname(safeTarget));
+    return { path: safeTarget, existed: false, sizeBytes: 0 };
+  }
+
+  const realParent = fs.realpathSync(path.dirname(safeTarget));
+  if (!isInsideOrEqualPath(realRoot, realParent)) {
+    throw new Error("Managed deletion target parent escapes its configured root");
+  }
+  if (!targetStat.isSymbolicLink()) {
+    const realTarget = fs.realpathSync(safeTarget);
+    if (!isStrictlyInsidePath(realRoot, realTarget)) {
+      throw new Error("Managed deletion target escapes its configured root");
+    }
+    return removeManagedPath(safeRoot, safeTarget);
+  }
+
+  fs.rmSync(safeTarget, { recursive: true, force: true });
+  return { path: safeTarget, existed: true, sizeBytes: targetStat.size };
+}
+
+function ensurePlainManagedDirectory(memorepoHome: string, target: string, label: string): string {
+  const safeTarget = assertInside(memorepoHome, target);
+  const relative = path.relative(path.resolve(memorepoHome), safeTarget);
+  let current = path.resolve(memorepoHome);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = ensureInsideDir(memorepoHome, path.join(current, segment));
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`${label} must be a managed directory`);
+    }
+  }
+  return safeTarget;
+}
+
+function assertPlainManagedDirectory(memorepoHome: string, target: string, label: string): string {
+  const safeTarget = assertInside(memorepoHome, target);
+  const relative = path.relative(path.resolve(memorepoHome), safeTarget);
+  let current = path.resolve(memorepoHome);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = assertInside(memorepoHome, path.join(current, segment));
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`${label} must be a managed directory`);
+    }
+  }
+  return fs.realpathSync(safeTarget);
+}
+
+function assertNearestExistingParentInside(allowedRoot: string, realRoot: string, start: string): void {
+  let current = assertInside(allowedRoot, start);
+  while (true) {
+    try {
+      const stat = fs.lstatSync(current);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error("Managed deletion target parent must be a plain directory");
+      }
+      if (!isInsideOrEqualPath(realRoot, fs.realpathSync(current))) {
+        throw new Error("Managed deletion target parent escapes its configured root");
+      }
+      return;
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+    }
+
+    if (samePath(current, allowedRoot)) {
+      throw new Error("Managed deletion root is missing");
+    }
+    current = path.dirname(current);
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => process.platform === "win32"
+    ? path.resolve(value).toLowerCase()
+    : path.resolve(value);
+  return normalize(left) === normalize(right);
+}
+
+function isInsideOrEqualPath(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isStrictlyInsidePath(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function managedPathsOverlap(left: string, right: string): boolean {
+  return isInsideOrEqualPath(left, right) || isInsideOrEqualPath(right, left);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function writeDurableJson(targetPath: string, value: unknown): void {
+  const temporaryPath = `${targetPath}.${process.pid}.${createId("tmp")}`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(descriptor, `${JSON.stringify(value)}\n`, "utf8");
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.renameSync(temporaryPath, targetPath);
+    syncDirectoryBestEffort(path.dirname(targetPath));
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    removeFileIfPresent(temporaryPath);
+    throw error;
+  }
+}
+
+function syncDirectoryBestEffort(directory: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(directory, "r");
+    fs.fsyncSync(descriptor);
+  } catch {
+    // Directory fsync is not available on every supported platform.
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function removeFileIfPresent(targetPath: string): boolean {
+  try {
+    fs.rmSync(targetPath, { force: true });
+    return !fs.existsSync(targetPath);
+  } catch {
+    return false;
+  }
+}
+
+function readSpaceDeletionTombstone(tombstonePath: string): SpaceDeletionTombstone | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(tombstonePath, "utf8")) as unknown;
+    if (!isRecord(value)
+      || value.version !== 1
+      || typeof value.spaceId !== "string"
+      || typeof value.createdAt !== "string"
+      || typeof value.spaceRootPath !== "string"
+      || !isStringArray(value.clonePaths)
+      || !isStringArray(value.repoIndexPaths)
+      || !isStringArray(value.snapshotArtifactPaths)) {
+      return null;
+    }
+    return value as unknown as SpaceDeletionTombstone;
+  } catch {
+    return null;
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

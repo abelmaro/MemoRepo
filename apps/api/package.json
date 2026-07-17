@@ -7,14 +7,17 @@
     "memorepo-mcp": "dist/cli/mcp.js"
   },
   "scripts": {
+    "predev": "pnpm --filter @memorepo/agent-runtime build",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "mcp": "node dist/cli/mcp.js",
     "build": "tsc -p tsconfig.json",
+    "pretest": "pnpm --filter @memorepo/agent-runtime build",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@memorepo/agent-runtime": "workspace:*",
     "@fastify/cors": "^11.0.1",
     "@fastify/rate-limit": "^11.1.0",
     "better-sqlite3": "^12.2.0",

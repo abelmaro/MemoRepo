@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Boxes, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
 import { AddRepoModal } from "./components/AddRepoModal";
+import { AskSpacePanel } from "./components/AskSpacePanel";
 import { GitHubConnectionPanel, type GitHubSignInRequest } from "./components/GitHubConnectionPanel";
 import { JobLog } from "./components/JobLog";
 import { JobsPanel } from "./components/JobsPanel";
@@ -26,6 +27,7 @@ export function App() {
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [askSpaceOpen, setAskSpaceOpen] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [repoKindFilter, setRepoKindFilter] = useState<RepositoryKindFilter>("all");
@@ -124,6 +126,7 @@ export function App() {
     setRepoSearch("");
     setRepoKindFilter("all");
     setManagementView(null);
+    setAskSpaceOpen(false);
   }
 
   function checkForUpdates() {
@@ -280,7 +283,7 @@ export function App() {
               </header>
 
               {hasActiveSpaceJob ? (
-                <div className="inline-alert" role="status">
+                <div className="inline-alert operation-notice" role="status">
                   A Space operation is in progress. Repository changes are available again when it finishes.
                 </div>
               ) : null}
@@ -455,6 +458,7 @@ export function App() {
                           setSelectedSpaceId(null);
                           setAddRepoOpen(false);
                           setMcpOpen(false);
+                          setAskSpaceOpen(false);
                           setManagementView(null);
                           void queryClient.invalidateQueries({ queryKey: ["spaces"] });
                           void queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -506,10 +510,11 @@ export function App() {
         </Modal>
       ) : null}
       {activeJobId ? (
-        <Modal title="Job details" onClose={() => setActiveJobId(null)} wide>
+        <Modal title="Job details" onClose={() => setActiveJobId(null)} wide contained>
           <JobLog jobId={activeJobId} onJob={(jobId) => setActiveJobId(jobId)} />
         </Modal>
       ) : null}
+      <AskSpacePanel space={selectedSpace} open={askSpaceOpen} onOpenChange={setAskSpaceOpen} />
     </div>
   );
 }

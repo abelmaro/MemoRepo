@@ -7,12 +7,12 @@
     "dev": "pnpm --filter @memorepo/api dev",
     "dev:api": "pnpm --filter @memorepo/api dev",
     "dev:web": "pnpm --filter @memorepo/web dev",
-    "build": "pnpm --filter @memorepo/api build && pnpm --filter @memorepo/web build",
-    "test": "pnpm --filter @memorepo/api test && pnpm --filter @memorepo/web test",
-    "typecheck": "pnpm --filter @memorepo/api typecheck && pnpm --filter @memorepo/web typecheck"
+    "build": "pnpm --filter @memorepo/agent-runtime build && pnpm --filter @memorepo/api build && pnpm --filter @memorepo/web build",
+    "test": "pnpm --filter @memorepo/agent-runtime test && pnpm --filter @memorepo/api test && pnpm --filter @memorepo/web test",
+    "typecheck": "pnpm --filter @memorepo/agent-runtime typecheck && pnpm --filter @memorepo/api typecheck && pnpm --filter @memorepo/web typecheck"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.19.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2"

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -85,6 +88,7 @@ test("logical job identity includes payload and dependency", () => {
 test("public job projections exclude the internal deduplication key", () => {
   const database = createTestDatabase();
   const jobs = new JobRunner(database, 0);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memorepo-job-projection-"));
 
   try {
     const parent = jobs.enqueue({ type: "parent_job", payload: { value: 1 } });
@@ -100,12 +104,19 @@ test("public job projections exclude the internal deduplication key", () => {
       assertNoDeduplicationKey(dependent);
     }
 
-    const spaces = new SpaceService(database, {} as never, {} as never);
+    const spaces = new SpaceService(database, {
+      memorepoHome: root,
+      spacesDir: path.join(root, "spaces"),
+      repoIndexesDir: path.join(root, "indexes", "repositories"),
+      snapshotIndexesDir: path.join(root, "indexes", "snapshots"),
+      tmpDir: path.join(root, "tmp")
+    } as never, {} as never);
     const latestChild = (spaces.latestJobs() as Array<Record<string, unknown>>).find((job) => job.id === child.id);
     assertNoDeduplicationKey(latestChild);
     assert.equal(latestChild?.dependency_status, "pending");
   } finally {
     database.sqlite.close();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -167,6 +178,42 @@ test("job output is bounded by message size and retained log count", async () =>
     assert.match(logs[0]!.message, /\[message truncated\]$/);
     assert.equal(events.filter((event) => event.event_type === "log_truncated").length, 1);
     assert.equal(events.at(-1)?.message, "succeeded");
+  } finally {
+    jobs.stop();
+    database.sqlite.close();
+  }
+});
+
+test("running jobs can be cancelled and receive an abort signal", async () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 1);
+  let markStarted = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  jobs.register("blocking_job", async (_payload, context) => {
+    markStarted();
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(context.signal.reason);
+      context.signal.addEventListener("abort", onAbort, { once: true });
+      if (context.signal.aborted) onAbort();
+    });
+  });
+
+  try {
+    jobs.start();
+    const job = jobs.enqueue({ type: "blocking_job" });
+    await started;
+    const cancelling = jobs.cancelJob(job.id) as { status: string };
+    assert.equal(cancelling.status, "running");
+    await waitForTerminalJob(database, job.id);
+
+    const cancelled = jobs.getJob(job.id) as { status: string; error: string | null };
+    assert.equal(cancelled.status, "cancelled");
+    assert.match(cancelled.error ?? "", /MR-JOB-CANCELLED/);
+    const events = jobs.getJobEvents(job.id) as Array<{ event_type: string; message: string }>;
+    assert.ok(events.some((event) => event.event_type === "cancellation_requested"));
+    assert.equal(events.at(-1)?.message, "cancelled");
   } finally {
     jobs.stop();
     database.sqlite.close();

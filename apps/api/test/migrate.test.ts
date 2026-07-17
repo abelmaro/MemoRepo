@@ -12,9 +12,65 @@ test("migrate creates and versions a new database", () => {
     assert.ok(tableNames(sqlite).has("spaces"));
     assert.ok(tableNames(sqlite).has("jobs"));
     assert.ok(tableNames(sqlite).has("github_oauth_credentials"));
+    assert.ok(tableNames(sqlite).has("agent_account_sessions"));
+    assert.ok(tableNames(sqlite).has("agent_chats"));
+    assert.ok(tableNames(sqlite).has("agent_messages"));
+    assert.ok(tableNames(sqlite).has("agent_turns"));
+    assert.equal(tableNames(sqlite).has("codex_conversations"), false);
     assert.ok(columnNames(sqlite, "github_oauth_credentials").has("token_ciphertext"));
     assert.ok(columnNames(sqlite, "jobs").has("deduplication_key"));
     assert.ok(indexNames(sqlite).has("jobs_active_deduplication_unique"));
+    assert.ok(indexNames(sqlite).has("agent_chats_space_updated_idx"));
+    assert.ok(indexNames(sqlite).has("agent_messages_chat_sequence_unique"));
+    assert.ok(indexNames(sqlite).has("agent_turns_active_chat_unique"));
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("agent chat persistence keeps visible transcripts safe across snapshot and chat deletion", () => {
+  const sqlite = new Database(":memory:");
+  try {
+    migrate(sqlite);
+    sqlite.exec(`
+      INSERT INTO spaces (
+        id, name, slug, root_path, snapshot_status, snapshot_status_updated_at, created_at, updated_at
+      ) VALUES ('space-1', 'Space', 'space', '/tmp/space', 'ready', '2026-01-01', '2026-01-01', '2026-01-01');
+      INSERT INTO space_snapshots (
+        id, space_id, version, status, artifact_path, manifest_json, created_at
+      ) VALUES ('snapshot-1', 'space-1', 1, 'inactive', '/tmp/snapshot', '{}', '2026-01-01');
+      INSERT INTO agent_account_sessions (
+        id, provider_id, account_key, connected_at
+      ) VALUES ('account-1', 'test-provider', 'test-account', '2026-01-01');
+      INSERT INTO agent_chats (
+        id, space_id, account_session_id, snapshot_id, snapshot_version, snapshot_meta_json,
+        title, status, created_at, updated_at
+      ) VALUES (
+        'conversation-1', 'space-1', 'account-1', 'snapshot-1', 1, '{}',
+        'Question', 'active', '2026-01-01', '2026-01-01'
+      );
+      INSERT INTO agent_messages (
+        id, chat_id, sequence, role, status, content, created_at
+      ) VALUES
+        ('message-1', 'conversation-1', 1, 'user', 'completed', 'Question', '2026-01-01'),
+        ('message-2', 'conversation-1', 2, 'assistant', 'completed', 'Answer', '2026-01-01');
+      INSERT INTO agent_turns (
+        id, chat_id, user_message_id, assistant_message_id, status, created_at, finished_at
+      ) VALUES (
+        'turn-1', 'conversation-1', 'message-1', 'message-2', 'completed', '2026-01-01', '2026-01-01'
+      );
+    `);
+
+    sqlite.prepare("DELETE FROM space_snapshots WHERE id = 'snapshot-1'").run();
+    assert.equal(
+      sqlite.prepare("SELECT snapshot_id FROM agent_chats WHERE id = 'conversation-1'").pluck().get(),
+      null,
+    );
+
+    sqlite.prepare("DELETE FROM agent_chats WHERE id = 'conversation-1'").run();
+    assert.equal(sqlite.prepare("SELECT COUNT(*) FROM agent_messages").pluck().get(), 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) FROM agent_turns").pluck().get(), 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) FROM agent_account_sessions").pluck().get(), 1);
   } finally {
     sqlite.close();
   }
@@ -76,6 +132,31 @@ test("migrate is idempotent and rejects databases created by newer versions", ()
     sqlite.pragma(`user_version = ${CURRENT_SCHEMA_VERSION + 1}`);
 
     assert.throws(() => migrate(sqlite), /newer than supported/);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("migrate repairs a version 5 database that is missing agent chat tables", () => {
+  const sqlite = new Database(":memory:");
+  try {
+    migrate(sqlite);
+    sqlite.exec(`
+      DROP TABLE agent_turns;
+      DROP TABLE agent_messages;
+      DROP TABLE agent_chats;
+      DROP TABLE agent_account_sessions;
+    `);
+    sqlite.pragma("user_version = 5");
+
+    migrate(sqlite);
+
+    assert.equal(schemaVersion(sqlite), CURRENT_SCHEMA_VERSION);
+    assert.ok(tableNames(sqlite).has("agent_account_sessions"));
+    assert.ok(tableNames(sqlite).has("agent_chats"));
+    assert.ok(tableNames(sqlite).has("agent_messages"));
+    assert.ok(tableNames(sqlite).has("agent_turns"));
+    assert.ok(indexNames(sqlite).has("agent_turns_active_chat_unique"));
   } finally {
     sqlite.close();
   }

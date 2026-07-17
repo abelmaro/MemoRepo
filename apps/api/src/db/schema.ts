@@ -185,6 +185,82 @@ export const mcpToolStats = sqliteTable(
   (table) => [primaryKey({ columns: [table.spaceId, table.toolName] })]
 );
 
+export const agentAccountSessions = sqliteTable("agent_account_sessions", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  accountKey: text("account_key").notNull(),
+  connectedAt: text("connected_at").notNull(),
+  disconnectedAt: text("disconnected_at")
+});
+
+export const agentChats = sqliteTable(
+  "agent_chats",
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id")
+      .notNull()
+      .references(() => spaces.id, { onDelete: "cascade" }),
+    accountSessionId: text("account_session_id")
+      .notNull()
+      .references(() => agentAccountSessions.id),
+    snapshotId: text("snapshot_id").references(() => spaceSnapshots.id, { onDelete: "set null" }),
+    snapshotVersion: integer("snapshot_version").notNull(),
+    snapshotMetaJson: text("snapshot_meta_json").notNull(),
+    title: text("title").notNull(),
+    status: text("status").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    archivedAt: text("archived_at")
+  },
+  (table) => [index("agent_chats_space_updated_idx").on(table.spaceId, table.status, table.updatedAt)]
+);
+
+export const agentMessages = sqliteTable(
+  "agent_messages",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => agentChats.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    role: text("role").notNull(),
+    status: text("status").notNull(),
+    content: text("content").notNull(),
+    sourcesJson: text("sources_json").notNull().default("[]"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    completedAt: text("completed_at")
+  },
+  (table) => [uniqueIndex("agent_messages_chat_sequence_unique").on(table.chatId, table.sequence)]
+);
+
+export const agentTurns = sqliteTable(
+  "agent_turns",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => agentChats.id, { onDelete: "cascade" }),
+    userMessageId: text("user_message_id")
+      .notNull()
+      .references(() => agentMessages.id, { onDelete: "cascade" }),
+    assistantMessageId: text("assistant_message_id")
+      .notNull()
+      .references(() => agentMessages.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at")
+  },
+  (table) => [
+    index("agent_turns_chat_created_idx").on(table.chatId, table.createdAt),
+    uniqueIndex("agent_turns_active_chat_unique")
+      .on(table.chatId)
+      .where(sql`${table.status} IN ('pending', 'running')`)
+  ]
+);
+
 export const databaseTables = {
   spaces,
   github_oauth_credentials: githubOauthCredentials,
@@ -195,7 +271,11 @@ export const databaseTables = {
   jobs,
   job_events: jobEvents,
   mcp_connections: mcpConnections,
-  mcp_tool_stats: mcpToolStats
+  mcp_tool_stats: mcpToolStats,
+  agent_account_sessions: agentAccountSessions,
+  agent_chats: agentChats,
+  agent_messages: agentMessages,
+  agent_turns: agentTurns
 } as const;
 
 export const schema = {
@@ -208,7 +288,11 @@ export const schema = {
   jobs,
   jobEvents,
   mcpConnections,
-  mcpToolStats
+  mcpToolStats,
+  agentAccountSessions,
+  agentChats,
+  agentMessages,
+  agentTurns
 };
 
 export type DatabaseTableName = keyof typeof databaseTables;

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
+import { AgentRuntime, FileCredentialStore, PiAgentRuntimeAdapter } from "@memorepo/agent-runtime";
 import { loadConfig } from "../config.js";
 import { createDatabase } from "../db/connection.js";
+import { AgentService } from "./agentService.js";
 import { CbmService } from "./cbmService.js";
 import { GitService } from "./gitService.js";
 import { GitHubCredentialProvider } from "./githubCredentialProvider.js";
@@ -12,6 +14,7 @@ import { McpGateway } from "./mcpGateway.js";
 import { MaintenanceService } from "./maintenanceService.js";
 import { OperationsService } from "./operationsService.js";
 import { SnapshotService } from "./snapshotService.js";
+import { SnapshotQueryService } from "./snapshotQueryService.js";
 import { SpaceService } from "./spaceService.js";
 
 export type AppServices = ReturnType<typeof createServices>;
@@ -37,6 +40,19 @@ export function createServices() {
   const jobs = new JobRunner(database, config.jobConcurrency);
   const operations = new OperationsService(database, config, spaces, github, git, cbm, snapshots, jobs);
   const mcp = new McpGateway(database, config, spaces, cbm);
+  const snapshotQueries = new SnapshotQueryService(mcp);
+  const agentCredentials = new FileCredentialStore(config.agentCredentialPath);
+  const agentAdapter = new PiAgentRuntimeAdapter({
+    providerId: config.agentProvider,
+    modelId: config.agentModel,
+    credentialStore: agentCredentials,
+    thinkingLevel: "medium"
+  });
+  const agentRuntime = new AgentRuntime(agentAdapter, {
+    maxRunMs: config.agentMaxRunSeconds * 1_000,
+    maxToolCalls: config.agentMaxToolCalls
+  });
+  const agent = new AgentService(database, config, agentRuntime, snapshotQueries, snapshots, agentAdapter);
   const maintenance = new MaintenanceService(database, config);
 
   operations.registerJobHandlers();
@@ -55,6 +71,10 @@ export function createServices() {
     jobs,
     operations,
     mcp,
+    snapshotQueries,
+    agentCredentials,
+    agentRuntime,
+    agent,
     maintenance
   };
 }

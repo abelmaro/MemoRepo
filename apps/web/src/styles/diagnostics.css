@@ -58,6 +58,9 @@
 }
 
 .diagnostics-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-8);
   padding: var(--space-10) var(--space-12);
   border-radius: var(--radius-md);
   background: var(--color-status-warning-surface);
