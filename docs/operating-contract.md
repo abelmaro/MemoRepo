@@ -38,6 +38,10 @@ MemoRepo accepts these runtime inputs:
 - `MEMOREPO_SNAPSHOT_RETENTION`: the default number of latest snapshots to keep when pruning a space, defaulting to `3`.
 - `MEMOREPO_JOB_RETENTION_DAYS`: the default age threshold for deleting terminal jobs during garbage collection, defaulting to `30`.
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
+- `MEMOREPO_CBM_INDEX_CONCURRENCY`: the maximum number of heavyweight CBM indexing commands, defaulting to `1`.
+- `MEMOREPO_CBM_INTERACTIVE_CONCURRENCY`: the independent capacity reserved for snapshot query sessions, defaulting to `2`.
+- `MEMOREPO_STORAGE`: the Docker Compose storage source. New installations use the `memorepo-data` named volume; existing configurations without this variable continue using `MEMOREPO_HOME` as a bind mount.
+- `MEMOREPO_DATA_VOLUME_NAME`: the physical Docker volume name used when `MEMOREPO_STORAGE` selects the managed data volume, defaulting to `memorepo-data`.
 - `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
 
 Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure a Client Secret. They may optionally provide an existing personal access token through `GH_TOKEN`; fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as a development override.
@@ -46,7 +50,7 @@ The API Docker image pins `codebase-memory-mcp` v0.9.0. Direct Node development 
 
 The optional **Ask this Space** integration is included in the API image. The adapter exposes OAuth-capable providers and models from the bundled Pi catalog, initializes its selection from the environment, and permits a dashboard selection change only when no provider login or answer is active. The catalog also declares supported verbosity and reasoning-effort values per model; the dashboard renders only declared controls and keeps the advanced section closed by default. Selections are in-memory runtime state and reset when the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are unsupported. External credentials are rejected; removing a MemoRepo-managed credential still completes local sign-out even if unsupported ambient authentication remains. `AgentService` uses provider-neutral contracts with the in-process `agent-runtime`, and the runtime adapter remains the provider boundary. No separate runtime service or IPC configuration is required.
 
-`MEMOREPO_HOME` defaults to `./.memorepo` for a simple first run. For regular use, place it outside the repository source tree.
+Direct Node development defaults `MEMOREPO_HOME` to `./.memorepo`. Docker Compose defaults new installations to the `memorepo-data` named volume because its small-file and SQLite I/O is substantially cheaper than a Docker Desktop host bind mount. Existing `.env` files remain compatible.
 
 ## Core Concepts
 
@@ -69,7 +73,7 @@ Repository index:
 A `codebase-memory-mcp` cache for one managed repository at one selected branch and commit. Repository indexes are operational artifacts and can be regenerated.
 
 Snapshot:
-An immutable per-space index artifact. It is built by materializing each selected repository's recorded commit into the snapshot artifact and indexing those exact-commit source copies. A snapshot is activated only after the build succeeds, and later managed-clone changes cannot alter its source-backed query results. Tracked symbolic links are intentionally unsupported and make materialization fail closed; replace them with regular files or directories before indexing.
+An immutable per-space index artifact. It is built by materializing each selected repository's recorded commit directly from Git into a content-addressed immutable source store, then indexing those exact trees. An unchanged repository commit reuses its existing tree instead of copying it into every replacement snapshot. A snapshot is activated only after the build succeeds, and later managed-clone changes cannot alter its source-backed query results. Tracked symbolic links are intentionally unsupported and make materialization fail closed; replace them with regular files or directories before indexing.
 
 Active snapshot:
 The snapshot currently served to MCP clients for a space. Agents query this snapshot rather than live working trees.
@@ -137,10 +141,10 @@ Snapshots:
 Snapshots are the stable read model for agents. A failed snapshot build must not replace the last active snapshot.
 
 Maintenance:
-MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, and delete old terminal jobs. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs. Snapshot pruning also refuses to remove a snapshot while an agent answer pinned to it is active.
+MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, delete content-addressed revision trees no longer referenced by any retained snapshot, and delete old terminal jobs. Revision-source collection is skipped while a snapshot build is active. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs. Snapshot pruning also refuses to remove a snapshot while an agent answer pinned to it is active.
 
 Jobs:
-MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Active jobs accept cooperative cancellation through their Git, indexing, and snapshot subprocesses, with forced termination after a bounded grace period. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
+MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. Heavy CBM indexing is additionally bounded by its own lane, while snapshot queries use independent interactive capacity so an active index does not consume every chat slot. One CBM session is reused across the tool calls of a single agent turn and closed at the turn boundary. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Active jobs accept cooperative cancellation through their Git, indexing, and snapshot subprocesses, with forced termination after a bounded grace period. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
 
 Subprocess stdout and stderr capture, unterminated output lines, persisted job-event messages, and retained log-event counts are bounded. MemoRepo preserves recent stream output, emits explicit truncation markers when additional diagnostic output is discarded, records phase timings for clone/index/snapshot pipelines, and attaches stable `MR-*` codes to job-runner failures. Errors handled by the central API application handler include a stable code and request ID for server-log correlation; early HTTP boundary and authentication rejections keep their dedicated response shape.
 
@@ -162,7 +166,6 @@ Available tools:
 - `search_code`
 - `trace_path`
 - `get_code_snippet`
-- `detect_changes`
 - `query_graph`
 
 The detailed agent-facing contract is documented in [mcp-tools.md](mcp-tools.md).
@@ -187,7 +190,7 @@ The important categories are:
 
 - `data`: SQLite database files.
 - `spaces`: managed repository clones.
-- `indexes`: repository and snapshot index artifacts.
+- `indexes`: repository indexes, snapshot index artifacts, and content-addressed immutable revision trees.
 - `logs`: operational logs, if enabled.
 - `tmp`: temporary files.
 - `bin`: helper scripts such as `git-askpass.sh`.
@@ -200,7 +203,7 @@ Visible agent messages, source references, chat metadata, provider account-sessi
 
 If an inactive snapshot is pruned, its chats keep their stored transcripts and snapshot metadata but become non-continuable. A chat pinned to a retained older snapshot remains continuable; activating a newer snapshot only offers a separate new chat.
 
-Deleting a space through the managed-data flow removes that space's managed clones, snapshot artifacts, repository index artifacts, jobs, repository membership, local MCP connections, and the space record. It does not delete GitHub repositories.
+Deleting a space through the managed-data flow removes that space's managed clones, snapshot artifacts, repository index artifacts, jobs, repository membership, local MCP connections, and the space record. Content-addressed revision trees may be shared by retained snapshots from other spaces; once unreferenced, they are removed by garbage collection. It does not delete GitHub repositories.
 
 ## Local Security Model
 

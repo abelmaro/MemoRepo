@@ -106,7 +106,8 @@ export const spaceSnapshots = sqliteTable(
     manifestJson: text("manifest_json").notNull(),
     createdAt: text("created_at").notNull(),
     activatedAt: text("activated_at"),
-    error: text("error")
+    error: text("error"),
+    sizeBytes: integer("size_bytes")
   },
   (table) => [uniqueIndex("space_snapshots_space_version_unique").on(table.spaceId, table.version)]
 );

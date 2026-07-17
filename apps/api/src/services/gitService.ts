@@ -87,15 +87,26 @@ export class GitService {
 
   async checkoutFetchedRemoteBranch(repoPath: string, branch: string, context: GitCommandContext = {}): Promise<string> {
     this.validateBranch(branch);
-    await this.git(["checkout", "-B", branch, `origin/${branch}`], {
+    const target = await this.git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`], {
       ...context,
       cwd: repoPath,
-      timeoutMs: context.timeoutMs ?? 10 * 60_000
+      timeoutMs: 60_000
     });
-    await this.git(["reset", "--hard", `origin/${branch}`], {
+    const targetCommit = target.stdout.trim();
+    const status = await this.git(["status", "--porcelain=v2", "--branch", "--untracked-files=normal"], {
       ...context,
       cwd: repoPath,
       timeoutMs: context.timeoutMs ?? 5 * 60_000
+    });
+    const checkout = parseCheckoutStatus(status.stdout);
+    if (checkout.branch === branch && checkout.commit === targetCommit && checkout.clean) {
+      return targetCommit;
+    }
+
+    await this.git(["checkout", "--force", "-B", branch, `origin/${branch}`], {
+      ...context,
+      cwd: repoPath,
+      timeoutMs: context.timeoutMs ?? 10 * 60_000
     });
     await this.git(["clean", "-fd"], {
       ...context,
@@ -166,4 +177,22 @@ export class GitService {
     this.askPassPath = scriptPath;
     return scriptPath;
   }
+}
+
+function parseCheckoutStatus(output: string): { branch: string | null; commit: string | null; clean: boolean } {
+  let branch: string | null = null;
+  let commit: string | null = null;
+  let clean = true;
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith("# branch.head ")) {
+      const value = line.slice("# branch.head ".length).trim();
+      branch = value === "(detached)" ? null : value;
+    } else if (line.startsWith("# branch.oid ")) {
+      const value = line.slice("# branch.oid ".length).trim();
+      commit = value === "(initial)" ? null : value;
+    } else if (line.trim().length > 0 && !line.startsWith("# ")) {
+      clean = false;
+    }
+  }
+  return { branch, commit, clean };
 }

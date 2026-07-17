@@ -68,7 +68,7 @@ const FORBIDDEN_CBM_INPUT_KEYS = new Set([
 export class McpGateway {
   private readonly manifestCache = new Map<string, SnapshotManifest>();
   private readonly cbmResponseCache = new Map<string, unknown>();
-  private readonly snapshotToolSignal = new AsyncLocalStorage<AbortSignal>();
+  private readonly snapshotToolContext = new AsyncLocalStorage<SnapshotToolContext>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -232,7 +232,8 @@ export class McpGateway {
     snapshotId: string,
     toolName: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    turnSessionId?: string
   ) {
     const execute = async () => {
       throwIfAborted(signal);
@@ -246,9 +247,17 @@ export class McpGateway {
       this.recordToolStats(space.id, toolName, responseBytes(response));
       return response;
     };
-    return this.spacesService.withSpaceReader(spaceId, () =>
-      signal ? this.snapshotToolSignal.run(signal, execute) : execute()
-    );
+    return this.spacesService.withSpaceReader(spaceId, () => {
+      const context: SnapshotToolContext = {
+        ...(signal ? { signal } : {}),
+        ...(turnSessionId ? { turnSessionId } : {})
+      };
+      return signal || turnSessionId ? this.snapshotToolContext.run(context, execute) : execute();
+    });
+  }
+
+  closeSnapshotToolSession(turnSessionId: string): Promise<void> {
+    return this.cbm.closeTurnSession?.(turnSessionId) ?? Promise.resolve();
   }
 
   listToolStats(spaceId: string) {
@@ -462,6 +471,9 @@ export class McpGateway {
       const managedSnapshotsRoot = path.resolve(this.config.snapshotIndexesDir);
       const realManagedSnapshotsRoot = fs.realpathSync(managedSnapshotsRoot);
       if (!isStrictlyInside(managedHome, realManagedSnapshotsRoot)) throw legacySnapshotError();
+      const managedRevisionRoot = path.resolve(this.config.revisionSourcesDir);
+      const realManagedRevisionRoot = isDirectory(managedRevisionRoot) ? fs.realpathSync(managedRevisionRoot) : null;
+      if (realManagedRevisionRoot && !isStrictlyInside(managedHome, realManagedRevisionRoot)) throw legacySnapshotError();
 
       const artifactPath = path.resolve(snapshot.artifactPath);
       if (!isStrictlyInside(managedSnapshotsRoot, artifactPath) || !isDirectory(artifactPath)) {
@@ -471,18 +483,20 @@ export class McpGateway {
       if (!isStrictlyInside(realManagedSnapshotsRoot, realArtifactPath)) throw legacySnapshotError();
 
       const sourcesRoot = path.join(artifactPath, "sources");
-      if (!Array.isArray(manifest.repositories) || manifest.repositories.length === 0 || !isDirectory(sourcesRoot)) {
+      if (!Array.isArray(manifest.repositories) || manifest.repositories.length === 0) {
         throw legacySnapshotError();
       }
-      const realSourcesRoot = fs.realpathSync(sourcesRoot);
-      if (!isStrictlyInside(realArtifactPath, realSourcesRoot)) throw legacySnapshotError();
+      const realSourcesRoot = isDirectory(sourcesRoot) ? fs.realpathSync(sourcesRoot) : null;
+      if (realSourcesRoot && !isStrictlyInside(realArtifactPath, realSourcesRoot)) throw legacySnapshotError();
 
       for (const repository of manifest.repositories) {
         if (!repository || typeof repository.localPath !== "string") throw legacySnapshotError();
         const sourcePath = path.resolve(repository.localPath);
-        if (!isStrictlyInside(sourcesRoot, sourcePath) || !isDirectory(sourcePath)) throw legacySnapshotError();
+        if (!isDirectory(sourcePath)) throw legacySnapshotError();
         const realSourcePath = fs.realpathSync(sourcePath);
-        if (!isStrictlyInside(realSourcesRoot, realSourcePath)) throw legacySnapshotError();
+        const isLegacySource = Boolean(realSourcesRoot && isStrictlyInside(realSourcesRoot, realSourcePath));
+        const isRevisionSource = Boolean(realManagedRevisionRoot && isStrictlyInside(realManagedRevisionRoot, realSourcePath));
+        if (!isLegacySource && !isRevisionSource) throw legacySnapshotError();
       }
     } catch {
       throw legacySnapshotError();
@@ -490,7 +504,8 @@ export class McpGateway {
   }
 
   private async cachedCbmTool(snapshot: SnapshotRow, toolName: string, input: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
-    const signal = this.snapshotToolSignal.getStore();
+    const context = this.snapshotToolContext.getStore();
+    const signal = context?.signal;
     throwIfAborted(signal);
     const key = `${snapshot.id}\n${toolName}\n${stableStringify(input)}`;
     if (this.cbmResponseCache.has(key)) {
@@ -501,7 +516,7 @@ export class McpGateway {
       return cached;
     }
 
-    const response = await this.cbm.tool(toolName, input, snapshot.artifactPath, timeoutMs, signal);
+    const response = await this.cbm.tool(toolName, input, snapshot.artifactPath, timeoutMs, signal, context?.turnSessionId);
     throwIfAborted(signal);
     if (responseBytes(response) <= CBM_RESPONSE_CACHE_MAX_ITEM_BYTES) {
       evictOldest(this.cbmResponseCache, CBM_RESPONSE_CACHE_MAX_ENTRIES);
@@ -1596,6 +1611,11 @@ export class McpGateway {
         toMcpRepository(repository as Record<string, unknown>, undefined, options)
       );
   }
+}
+
+interface SnapshotToolContext {
+  signal?: AbortSignal;
+  turnSessionId?: string;
 }
 
 function maskCypherLiteralsAndComments(query: string): string {

@@ -15,6 +15,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Strengthen Ask this Space investigations with the snapshot gateway workflow, evidence verification, pagination, and truncation guidance.
+- Materialize exact Git commits directly into reusable immutable revision trees instead of creating and copying temporary worktrees for every snapshot.
+- Use a Docker-managed data volume for new installations while preserving existing bind-mount configurations.
+- Separate heavyweight indexing capacity from interactive snapshot queries and reuse one CBM session across each agent turn.
+- Batch job-log and streamed assistant-content persistence to reduce SQLite contention without delaying live events.
+
+### Fixed
+
+- Avoid synchronous recursive size scans on repeated snapshot-list requests by persisting snapshot artifact sizes and backfilling legacy rows asynchronously.
+- Skip redundant clean Git checkouts and repairs when a managed clone already matches its selected remote commit.
+- Reclaim content-addressed revision trees after their last retained snapshot reference is removed and garbage collection runs.
 
 ## [0.3.0] - 2026-07-16
 

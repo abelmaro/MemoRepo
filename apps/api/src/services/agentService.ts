@@ -134,8 +134,10 @@ interface RunState {
   allowedTools: Set<string>;
   completed: boolean;
   persistedLength: number;
-  lastPersistedAt: number;
+  persistTimer: NodeJS.Timeout | null;
 }
+
+const AGENT_CONTENT_FLUSH_INTERVAL_MS = 500;
 
 export class AgentService {
   private readonly events = new EventEmitter();
@@ -464,7 +466,7 @@ export class AgentService {
       allowedTools: new Set(tools.map((tool) => tool.name)),
       completed: false,
       persistedLength: 0,
-      lastPersistedAt: 0
+      persistTimer: null
     };
     this.runs.set(turnId, state);
     const startedAt = nowIso();
@@ -491,8 +493,10 @@ export class AgentService {
         assistantMessage: this.messageById(assistantMessageId)
       };
     } catch (error) {
+      this.clearContentPersistTimer(state);
       state.completed = true;
       this.runs.delete(turnId);
+      void this.snapshotQueries.closeTurn?.(turnId).catch(() => undefined);
       this.finishTurnLocally(turnId, "failed", this.publicError(error, "The agent could not start this answer"));
       throw error;
     }
@@ -526,7 +530,10 @@ export class AgentService {
     if (turn.chatId !== chatId) throw httpError(404, "Agent turn not found");
     if (turn.status !== "pending" && turn.status !== "running") return;
     await this.runtime.interrupt(turnId);
-    if (this.finishTurnLocally(turnId, "interrupted", null)) {
+    const state = this.runs.get(turnId);
+    if (state) this.clearContentPersistTimer(state);
+    await this.snapshotQueries.closeTurn?.(turnId).catch(() => undefined);
+    if (this.finishTurnLocally(turnId, "interrupted", null, nowIso(), state?.content, state?.sources)) {
       this.emit(turnId, {
         type: "turn.completed",
         turnId,
@@ -605,7 +612,8 @@ export class AgentService {
         chat.snapshotId,
         request.name,
         request.arguments,
-        signal
+        signal,
+        state.turnId
       );
       if (signal.aborted || state.completed) return interruptedToolResult();
       const value = boundedJsonValue(result);
@@ -627,14 +635,7 @@ export class AgentService {
     if (event.type === "assistant.delta") {
       const offset = state.content.length;
       state.content += event.delta;
-      const at = Date.now();
-      if (state.content.length - state.persistedLength >= 128 || at - state.lastPersistedAt >= 250) {
-        this.database.sqlite
-          .prepare("UPDATE agent_messages SET content = ? WHERE id = ?")
-          .run(state.content, state.assistantMessageId);
-        state.persistedLength = state.content.length;
-        state.lastPersistedAt = at;
-      }
+      this.scheduleContentPersist(state);
       this.emit(turnId, {
         type: "assistant.delta",
         turnId,
@@ -662,6 +663,7 @@ export class AgentService {
 
     const error =
       event.status === "failed" ? this.publicError(event.error, "The agent could not complete this answer") : null;
+    this.clearContentPersistTimer(state);
     const changed = this.finishTurnLocally(
       turnId,
       event.status,
@@ -673,6 +675,7 @@ export class AgentService {
     );
     state.completed = true;
     this.runs.delete(turnId);
+    void this.snapshotQueries.closeTurn?.(turnId).catch(() => undefined);
     if (changed) {
       this.emit(turnId, {
         type: "turn.completed",
@@ -722,6 +725,29 @@ export class AgentService {
       byteCount += pairBytes;
     }
     return selected.reverse().flat();
+  }
+
+  private scheduleContentPersist(state: RunState): void {
+    if (state.persistTimer || state.completed) return;
+    state.persistTimer = setTimeout(() => {
+      state.persistTimer = null;
+      if (state.completed || state.content.length === state.persistedLength) return;
+      try {
+        this.database.sqlite
+          .prepare("UPDATE agent_messages SET content = ? WHERE id = ?")
+          .run(state.content, state.assistantMessageId);
+        state.persistedLength = state.content.length;
+      } catch {
+        this.scheduleContentPersist(state);
+      }
+    }, AGENT_CONTENT_FLUSH_INTERVAL_MS);
+    state.persistTimer.unref();
+  }
+
+  private clearContentPersistTimer(state: RunState): void {
+    if (!state.persistTimer) return;
+    clearTimeout(state.persistTimer);
+    state.persistTimer = null;
   }
 
   private finishTurnLocally(
@@ -779,7 +805,9 @@ export class AgentService {
   private forceInterruptTurns(turnIds: string[]): void {
     const at = nowIso();
     for (const turnId of turnIds) {
-      if (this.finishTurnLocally(turnId, "interrupted", null, at)) {
+      const state = this.runs.get(turnId);
+      if (state) this.clearContentPersistTimer(state);
+      if (this.finishTurnLocally(turnId, "interrupted", null, at, state?.content, state?.sources)) {
         this.emit(turnId, {
           type: "turn.completed",
           turnId,
@@ -789,6 +817,7 @@ export class AgentService {
         });
       }
       this.runs.delete(turnId);
+      void this.snapshotQueries.closeTurn?.(turnId).catch(() => undefined);
     }
   }
 
