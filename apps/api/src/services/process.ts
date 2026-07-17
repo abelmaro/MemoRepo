@@ -21,6 +21,7 @@ export interface RunProcessOptions {
   onOutput?: ((line: string) => void) | undefined;
   maxCaptureBytes?: number | undefined;
   maxLineBytes?: number | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000;
@@ -64,6 +65,10 @@ export function createSafeProcessEnvironment(source: NodeJS.ProcessEnv = process
 export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
   const sensitiveValues = options.sensitiveValues ?? [];
 
+  if (options.signal?.aborted) {
+    return Promise.reject(abortError(options.signal.reason));
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(options.command, options.args, {
       cwd: options.cwd,
@@ -84,18 +89,25 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let aborted = false;
     const maxCaptureBytes = positiveLimit(options.maxCaptureBytes, DEFAULT_PROCESS_CAPTURE_MAX_BYTES);
     const maxLineBytes = positiveLimit(options.maxLineBytes, DEFAULT_PROCESS_LINE_MAX_BYTES);
 
     let killTimer: NodeJS.Timeout | undefined;
+    const terminate = () => {
+      child.kill("SIGTERM");
+      killTimer ??= setTimeout(() => child.kill("SIGKILL"), options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+    };
+    const handleAbort = () => {
+      aborted = true;
+      terminate();
+    };
+    options.signal?.addEventListener("abort", handleAbort, { once: true });
     const timeout =
       options.timeoutMs && options.timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
-            child.kill("SIGTERM");
-            killTimer = setTimeout(() => {
-              child.kill("SIGKILL");
-            }, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+            terminate();
           }, options.timeoutMs)
         : undefined;
 
@@ -106,6 +118,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      options.signal?.removeEventListener("abort", handleAbort);
     }
 
     function emit(chunk: Buffer, target: "stdout" | "stderr"): void {
@@ -154,9 +167,19 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
         reject(new Error(`${options.command} timed out after ${options.timeoutMs}ms`));
         return;
       }
+      if (aborted) {
+        reject(abortError(options.signal?.reason));
+        return;
+      }
       resolve({ exitCode, stdout, stderr, stdoutTruncated, stderrTruncated });
     });
   });
+}
+
+function abortError(reason: unknown): Error {
+  const error = new Error(reason instanceof Error ? reason.message : "Operation cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 function positiveLimit(value: number | undefined, fallback: number): number {

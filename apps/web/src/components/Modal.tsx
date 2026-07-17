@@ -7,9 +7,10 @@ interface ModalProps {
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  contained?: boolean;
 }
 
-export function Modal({ title, children, onClose, wide }: ModalProps) {
+export function Modal({ title, children, onClose, wide, contained }: ModalProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const titleId = useId();
 
@@ -76,7 +77,7 @@ export function Modal({ title, children, onClose, wide }: ModalProps) {
     <div className="modal-backdrop" role="presentation">
       <section
         ref={dialogRef}
-        className={wide ? "modal modal-wide" : "modal"}
+        className={["modal", wide ? "modal-wide" : "", contained ? "modal-contained" : ""].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -88,7 +89,7 @@ export function Modal({ title, children, onClose, wide }: ModalProps) {
             <X size={18} />
           </button>
         </header>
-        {children}
+        <div className="modal-body">{children}</div>
       </section>
     </div>,
     document.body

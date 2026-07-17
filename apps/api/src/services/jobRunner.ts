@@ -20,6 +20,7 @@ export interface EnqueueJobInput {
 export interface JobContext {
   jobId: string;
   log: (message: string) => void;
+  signal: AbortSignal;
 }
 
 export type JobHandler = (payload: Record<string, unknown>, context: JobContext) => Promise<void>;
@@ -36,6 +37,7 @@ export class JobRunner {
   private recoveredRunningJobs = false;
   private logEventCounts = new Map<string, number>();
   private saturatedLogJobs = new Set<string>();
+  private activeControllers = new Map<string, AbortController>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -187,14 +189,20 @@ export class JobRunner {
   cancelJob(jobId: string) {
     const job = this.requireJob(jobId);
     if (job.status === "running") {
-      throw new Error("Running jobs cannot be cancelled yet; wait for completion or restart MemoRepo to mark abandoned jobs failed.");
+      const controller = this.activeControllers.get(job.id);
+      if (!controller) throw new Error("The running job can no longer be cancelled safely");
+      if (!controller.signal.aborted) {
+        this.writeEvent(job.id, "cancellation_requested", "Cancellation requested; stopping the active operation");
+        controller.abort(new Error("Cancelled by user"));
+      }
+      return this.getJob(job.id);
     }
     if (job.status !== "pending") {
       throw new Error("Only pending jobs can be cancelled");
     }
 
     const finishedAt = nowIso();
-    updateRecord(this.database, "jobs", { status: "cancelled", error: "Cancelled before start", finishedAt }, "id", job.id);
+    updateRecord(this.database, "jobs", { status: "cancelled", error: "[MR-JOB-CANCELLED] Cancelled before start", finishedAt }, "id", job.id);
     this.writeEvent(job.id, "status", "cancelled");
     this.skipBlockedDependents();
     return this.getJob(job.id);
@@ -294,36 +302,57 @@ export class JobRunner {
     const startedAt = nowIso();
 
     if (!handler) {
-      this.fail(job.id, `No handler registered for job type ${job.type}`);
+      this.fail(job.id, `No handler registered for job type ${job.type}`, job.type);
       return;
     }
 
+    const controller = new AbortController();
+    this.activeControllers.set(job.id, controller);
     updateRecord(this.database, "jobs", { status: "running", startedAt }, "id", job.id);
     this.writeEvent(job.id, "status", "running");
 
     try {
       await handler(JSON.parse(job.payload_json) as Record<string, unknown>, {
         jobId: job.id,
-        log: (message) => this.writeEvent(job.id, "log", message)
+        log: (message) => this.writeEvent(job.id, "log", message),
+        signal: controller.signal
       });
       const finishedAt = nowIso();
       if (this.isRunning(job.id)) {
-        updateRecord(this.database, "jobs", { status: "succeeded", finishedAt }, "id", job.id);
-        this.writeEvent(job.id, "status", "succeeded");
+        if (controller.signal.aborted) {
+          this.cancelRunning(job.id);
+        } else {
+          updateRecord(this.database, "jobs", { status: "succeeded", finishedAt }, "id", job.id);
+          this.writeEvent(job.id, "status", "succeeded");
+        }
       }
     } catch (error) {
       if (this.isRunning(job.id)) {
-        this.fail(job.id, error instanceof Error ? error.message : String(error));
+        if (controller.signal.aborted || isAbortError(error)) {
+          this.cancelRunning(job.id);
+        } else {
+          this.fail(job.id, error instanceof Error ? error.message : String(error), job.type);
+        }
       }
+    } finally {
+      this.activeControllers.delete(job.id);
     }
   }
 
-  private fail(jobId: string, message: string): void {
+  private fail(jobId: string, message: string, jobType = "unknown"): void {
     const finishedAt = nowIso();
-    const boundedMessage = truncateEventMessage(message);
+    const boundedMessage = truncateEventMessage(`[${jobErrorCode(jobType)}] ${message}`);
     updateRecord(this.database, "jobs", { status: "failed", error: boundedMessage, finishedAt }, "id", jobId);
     this.writeEvent(jobId, "error", boundedMessage);
     this.writeEvent(jobId, "status", "failed");
+  }
+
+  private cancelRunning(jobId: string): void {
+    const finishedAt = nowIso();
+    const message = "[MR-JOB-CANCELLED] Cancelled by user";
+    updateRecord(this.database, "jobs", { status: "cancelled", error: message, finishedAt }, "id", jobId);
+    this.writeEvent(jobId, "status", "cancelled");
+    this.skipBlockedDependents();
   }
 
   private skipBlockedDependents(): void {
@@ -415,6 +444,15 @@ function truncateEventMessage(message: string): string {
   const buffer = Buffer.from(message, "utf8");
   const prefix = buffer.subarray(0, JOB_EVENT_MESSAGE_MAX_BYTES - suffixBytes).toString("utf8").replace(/\uFFFD$/, "");
   return `${prefix}${suffix}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && /abort|cancel/i.test(`${error.name} ${error.message}`);
+}
+
+function jobErrorCode(jobType: string): string {
+  const normalized = jobType.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `MR-JOB-${normalized || "UNKNOWN"}`;
 }
 
 interface JobRow {

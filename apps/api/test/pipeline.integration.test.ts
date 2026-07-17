@@ -19,6 +19,7 @@ const TEST_CONTROL_TOKEN = "test-control-token-0123456789abcdef0123456789abcdef"
 const TEST_GITHUB_ACCESS_TOKEN = "test-oauth-access-token";
 process.env.MEMOREPO_CONTROL_TOKEN = TEST_CONTROL_TOKEN;
 process.env.GITHUB_OAUTH_CLIENT_ID = "test-oauth-client-id";
+delete process.env.GH_TOKEN;
 
 function createServices() {
   const services = createAppServices();
@@ -58,7 +59,11 @@ test("database exposes a Drizzle client over the SQLite source of truth", () => 
   }
 });
 
-test("managed repository pipeline clones, checks out, indexes, snapshots, and serves MCP tools", async () => {
+test("managed repository pipeline clones, checks out, indexes, snapshots, and serves MCP tools", async (t) => {
+  if (!supportsImmutableCbmConfiguration()) {
+    t.skip("requires codebase-memory-mcp 0.9.0 or newer");
+    return;
+  }
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "pipeline-"));
   const memorepoHome = path.join(testRoot, "memorepo-home");
@@ -153,9 +158,11 @@ test("managed repository pipeline clones, checks out, indexes, snapshots, and se
     });
     const expandedListResponseJson = JSON.stringify(expandedListResponse);
     assert.match(expandedListResponseJson, /branches/);
-    assert.match(expandedListResponseJson, /htmlUrl/);
     assert.match(expandedListResponseJson, /spaceRepositoryId/);
     assert.match(expandedListResponseJson, /selectedCommit/);
+    assert.match(expandedListResponseJson, /githubRepositoryId/);
+    assert.match(expandedListResponseJson, /snapshotIncluded/);
+    assert.doesNotMatch(expandedListResponseJson, /htmlUrl|defaultBranch|cloneStatus|indexStatus|remoteRef|lastFetchedAt/);
     assertNoInternalPathLeak(expandedListResponseJson, testRoot);
 
     const searchResponse = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
@@ -235,6 +242,8 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
   process.env.API_PORT = "8787";
 
   const services = createServices();
+  const nativeTools = ["query_graph", "search_graph", "semantic_query", "get_code_snippet"];
+  (services.cbm as unknown as { listTools: typeof services.cbm.listTools }).listTools = async () => nativeTools;
   const app = await createApp(services);
 
   try {
@@ -314,7 +323,6 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "search_graph"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "get_code_snippet"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "list_space_repositories"));
-    const nativeTools = await services.cbm.listTools(services.config.memorepoHome);
     assert.equal(
       toolsPayload.result?.tools.some((tool) => tool.name === "semantic_query"),
       nativeTools.includes("semantic_query")
@@ -748,6 +756,7 @@ test("GitHub OAuth routes expose only public device authorization state", async 
   try {
     const initialStatus = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
     assert.deepEqual(initialStatus.json(), {
+      authenticationMode: "oauth",
       connected: false,
       manageAuthorizationUrl: "https://github.com/settings/connections/applications/test-oauth-client-id"
     });
@@ -783,7 +792,39 @@ test("GitHub OAuth routes expose only public device authorization state", async 
   }
 });
 
-test("job controls cancel pending jobs, retry terminal jobs, and reject running cancellation", async () => {
+test("GH_TOKEN marks GitHub connected and disables the OAuth login route", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "token-auth-routes-"));
+  const token = "github-token-from-env";
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+  process.env.GH_TOKEN = token;
+
+  const services = createAppServices();
+  const app = await createApp(services);
+
+  try {
+    const statusResponse = await injectControlApi(app, { method: "GET", url: "/api/github/auth/status" });
+    assert.deepEqual(statusResponse.json(), { authenticationMode: "token", connected: true });
+    assert.doesNotMatch(statusResponse.body, new RegExp(token));
+    assert.equal(services.githubCredentials.getAccessToken(), token);
+
+    const loginResponse = await injectControlApi(app, {
+      method: "POST",
+      url: "/api/github/auth/device",
+      payload: {}
+    });
+    assert.equal(loginResponse.statusCode, 409);
+    assert.match(loginResponse.body, /already configured with GH_TOKEN/);
+  } finally {
+    delete process.env.GH_TOKEN;
+    await app.close();
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("job controls cancel pending jobs, retry terminal jobs, and reject orphaned running cancellation", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "job-controls-"));
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
@@ -857,7 +898,7 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject running 
     });
     const runningCancel = await injectControlApi(app, { method: "POST", url: `/api/jobs/${runningId}/cancel`, payload: {} });
     assert.equal(runningCancel.statusCode, 400);
-    assert.match(runningCancel.json<{ error: string }>().error, /Running jobs cannot be cancelled/);
+    assert.match(runningCancel.json<{ error: string }>().error, /can no longer be cancelled safely/);
   } finally {
     await app.close();
     services.database.sqlite.close();
@@ -1093,7 +1134,139 @@ test("failed first snapshot does not activate a partial snapshot", async () => {
       [{ version: 1, status: "failed" }]
     );
     assert.match(snapshots[0]!.error ?? "", /index failed/);
+    assert.match(snapshots[0]!.error ?? "", /\[MANAGED_PATH\]/);
+    assert.doesNotMatch(snapshots[0]!.error ?? "", new RegExp(escapeRegExp(services.config.memorepoHome)));
+    const publicSnapshot = services.snapshots.listSpaceSnapshots(space.id).snapshots[0];
+    assert.match(publicSnapshot?.error ?? "", /\[MANAGED_PATH\]/);
+    assert.doesNotMatch(publicSnapshot?.error ?? "", new RegExp(escapeRegExp(services.config.memorepoHome)));
     assert.equal(snapshots[0]!.activated_at, null);
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("GitHub repository resolution hides upstream HTML outages behind a stable error code", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-upstream-error-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    await withGitHubFetch(
+      {
+        "https://api.github.com/repos/example/unavailable": new Response(
+          "<!DOCTYPE html><html><body>Service unavailable</body></html>",
+          { status: 503, headers: { "content-type": "text/html" } }
+        )
+      },
+      async () => {
+        await assert.rejects(
+          () => services.github.resolveRepository("example/unavailable"),
+          (error) => {
+            assert.ok(error instanceof Error);
+            assert.match(error.message, /temporarily unavailable \(HTTP 503\)/);
+            assert.doesNotMatch(error.message, /DOCTYPE|<html>/i);
+            assert.equal((error as Error & { code?: string }).code, "MR-GITHUB-UPSTREAM-503");
+            return true;
+          }
+        );
+      }
+    );
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("service startup removes stale snapshot artifacts and worktrees without touching unrelated data", () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-worktree-cleanup-"));
+  const memorepoHome = path.join(testRoot, "memorepo-home");
+  const stagingRoot = path.join(memorepoHome, "tmp", "snapshot-worktrees");
+  const staleWorktree = path.join(stagingRoot, "w-deadbeef");
+  const unrelatedTemporaryData = path.join(stagingRoot, "keep-me");
+  const worktreeRegistration = path.join(memorepoHome, "spaces", "source-repository", ".git", "worktrees", "w-deadbeef");
+  const orphanedSnapshot = path.join(memorepoHome, "indexes", "s", "snp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  const unrelatedSnapshotData = path.join(memorepoHome, "indexes", "s", "keep-me");
+  fs.mkdirSync(staleWorktree, { recursive: true });
+  fs.mkdirSync(unrelatedTemporaryData, { recursive: true });
+  fs.mkdirSync(worktreeRegistration, { recursive: true });
+  fs.mkdirSync(path.join(orphanedSnapshot, "sources"), { recursive: true });
+  fs.mkdirSync(unrelatedSnapshotData, { recursive: true });
+  fs.writeFileSync(path.join(staleWorktree, ".git"), `gitdir: ${worktreeRegistration}\n`, "utf8");
+  fs.writeFileSync(path.join(staleWorktree, "private-source.ts"), "export const stale = true;\n", "utf8");
+  fs.writeFileSync(path.join(worktreeRegistration, "gitdir"), `${path.join(staleWorktree, ".git")}\n`, "utf8");
+  fs.writeFileSync(path.join(worktreeRegistration, "HEAD"), "deadbeef\n", "utf8");
+  fs.writeFileSync(path.join(orphanedSnapshot, "sources", "private-source.ts"), "export const orphaned = true;\n", "utf8");
+  fs.writeFileSync(path.join(unrelatedTemporaryData, "keep.txt"), "keep\n", "utf8");
+  fs.writeFileSync(path.join(unrelatedSnapshotData, "keep.txt"), "keep\n", "utf8");
+  process.env.MEMOREPO_HOME = memorepoHome;
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  try {
+    assert.equal(fs.existsSync(staleWorktree), false);
+    assert.equal(fs.existsSync(worktreeRegistration), false);
+    assert.equal(fs.existsSync(orphanedSnapshot), false);
+    assert.equal(fs.readFileSync(path.join(unrelatedTemporaryData, "keep.txt"), "utf8"), "keep\n");
+    assert.equal(fs.readFileSync(path.join(unrelatedSnapshotData, "keep.txt"), "utf8"), "keep\n");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("snapshot source materializes the exact selected commit independently of the live checkout", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-source-immutability-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Source Space");
+    const repository = createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4501,
+      owner: "example",
+      name: "immutable-source"
+    });
+    const committedContent = fs.readFileSync(path.join(repository.local_path, "README.md"), "utf8");
+
+    fs.writeFileSync(path.join(repository.local_path, "README.md"), "# newer-live-commit\n", "utf8");
+    execFileSync("git", ["-C", repository.local_path, "add", "README.md"], { stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository.local_path,
+        "-c",
+        "user.name=MemoRepo Test",
+        "-c",
+        "user.email=test@example.test",
+        "commit",
+        "-m",
+        "Newer live revision"
+      ],
+      { stdio: "ignore" }
+    );
+    stubCbmSnapshots(services);
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const row = services.snapshots.getActiveSnapshot(space.id) as { artifact_path: string; manifest_json: string };
+    const manifest = JSON.parse(row.manifest_json) as { repositories: Array<{ localPath: string }> };
+    const snapshotSource = manifest.repositories[0]!.localPath;
+
+    assert.notEqual(path.resolve(snapshotSource), path.resolve(repository.local_path));
+    assert.ok(path.resolve(snapshotSource).startsWith(path.resolve(row.artifact_path) + path.sep));
+    assert.equal(fs.readFileSync(path.join(snapshotSource, "README.md"), "utf8"), committedContent);
+    assert.equal(fs.existsSync(path.join(snapshotSource, ".git")), false);
+
+    fs.writeFileSync(path.join(repository.local_path, "README.md"), "# uncommitted-live-edit\n", "utf8");
+    assert.equal(fs.readFileSync(path.join(snapshotSource, "README.md"), "utf8"), committedContent);
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -1148,6 +1321,88 @@ test("failed replacement snapshot keeps the previous active snapshot", async () 
       { version: 2, status: "failed" }
     ]);
   } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("replacement snapshot leaves previous snapshot sessions available for pinned answers", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-replacement-session-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Session Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 5100,
+      owner: "example",
+      name: "session-source"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+
+    const closeCalls: string[] = [];
+    services.cbm.closeSession = async (cacheDir) => {
+      closeCalls.push(cacheDir);
+    };
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    assert.deepEqual(closeCalls, []);
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("repository removal during a replacement build cannot reactivate removed content", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-membership-race-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  let releaseMaterialization = () => {};
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Membership Space");
+    const repository = createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 5150,
+      owner: "example",
+      name: "membership-source"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+
+    let markMaterializationStarted!: () => void;
+    const materializationStarted = new Promise<void>((resolve) => {
+      markMaterializationStarted = resolve;
+    });
+    const materializationGate = new Promise<void>((resolve) => {
+      releaseMaterialization = resolve;
+    });
+    Object.defineProperty(services.snapshots, "materializeRepository", {
+      value: async (_home: string, _repositoryPath: string, _commit: string, targetPath: string) => {
+        fs.mkdirSync(targetPath, { recursive: true });
+        markMaterializationStarted();
+        await materializationGate;
+      }
+    });
+
+    const replacement = services.snapshots.buildSpaceSnapshot(space.id);
+    await materializationStarted;
+    const removal = services.spaces.softRemoveSpaceRepository(repository.id);
+    assert.ok(removal.revokedSnapshotId);
+    assert.equal(services.spaces.getSpaceById(space.id).activeSnapshotId, null);
+
+    releaseMaterialization();
+    await assert.rejects(replacement, /repositories changed while the snapshot was building/);
+    assert.equal(services.spaces.getSpaceById(space.id).activeSnapshotId, null);
+    assert.equal(services.snapshots.getActiveSnapshot(space.id), null);
+  } finally {
+    releaseMaterialization();
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
   }
@@ -1273,13 +1528,31 @@ test("managed space deletion removes local artifacts and database records", asyn
     const snapshotPath = path.join(process.env.MEMOREPO_HOME!, "indexes", "s", snapshotId);
     fs.mkdirSync(snapshotPath, { recursive: true });
     fs.writeFileSync(path.join(snapshotPath, "snapshot.db"), "snapshot");
+    const snapshotSource = path.join(snapshotPath, "sources", spaceRepository.id, "delete-managed");
+    fs.mkdirSync(snapshotSource, { recursive: true });
+    fs.writeFileSync(path.join(snapshotSource, "repo.txt"), "repo");
     insertRecord(services.database, "space_snapshots", {
       id: snapshotId,
       spaceId: space.id,
       version: 1,
       status: "active",
       artifactPath: snapshotPath,
-      manifestJson: JSON.stringify({ snapshotId, version: 1, createdAt: timestamp, repositories: [] }),
+      manifestJson: JSON.stringify({
+        snapshotId,
+        version: 1,
+        createdAt: timestamp,
+        repositories: [
+          {
+            spaceRepositoryId: spaceRepository.id,
+            githubRepositoryId: repositoryId,
+            fullName: "example/delete-managed",
+            branch: "main",
+            commit: "delete-managed-commit",
+            projectName: "delete-managed",
+            localPath: snapshotSource
+          }
+        ]
+      }),
       createdAt: timestamp,
       activatedAt: timestamp,
       error: null
@@ -1315,6 +1588,45 @@ test("managed space deletion removes local artifacts and database records", asyn
       1
     );
 
+    services.database.sqlite
+      .prepare(
+        "INSERT INTO agent_account_sessions (id, provider_id, account_key, connected_at, disconnected_at) VALUES ('aas_delete_space', 'test-provider', 'test-account', ?, NULL)"
+      )
+      .run(timestamp);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_chats
+          (id, space_id, account_session_id, snapshot_id, snapshot_version, snapshot_meta_json,
+           title, status, created_at, updated_at, archived_at)
+         VALUES ('ach_delete_space', ?, 'aas_delete_space', ?, 1, '{}',
+                 'Active answer', 'active', ?, ?, NULL)`
+      )
+      .run(space.id, snapshotId, timestamp, timestamp);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_messages
+          (id, chat_id, sequence, role, status, content, sources_json, error, created_at, completed_at)
+         VALUES ('agm_delete_space_user', 'ach_delete_space', 1, 'user', 'completed', 'Question', '[]', NULL, ?, ?),
+                ('agm_delete_space_assistant', 'ach_delete_space', 2, 'assistant', 'running', '', '[]', NULL, ?, NULL)`
+      )
+      .run(timestamp, timestamp, timestamp);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_turns
+          (id, chat_id, user_message_id, assistant_message_id, status,
+           error, created_at, started_at, finished_at)
+         VALUES ('agt_delete_space', 'ach_delete_space',
+                 'agm_delete_space_user', 'agm_delete_space_assistant', 'running', NULL, ?, ?, NULL)`
+      )
+      .run(timestamp, timestamp);
+
+    await assert.rejects(
+      () => services.spaces.deleteSpaceWithManagedData(space.id),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 409
+    );
+    assert.equal(fs.existsSync(snapshotPath), true);
+    services.database.sqlite.prepare("UPDATE agent_turns SET status = 'completed' WHERE id = 'agt_delete_space'").run();
+
     const result = await services.spaces.deleteSpaceWithManagedData(space.id);
     assert.equal(result.repositoriesDeleted, 1);
     assert.equal(result.snapshotsDeleted, 1);
@@ -1327,6 +1639,10 @@ test("managed space deletion removes local artifacts and database records", asyn
     assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM job_events").get() as { count: number }).count, 0);
     assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM mcp_connections").get() as { count: number }).count, 0);
     assert.equal((services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM mcp_tool_stats").get() as { count: number }).count, 0);
+    assert.equal(
+      (services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_account_sessions").get() as { count: number }).count,
+      0
+    );
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -1496,6 +1812,67 @@ test("garbage collection removes failed snapshots, old jobs, stale indexes, and 
     assert.equal(
       (services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM repo_indexes WHERE space_repository_id = ?").get(removedRepository.id) as { count: number }).count,
       0
+    );
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("garbage collection rejects a failed snapshot redirected to another snapshot artifact", () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "maintenance-snapshot-path-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Maintenance Path Space");
+    const timestamp = nowIso();
+    const activeSnapshotId = createId("snp");
+    const activeSnapshotPath = path.join(process.env.MEMOREPO_HOME!, "indexes", "s", activeSnapshotId);
+    fs.mkdirSync(activeSnapshotPath, { recursive: true });
+    const markerPath = path.join(activeSnapshotPath, "snapshot.db");
+    fs.writeFileSync(markerPath, "active");
+
+    insertRecord(services.database, "space_snapshots", {
+      id: activeSnapshotId,
+      spaceId: space.id,
+      version: 1,
+      status: "active",
+      artifactPath: activeSnapshotPath,
+      manifestJson: JSON.stringify({ snapshotId: activeSnapshotId, version: 1, createdAt: timestamp, repositories: [] }),
+      createdAt: timestamp,
+      activatedAt: timestamp,
+      error: null
+    });
+    services.database.sqlite
+      .prepare("UPDATE spaces SET active_snapshot_id = ?, snapshot_status = 'ready' WHERE id = ?")
+      .run(activeSnapshotId, space.id);
+
+    const failedSnapshotId = createId("snp");
+    insertRecord(services.database, "space_snapshots", {
+      id: failedSnapshotId,
+      spaceId: space.id,
+      version: 2,
+      status: "failed",
+      artifactPath: activeSnapshotPath,
+      manifestJson: JSON.stringify({ snapshotId: failedSnapshotId, version: 2, createdAt: timestamp, repositories: [] }),
+      createdAt: timestamp,
+      activatedAt: null,
+      error: "failed"
+    });
+
+    assert.throws(
+      () => services.maintenance.runGarbageCollection(1),
+      /Snapshot artifact path does not match its snapshot ID/
+    );
+    assert.equal(fs.existsSync(markerPath), true);
+    assert.equal(
+      (services.database.sqlite.prepare("SELECT COUNT(*) AS count FROM space_snapshots WHERE id IN (?, ?)")
+        .get(activeSnapshotId, failedSnapshotId) as { count: number }).count,
+      2
     );
   } finally {
     services.database.sqlite.close();
@@ -2634,7 +3011,7 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 
       await assert.rejects(
         () => services.mcp.callTool(space.slug, connection.token, "detect_changes", { repo_path: testRoot }),
-        /cannot receive filesystem path arguments/
+        /received unsupported arguments|cannot receive filesystem path arguments/
       );
 
       for (const legacyTool of ["get_space_architecture", "search_symbols", "trace_symbol", "get_snippet"]) {
@@ -2731,6 +3108,68 @@ test("empty spaces can be deleted with local MCP connections and tool stats", ()
       /Space must not have repositories, snapshots, or jobs/
     );
     assert.equal(services.spaces.getSpaceById(protectedSpace.id).id, protectedSpace.id);
+
+    const activeSpace = services.spaces.createSpace("Active Chat Space");
+    const createdAt = nowIso();
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_account_sessions
+          (id, provider_id, account_key, connected_at, disconnected_at)
+         VALUES (?, ?, ?, ?, NULL)`
+      )
+      .run("aas_delete_guard", "openai-codex", "delete-guard", createdAt);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_chats
+          (id, space_id, account_session_id, snapshot_id, snapshot_version, snapshot_meta_json,
+           title, status, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL)`
+      )
+      .run(
+        "ach_delete_guard",
+        activeSpace.id,
+        "aas_delete_guard",
+        1,
+        "{}",
+        "Deletion guard",
+        "active",
+        createdAt,
+        createdAt
+      );
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_messages
+          (id, chat_id, sequence, role, status, content, sources_json, error, created_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, '[]', NULL, ?, ?)`
+      )
+      .run("agm_delete_guard_user", "ach_delete_guard", 1, "user", "completed", "Question", createdAt, createdAt);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_messages
+          (id, chat_id, sequence, role, status, content, sources_json, error, created_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, '[]', NULL, ?, NULL)`
+      )
+      .run("agm_delete_guard_assistant", "ach_delete_guard", 2, "assistant", "streaming", "", createdAt);
+    services.database.sqlite
+      .prepare(
+        `INSERT INTO agent_turns
+          (id, chat_id, user_message_id, assistant_message_id, status, error, created_at, started_at, finished_at)
+         VALUES (?, ?, ?, ?, 'running', NULL, ?, ?, NULL)`
+      )
+      .run(
+        "atr_delete_guard",
+        "ach_delete_guard",
+        "agm_delete_guard_user",
+        "agm_delete_guard_assistant",
+        createdAt,
+        createdAt
+      );
+
+    assert.throws(
+      () => services.spaces.deleteSpace(activeSpace.id),
+      /Wait for active agent answers before deleting this Space/
+    );
+    assert.equal(services.spaces.getSpaceById(activeSpace.id).id, activeSpace.id);
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -2974,7 +3413,10 @@ test("unknown resources return 404 and invalid payloads return readable 400 mess
   try {
     const missingSpace = await injectControlApi(app, { method: "GET", url: "/api/spaces/spc_missing" });
     assert.equal(missingSpace.statusCode, 404);
-    assert.match(missingSpace.json<{ error: string }>().error, /Space not found/);
+    const missingSpaceError = missingSpace.json<{ error: string; code: string; requestId: string }>();
+    assert.match(missingSpaceError.error, /Space not found/);
+    assert.equal(missingSpaceError.code, "MR-API-NOT-FOUND");
+    assert.ok(missingSpaceError.requestId);
 
     const missingJob = await injectControlApi(app, { method: "GET", url: "/api/jobs/job_missing" });
     assert.equal(missingJob.statusCode, 404);
@@ -2992,9 +3434,11 @@ test("unknown resources return 404 and invalid payloads return readable 400 mess
 
     const invalidBody = await injectControlApi(app, { method: "POST", url: "/api/spaces", payload: {} });
     assert.equal(invalidBody.statusCode, 400);
-    const invalidMessage = invalidBody.json<{ error: string }>().error;
-    assert.match(invalidMessage, /Invalid request: name/);
-    assert.doesNotMatch(invalidMessage, /[[{]/);
+    const invalidError = invalidBody.json<{ error: string; code: string; requestId: string }>();
+    assert.match(invalidError.error, /Invalid request: name/);
+    assert.doesNotMatch(invalidError.error, /[[{]/);
+    assert.equal(invalidError.code, "MR-API-VALIDATION");
+    assert.ok(invalidError.requestId);
   } finally {
     await app.close();
     services.database.sqlite.close();
@@ -3180,7 +3624,28 @@ function createSnapshotReadySpaceRepository(
     options
   );
   const spaceRepository = services.spaces.addRepositoryToSpace(spaceId, repositoryId) as { id: string; localPath: string };
-  fs.mkdirSync(path.join(spaceRepository.localPath, ".git"), { recursive: true });
+  fs.mkdirSync(spaceRepository.localPath, { recursive: true });
+  fs.writeFileSync(path.join(spaceRepository.localPath, "README.md"), `# ${options.name}\n`, "utf8");
+  execFileSync("git", ["init", "--initial-branch=main", spaceRepository.localPath], { stdio: "ignore" });
+  execFileSync("git", ["-C", spaceRepository.localPath, "add", "README.md"], { stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-C",
+      spaceRepository.localPath,
+      "-c",
+      "user.name=MemoRepo Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "-m",
+      "Initial test snapshot"
+    ],
+    { stdio: "ignore" }
+  );
+  const selectedCommit = execFileSync("git", ["-C", spaceRepository.localPath, "rev-parse", "HEAD"], {
+    encoding: "utf8"
+  }).trim();
   updateRecord(
     services.database,
     "space_repositories",
@@ -3188,7 +3653,7 @@ function createSnapshotReadySpaceRepository(
       cloneStatus: "cloned",
       indexStatus: "indexed",
       selectedBranch: "main",
-      selectedCommit: `${options.name}-commit`,
+      selectedCommit,
       remoteRef: "refs/remotes/origin/main",
       snapshotIncluded: false,
       lastError: null
@@ -3215,8 +3680,8 @@ function stubCbmSnapshots(services: ReturnType<typeof createServices>, failingRe
   };
 
   cbm.indexRepository = async (repoPath) => {
-    if (repoPath === failingRepositoryPath) {
-      throw new Error(`index failed for ${path.basename(repoPath)}`);
+    if (failingRepositoryPath && path.basename(repoPath) === path.basename(failingRepositoryPath)) {
+      throw new Error(`index failed for ${repoPath}`);
     }
     return { project: path.basename(repoPath), status: "indexed", nodes: 1, edges: 0 };
   };
@@ -3225,6 +3690,19 @@ function stubCbmSnapshots(services: ReturnType<typeof createServices>, failingRe
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function supportsImmutableCbmConfiguration(): boolean {
+  try {
+    const output = execFileSync("codebase-memory-mcp", ["--version"], { encoding: "utf8" });
+    const match = output.match(/(?:^|\s)v?(\d+)\.(\d+)(?:\.\d+)?(?:\s|$)/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return major > 0 || minor >= 9;
+  } catch {
+    return false;
+  }
 }
 
 type TestApp = Awaited<ReturnType<typeof createApp>>;

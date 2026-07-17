@@ -8,3 +8,13 @@ test("public messages redact managed paths in Windows and portable forms", () =>
   assert.equal(sanitizePublicMessage(`failed at C:/Users/example/MemoRepo/indexes/one`, [root]), "failed at [MANAGED_PATH]/indexes/one");
   assert.equal(sanitizePublicMessage(`FAILED AT c:\\users\\example\\memorepo\\db.sqlite`, [root]), "FAILED AT [MANAGED_PATH]\\db.sqlite");
 });
+
+test("public messages redact JSON-escaped managed paths", () => {
+  const root = "C:\\private\\memorepo";
+  const escaped = JSON.stringify({ repo_path: `${root}\\indexes\\snapshot` });
+
+  const sanitized = sanitizePublicMessage(escaped, [root]);
+
+  assert.equal(sanitized.includes("private"), false);
+  assert.match(sanitized, /\[MANAGED_PATH\]/);
+});

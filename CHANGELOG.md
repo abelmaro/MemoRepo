@@ -7,6 +7,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-16
+
+### Added
+
+- Add snapshot-pinned Ask this Space agent chats powered by the Pi SDK, with persistent conversations, streamed answers, interrupt support, and read-only snapshot tools.
+- Add runtime provider/model discovery and selection for OAuth-capable Pi integrations, with environment-defined initial values and configurable 600-second/96-tool answer budgets.
+- Add stable `MR-*` codes and request IDs to handled API failures, plus coded job failures and clone/index/snapshot phase timings for easier diagnosis.
+
+### Changed
+
+- Make Ask this Space draggable and resizable on desktop, keep it within the viewport, and give the conversation composer a stable bottom position.
+- Keep modal content and job logs within their own scroll regions, compact connection and operation notices, and improve diagnostics spacing.
+- Keep the repository picker open while a GitHub catalog refresh runs and report refresh progress in place.
+- Allow active background jobs to cancel their Git, indexing, and snapshot subprocesses cooperatively.
+- Avoid redundant remote fetches after a fresh clone and before branch checkout.
+
+### Fixed
+
+- Render Ask this Space assistant answers as sanitized GitHub Flavored Markdown, including lists, code, tables, links, and task items.
+- Replace upstream GitHub 502/503/504 HTML responses with retryable user-facing errors.
+- Prevent duplicated agent limit failures and identify time and tool budget exhaustion separately.
+
+## [0.2.1] - 2026-07-16
+
+### Added
+
+- Restore optional `GH_TOKEN` authentication for local installations. When the variable is non-empty, MemoRepo uses it for GitHub REST and Git operations instead of requesting OAuth Device Flow login.
+
+### Changed
+
+- Give `GH_TOKEN` priority over any locally stored OAuth credential and show the active authentication mode in System health.
+
+### Security
+
+- Keep `GH_TOKEN` out of API responses, unrelated child-process environments, Git remotes, and generated MCP configurations; pass it ephemerally only to authenticated Git operations.
+
 ## [0.2.0] - 2026-07-15
 
 ### Added
@@ -169,7 +205,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/abelmaro/MemoRepo/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/abelmaro/MemoRepo/compare/v0.1.9...v0.2.0
+[0.1.9]: https://github.com/abelmaro/MemoRepo/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/abelmaro/MemoRepo/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/abelmaro/MemoRepo/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/abelmaro/MemoRepo/compare/v0.1.5...v0.1.6

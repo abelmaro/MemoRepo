@@ -30,7 +30,17 @@ Edit `.env` and set the local control secret:
 MEMOREPO_CONTROL_TOKEN=your-random-control-token
 ```
 
+To use an existing GitHub personal access token and skip OAuth login, also set:
+
+```bash
+GH_TOKEN=your-github-token
+```
+
+`GH_TOKEN` must be able to read every repository you want to index. Leave it empty to use the default OAuth Device Flow. When both an environment token and a stored OAuth credential exist, `GH_TOKEN` takes priority.
+
 Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork maintainers and contributors can optionally set `GITHUB_OAUTH_CLIENT_ID` to use a different OAuth App during development.
+
+Docker Compose includes the supported `codebase-memory-mcp` release. If you run the Node workspaces directly for development, install `codebase-memory-mcp` v0.9.0 on `PATH`. MemoRepo fails closed when the runtime cannot verify that `auto_index` and `auto_watch` are both disabled for immutable snapshot caches.
 
 For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
 
@@ -52,11 +62,13 @@ http://127.0.0.1:5173
 
 Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it only in `sessionStorage` for that browser tab.
 
-The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; a GitHub connection warning is expected until the next step.
+The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; when `GH_TOKEN` is empty, a GitHub connection warning is expected until the next step.
 
-## 3. Sign In With GitHub
+## 3. Connect GitHub
 
-Open **System health**, choose **Sign in with GitHub**, and follow the modal:
+If `GH_TOKEN` is configured, MemoRepo validates and uses it automatically. System health displays **GH_TOKEN configured** and does not request OAuth login; continue to the next step.
+
+If `GH_TOKEN` is empty, open **System health**, choose **Sign in with GitHub**, and follow the modal:
 
 - MemoRepo attempts to copy the one-time user code and opens GitHub's official device page;
 - if the browser blocks the page, use **Continue on GitHub** from the modal;
@@ -112,7 +124,23 @@ docker exec -i -e MEMOREPO_MCP_TOKEN=... memorepo-api node /app/dist/cli/mcp.js 
 
 For HTTP clients, use the local endpoint and bearer token shown in the config.
 
-## 8. Recommended Agent Workflow
+## 8. Ask A Space Directly (Optional)
+
+After a space has an active snapshot, open **Ask this Space**, choose a provider and model, and select the connection action. Follow the provider's authorization instructions and return to MemoRepo. Use only an authorization flow that you initiated from your local dashboard.
+
+The connection button remains disabled until you accept the data disclosure. Questions, chat history, snapshot query results, and relevant code excerpts are sent to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
+
+The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or answer is active. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
+
+Each answer has configurable safety budgets. The supplied defaults are 600 seconds and 96 tool calls; set `MEMOREPO_AGENT_MAX_RUN_SECONDS` or `MEMOREPO_AGENT_MAX_TOOL_CALLS` in `.env` when a larger investigation needs a different bound. Limit failures include the stable codes `MR-AGENT-TIME-LIMIT` or `MR-AGENT-TOOL-LIMIT`.
+
+Chats are read-only, are pinned to the active immutable snapshot at creation time, and remain visible after signing out. If a pinned snapshot is pruned, its transcript remains readable but can no longer be continued.
+
+Each snapshot indexes an exact-commit source copy stored inside its own artifact. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot.
+
+Snapshot materialization intentionally rejects tracked symbolic links. Replace them with regular files or directories before adding or reindexing that repository.
+
+## 9. Recommended Agent Workflow
 
 For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 
@@ -126,19 +154,19 @@ When using the MCP server from an agent:
 
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
-## 9. When Something Fails
+## 10. When Something Fails
 
 Use the preflight panel first. It checks GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
 
-Then open the failed job log. Job logs usually contain the failing GitHub, Git, indexing, or snapshot operation.
+Then open the failed job log. Job logs show phase timings and usually contain the failing GitHub, Git, indexing, or snapshot operation. Job-runner failures carry stable `MR-*` codes. Errors handled by the central API application handler return a stable code and request ID that API clients can match with server logs. A GitHub 502, 503, or 504 response is reduced to a retryable message instead of exposing an upstream HTML page.
 
-## 10. Manage Or Revoke GitHub Access
+## 11. Manage Or Revoke GitHub Access
 
 **Disconnect locally** deletes MemoRepo's encrypted credential while keeping existing clones, indexes, and snapshots available. It does not revoke the authorization at GitHub. Use **Manage authorization on GitHub** in the connection panel to review or revoke the OAuth App itself.
 
 If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key is no longer available and you must reconnect GitHub. Back up the data directory and secrets volume together if you need restorable credentials.
 
-## 11. Keep Local State Tidy
+## 12. Keep Local State Tidy
 
 Use the `Data lifecycle` panel inside a space to:
 
@@ -155,18 +183,18 @@ MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
 ```
 
-## 12. Manage Jobs
+## 13. Manage Jobs
 
 Recent jobs are shown at the bottom of the dashboard. Open a job to inspect logs, dependencies, and dependent jobs.
 
 MemoRepo supports:
 
 - retrying failed, skipped, or cancelled jobs;
-- cancelling pending jobs before they start;
+- cancelling pending jobs before they start or requesting cancellation of an active Git, indexing, or snapshot subprocess;
 - automatically marking abandoned running jobs as failed after an API restart;
 - returning the existing active job when the submitted job type, scope, dependency, and canonical payload match exactly;
 - configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`.
 
-Running jobs are not interrupted in place. If a Git or indexing command is already executing, let it finish and retry if needed.
+Active cancellation is cooperative: MemoRepo signals the current subprocess, escalates if it does not stop, and records the job as cancelled after the handler exits. A running row recovered without an active process cannot be cancelled safely and is marked failed during startup recovery instead.
 
 Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's indexed commit. Repositories that are already current are skipped. Changed or incomplete indexes are rebuilt, and MemoRepo creates one replacement space snapshot only when needed.

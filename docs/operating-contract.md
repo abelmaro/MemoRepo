@@ -29,6 +29,10 @@ MemoRepo accepts these runtime inputs:
 - `MEMOREPO_PUBLIC_API_URL`: the base URL agents on the host use in generated HTTP MCP configs. Docker Compose derives it from `API_PORT`; set it manually only for unusual setups.
 - `WEB_PORT`: the local dashboard port, defaulting to `5173`.
 - `MEMOREPO_API_CONTAINER_NAME`: the Docker container name used by generated stdio MCP configs, defaulting to `memorepo-api`.
+- `MEMOREPO_AGENT_CREDENTIAL_FILE`: an optional credential-store path override. By default it is `agent-credentials.json` under `MEMOREPO_SECRETS_DIR`; Docker Compose therefore persists it in the existing private `memorepo-secrets` volume.
+- `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`: the initial Ask this Space selection. They are read from the environment; `.env.example` supplies `openai-codex` and `gpt-5.4`. The dashboard can change the in-memory selection until the API restarts.
+- `MEMOREPO_AGENT_MAX_RUN_SECONDS`: the per-answer wall-clock budget, defaulting to `600`.
+- `MEMOREPO_AGENT_MAX_TOOL_CALLS`: the per-answer tool-call budget, defaulting to `96`.
 - `CODEBASE_MEMORY_MCP_VERSION`: the `codebase-memory-mcp` release used by the API Docker image.
 - `CODEBASE_MEMORY_MCP_SHA256_AMD64` and `CODEBASE_MEMORY_MCP_SHA256_ARM64`: trusted hashes for the portable CBM release archives. Update them together with the CBM version.
 - `MEMOREPO_SNAPSHOT_RETENTION`: the default number of latest snapshots to keep when pruning a space, defaulting to `3`.
@@ -36,7 +40,11 @@ MemoRepo accepts these runtime inputs:
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
 - `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
 
-Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure GitHub credentials. Fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as an optional development override; no Client Secret is used.
+Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure a Client Secret. They may optionally provide an existing personal access token through `GH_TOKEN`; fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as a development override.
+
+The API Docker image pins `codebase-memory-mcp` v0.9.0. Direct Node development requires that release on `PATH`. Before a snapshot cache is indexed or queried for the first time in a process, MemoRepo verifies and, when needed, disables `auto_index` and `auto_watch`. If either setting is unavailable or cannot be confirmed as disabled, the operation fails closed rather than allowing the snapshot to follow mutable source state.
+
+The optional **Ask this Space** integration is included in the API image. The adapter exposes OAuth-capable providers and models from the bundled Pi catalog, initializes its selection from the environment, and permits a dashboard selection change only when no provider login or answer is active. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are unsupported. External credentials are rejected; removing a MemoRepo-managed credential still completes local sign-out even if unsupported ambient authentication remains. `AgentService` uses provider-neutral contracts with the in-process `agent-runtime`, and the runtime adapter remains the provider boundary. No separate runtime service or IPC configuration is required.
 
 `MEMOREPO_HOME` defaults to `./.memorepo` for a simple first run. For regular use, place it outside the repository source tree.
 
@@ -61,7 +69,7 @@ Repository index:
 A `codebase-memory-mcp` cache for one managed repository at one selected branch and commit. Repository indexes are operational artifacts and can be regenerated.
 
 Snapshot:
-An immutable per-space index artifact. It is built from the selected repositories and commits in a space. A snapshot is activated only after the build succeeds.
+An immutable per-space index artifact. It is built by materializing each selected repository's recorded commit into the snapshot artifact and indexing those exact-commit source copies. A snapshot is activated only after the build succeeds, and later managed-clone changes cannot alter its source-backed query results. Tracked symbolic links are intentionally unsupported and make materialization fail closed; replace them with regular files or directories before indexing.
 
 Active snapshot:
 The snapshot currently served to MCP clients for a space. Agents query this snapshot rather than live working trees.
@@ -71,6 +79,9 @@ An active snapshot that remains available after a repository or branch change ma
 
 MCP connection:
 A local token plus generated client configuration for one space. Tokens are stored as hashes in SQLite. Deleting a connection prevents future use of that token and removes it from the dashboard list.
+
+Agent chat:
+A persistent visible user/assistant transcript associated with one provider account session and pinned to the exact immutable snapshot that was active when the chat started. It never follows a newer snapshot implicitly.
 
 ## What MemoRepo Does
 
@@ -85,12 +96,14 @@ A local token plus generated client configuration for one space. Tokens are stor
 - Exposes read-only MCP tools over the active snapshot.
 - Redacts internal filesystem paths from public API and MCP responses.
 - Generates MCP configs for local agents.
+- Provides an optional read-only agent chat panel for each space.
 
 ## What MemoRepo Does Not Do
 
 - It does not edit source files in managed repositories.
 - It does not commit, push, merge, or open pull requests.
 - It does not provide a writable agent gateway.
+- It does not expose a general-purpose agent terminal, shell, editor, web browser, or external app gateway.
 - It does not replace GitHub access control.
 - It does not create GitHub identities, bypass repository permissions, or override organization OAuth policies.
 - It does not host a public multi-user deployment by default.
@@ -105,8 +118,17 @@ The dashboard calls the API. It does not run shell commands and does not touch r
 API:
 The API is the only component that mutates managed clones, writes SQLite state, runs `git`, invokes `codebase-memory-mcp`, and creates MCP configs.
 
+AgentService:
+The API's provider-neutral orchestration layer owns chat and turn persistence, pins each chat to one snapshot, starts runs through `agent-runtime`, streams visible events to the dashboard, and handles runtime tool callbacks.
+
+agent-runtime:
+An in-process workspace package built into the API image. Its provider-neutral `AgentRuntimeAdapter` contract normalizes authentication, model discovery and selection, model execution, streaming events, interruption, and tool requests. The application wires that contract to the OAuth-capable provider/model catalog exposed by the bundled Pi SDK. It has no separate HTTP listener or Compose service.
+
+SnapshotQueryService:
+The provider-neutral query boundary called by `AgentService` for each runtime tool request. It resolves the request through MemoRepo's read-only gateway using the chat's exact space and snapshot identifiers, then returns the bounded result directly to the runtime callback.
+
 SQLite:
-SQLite is the source of truth for spaces, repositories, jobs, snapshots, and MCP connections.
+SQLite is the source of truth for spaces, repositories, jobs, snapshots, MCP connections, provider account sessions, and visible agent chat transcripts.
 
 Managed clones:
 Managed clones are disposable operational state. MemoRepo may run branch checkout, hard reset, and clean operations against them.
@@ -115,12 +137,12 @@ Snapshots:
 Snapshots are the stable read model for agents. A failed snapshot build must not replace the last active snapshot.
 
 Maintenance:
-MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, and delete old terminal jobs. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs.
+MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, and delete old terminal jobs. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs. Snapshot pruning also refuses to remove a snapshot while an agent answer pinned to it is active.
 
 Jobs:
-MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. Running jobs are not interrupted because Git and indexing commands do not yet support cooperative cancellation. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
+MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Active jobs accept cooperative cancellation through their Git, indexing, and snapshot subprocesses, with forced termination after a bounded grace period. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
 
-Subprocess stdout and stderr capture, unterminated output lines, persisted job-event messages, and retained log-event counts are bounded. MemoRepo preserves recent stream output and emits explicit truncation markers when additional diagnostic output is discarded.
+Subprocess stdout and stderr capture, unterminated output lines, persisted job-event messages, and retained log-event counts are bounded. MemoRepo preserves recent stream output, emits explicit truncation markers when additional diagnostic output is discarded, records phase timings for clone/index/snapshot pipelines, and attaches stable `MR-*` codes to job-runner failures. Errors handled by the central API application handler include a stable code and request ID for server-log correlation; early HTTP boundary and authentication rejections keep their dedicated response shape.
 
 The space-level check and update job fetches each selected remote branch and compares its remote commit with the commit recorded by MemoRepo. It skips current repository indexes, repairs stale or failed indexes even when the commit is unchanged, and builds one replacement snapshot only when repository or snapshot state requires it. Per-repository reindex remains an explicit forced rebuild operation.
 
@@ -174,6 +196,10 @@ The GitHub access token is encrypted before it is stored in SQLite. Its randomly
 
 Repository and snapshot indexes can be regenerated. SQLite contains the durable operational record and should be backed up before destructive maintenance.
 
+Visible agent messages, source references, chat metadata, and provider account-session identifiers are stored in SQLite. Raw model reasoning and internal tool request or response payloads are not persisted there. Managed agent OAuth credentials are stored separately in an owner-only file under `MEMOREPO_SECRETS_DIR`; Docker Compose persists that file in the existing private `memorepo-secrets` volume.
+
+If an inactive snapshot is pruned, its chats keep their stored transcripts and snapshot metadata but become non-continuable. A chat pinned to a retained older snapshot remains continuable; activating a newer snapshot only offers a separate new chat.
+
 Deleting a space through the managed-data flow removes that space's managed clones, snapshot artifacts, repository index artifacts, jobs, repository membership, local MCP connections, and the space record. It does not delete GitHub repositories.
 
 ## Local Security Model
@@ -186,10 +212,14 @@ The dashboard stores the control token only in the current tab's `sessionStorage
 
 API and dashboard responses set defensive content security, framing, referrer, content-type, and no-store cache policies. MemoRepo creates new private artifacts with a restrictive process umask and applies owner-only directory and database modes when the backing storage supports POSIX permissions. Docker Desktop bind mounts backed by Windows may not expose POSIX mode changes, so host access controls remain part of the local trust boundary.
 
-GitHub authorization uses OAuth Device Flow for the single local user. The private device code exists only in API memory while authorization is pending. After GitHub returns an access token, MemoRepo validates the user profile and stores the token encrypted with AES-256-GCM; the encryption key is generated locally with owner-only permissions where the host filesystem supports them. Official builds include the public OAuth App Client ID, and no Client Secret is used.
+GitHub authorization uses OAuth Device Flow for the single local user by default. When a non-empty `GH_TOKEN` is supplied in the environment, it takes priority and MemoRepo does not request OAuth login. The private device code exists only in API memory while authorization is pending. After GitHub returns an access token, MemoRepo validates the user profile and stores the token encrypted with AES-256-GCM; the encryption key is generated locally with owner-only permissions where the host filesystem supports them. Environment tokens are not copied into that store. Official builds include the public OAuth App Client ID, and no Client Secret is used.
 
-Git remotes are stored as clean HTTPS URLs, and the decrypted credential is supplied ephemerally through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus only the credential variables required for that operation. CBM child processes receive no GitHub credential variables or unrelated application secrets. Disconnecting locally deletes the encrypted credential; revoking the OAuth authorization remains an explicit action in GitHub settings.
+Git remotes are stored as clean HTTPS URLs, and the active credential is supplied ephemerally through `GIT_ASKPASS` during Git operations. Git child processes receive a minimal allowlisted system environment plus only the credential variables required for that operation. CBM child processes receive no GitHub credential variables or unrelated application secrets. An environment token cannot be disconnected from the dashboard and must be removed from `.env`; disconnecting an OAuth session locally deletes its encrypted credential, while revoking the authorization remains an explicit action in GitHub settings.
 
 MCP tokens are local secrets. Anyone who can read a generated MCP config can query that space until the connection is deleted.
+
+Ask this Space accepts only authenticated control-plane requests. `agent-runtime` executes inside the API process and receives only dynamically declared MemoRepo snapshot query tools. Every tool request returns directly to `AgentService`, which validates the chat context and calls `SnapshotQueryService` with the pinned space and snapshot; arbitrary command, filesystem, web, and external-app tools are not registered. Repository content is treated as untrusted evidence rather than agent instructions. At most two answers run concurrently; by default each run is limited to 600 seconds and 96 tool calls, and reconstructed history is capped at 100 messages and 192,000 UTF-8 bytes. The agent OAuth credential in `MEMOREPO_SECRETS_DIR` is a local secret and must be protected with the same care as the GitHub credential key.
+
+Before starting provider authorization, the dashboard requires explicit consent to send questions, chat history, snapshot query results, and relevant code excerpts to the selected provider for inference. Repository-access credentials and the MemoRepo control token are excluded from model prompts and tool request/result payloads. The provider OAuth credential is kept separately and is used only to authenticate the provider request.
 
 Anyone with access to the local Docker daemon or `MEMOREPO_HOME` should be treated as having access to MemoRepo's managed data.

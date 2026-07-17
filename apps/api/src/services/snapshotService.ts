@@ -1,14 +1,25 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
-import { managedPathSize, removeManagedPath } from "../domain/files.js";
+import { assertDeletableManagedPath, managedPathSize, removeManagedPath } from "../domain/files.js";
 import { createId } from "../domain/ids.js";
-import { ensureInsideDir } from "../domain/paths.js";
+import { assertInside, ensureInsideDir } from "../domain/paths.js";
+import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
+import { createSafeProcessEnvironment, runProcess } from "./process.js";
 import type { SpaceRepositoryRecord } from "./spaceService.js";
+
+type SnapshotRepositoryMaterializer = (
+  memorepoHome: string,
+  repositoryPath: string,
+  commit: string,
+  targetPath: string,
+  signal?: AbortSignal
+) => Promise<void>;
 
 export interface SnapshotManifestRepository {
   spaceRepositoryId: string;
@@ -28,13 +39,22 @@ export interface SnapshotManifest {
 }
 
 export class SnapshotService {
+  private readonly pruningSnapshotIds = new Set<string>();
+
   constructor(
     private readonly database: AppDatabase,
     private readonly config: AppConfig,
-    private readonly cbm: CbmService
-  ) {}
+    private readonly cbm: CbmService,
+    private readonly removeSnapshotArtifact: typeof removeManagedPath = removeManagedPath,
+    private readonly materializeRepository: SnapshotRepositoryMaterializer = materializeGitRepository
+  ) {
+    this.reconcileInterruptedSnapshotBuilds();
+    this.recoverInterruptedSnapshotPrunes();
+    cleanupStaleSnapshotWorktrees(this.config.memorepoHome);
+    cleanupOrphanedSnapshotArtifacts(this.database, this.config);
+  }
 
-  async buildSpaceSnapshot(spaceId: string, onOutput?: (line: string) => void) {
+  async buildSpaceSnapshot(spaceId: string, onOutput?: (line: string) => void, signal?: AbortSignal) {
     const activeRepos = this.getActiveRepositories(spaceId);
     if (activeRepos.length === 0) {
       throw new Error("Cannot build a snapshot for an empty space");
@@ -49,12 +69,16 @@ export class SnapshotService {
       }
     }
 
-    const previousSnapshot = this.getActiveSnapshot(spaceId) as { artifact_path?: string } | null;
     const version = this.nextVersion(spaceId);
     const snapshotId = createId("snp");
     const createdAt = nowIso();
     const versionName = `v${version.toString().padStart(6, "0")}`;
-    const artifactPath = ensureInsideDir(this.config.memorepoHome, path.join(this.config.snapshotIndexesDir, snapshotId));
+    const snapshotRoot = ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      this.config.snapshotIndexesDir,
+      "Snapshot index root"
+    );
+    const artifactPath = ensureInsideDir(snapshotRoot, path.join(snapshotRoot, snapshotId));
 
     insertRecord(this.database, "space_snapshots", {
       id: snapshotId,
@@ -72,11 +96,23 @@ export class SnapshotService {
 
     try {
       const manifestRepositories: SnapshotManifestRepository[] = [];
+      const materializedRepositories: Array<{ repository: SpaceRepositoryRecord; sourcePath: string }> = [];
 
       for (const repo of activeRepos) {
+        throwIfAborted(signal);
+        const materializeStartedAt = Date.now();
         onOutput?.(`Indexing ${repo.full_name} into snapshot ${versionName}`);
-        const result = await this.cbm.indexRepository(repo.local_path, artifactPath, "fast", onOutput);
-        const projectName = result.project ?? this.projectNameFromPath(repo.local_path);
+        const sourcePath = assertInside(
+          this.config.memorepoHome,
+          path.join(artifactPath, "sources", safePathSegment(repo.id), path.basename(repo.local_path))
+        );
+        await this.materializeRepository(this.config.memorepoHome, repo.local_path, repo.selected_commit!, sourcePath, signal);
+        onOutput?.(`Snapshot source materialized in ${formatDuration(Date.now() - materializeStartedAt)}`);
+        const indexStartedAt = Date.now();
+        const result = await this.cbm.indexRepository(sourcePath, artifactPath, "fast", onOutput, signal);
+        onOutput?.(`Snapshot index for ${repo.full_name} completed in ${formatDuration(Date.now() - indexStartedAt)}`);
+        const projectName = result.project ?? this.projectNameFromPath(sourcePath);
+        materializedRepositories.push({ repository: repo, sourcePath });
         manifestRepositories.push({
           spaceRepositoryId: repo.id,
           githubRepositoryId: repo.github_repository_id,
@@ -84,14 +120,14 @@ export class SnapshotService {
           branch: repo.selected_branch!,
           commit: repo.selected_commit!,
           projectName,
-          localPath: repo.local_path
+          localPath: sourcePath
         });
       }
 
-      if (activeRepos.length > 1) {
-        for (const repo of activeRepos) {
-          onOutput?.(`Linking cross-repo intelligence for ${repo.full_name}`);
-          await this.cbm.buildCrossRepoLinks(repo.local_path, artifactPath, onOutput);
+      if (materializedRepositories.length > 1) {
+        for (const { repository, sourcePath } of materializedRepositories) {
+          onOutput?.(`Linking cross-repo intelligence for ${repository.full_name}`);
+          await this.cbm.buildCrossRepoLinks(sourcePath, artifactPath, onOutput, signal);
         }
       }
 
@@ -104,6 +140,11 @@ export class SnapshotService {
       const activatedAt = nowIso();
 
       this.database.sqlite.transaction(() => {
+        const currentRepositories = this.getActiveRepositories(spaceId);
+        if (!sameSnapshotInputs(activeRepos, currentRepositories)) {
+          throw new Error("Space repositories changed while the snapshot was building");
+        }
+
         this.database.sqlite
           .prepare("UPDATE space_snapshots SET status = 'inactive' WHERE space_id = ? AND id <> ? AND status = 'active'")
           .run(spaceId, snapshotId);
@@ -143,13 +184,9 @@ export class SnapshotService {
         }
       })();
 
-      if (previousSnapshot?.artifact_path && previousSnapshot.artifact_path !== artifactPath) {
-        await this.cbm.closeSession(previousSnapshot.artifact_path);
-      }
-
       return { snapshotId, version };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = sanitizePublicMessage(error, [this.config.memorepoHome]);
       const failedAt = nowIso();
       const currentSpace = this.database.sqlite
         .prepare("SELECT active_snapshot_id AS activeSnapshotId FROM spaces WHERE id = ?")
@@ -170,7 +207,7 @@ export class SnapshotService {
         );
       })();
 
-      throw error;
+      throw new Error(message, { cause: error });
     }
   }
 
@@ -188,9 +225,25 @@ export class SnapshotService {
   listSpaceSnapshots(spaceId: string) {
     const activeSnapshotId = this.activeSnapshotId(spaceId);
     const rows = this.snapshotRows(spaceId);
+    const snapshotRoot = ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      this.config.snapshotIndexesDir,
+      "Snapshot index root"
+    );
     return {
-      snapshots: rows.map((row) => toPublicSnapshot(row, activeSnapshotId, this.config.memorepoHome)),
-      totalSizeBytes: rows.reduce((total, row) => total + managedPathSize(this.config.memorepoHome, row.artifactPath), 0),
+      snapshots: rows.map((row) => toPublicSnapshot(
+        row,
+        activeSnapshotId,
+        snapshotRoot,
+        this.config.memorepoHome
+      )),
+      totalSizeBytes: rows.reduce(
+        (total, row) => total + managedPathSize(
+          snapshotRoot,
+          assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)
+        ),
+        0
+      ),
       defaultRetention: this.config.snapshotRetentionDefault
     };
   }
@@ -206,26 +259,162 @@ export class SnapshotService {
     }
 
     const candidates = rows.filter((row) => !retainedIds.has(row.id));
-    let bytes = 0;
-    for (const row of candidates) {
-      await this.cbm.closeSession(row.artifactPath);
-      bytes += removeManagedPath(this.config.memorepoHome, row.artifactPath).sizeBytes;
-    }
-
-    const transaction = this.database.sqlite.transaction(() => {
-      for (const row of candidates) {
-        this.database.sqlite.prepare("DELETE FROM space_snapshots WHERE id = ?").run(row.id);
+    const candidateIds = candidates.map((row) => row.id);
+    for (const snapshotId of candidateIds) {
+      if (this.pruningSnapshotIds.has(snapshotId)) {
+        throw Object.assign(new Error("Snapshot pruning is already in progress"), { statusCode: 409 });
       }
-    });
-    transaction();
+    }
+    for (const snapshotId of candidateIds) this.pruningSnapshotIds.add(snapshotId);
+    try {
+      this.assertNoActiveAgentTurns(candidateIds);
+      const snapshotRoot = ensurePlainManagedDirectory(
+        this.config.memorepoHome,
+        this.config.snapshotIndexesDir,
+        "Snapshot index root"
+      );
+      const safeArtifactPaths = new Map(
+        candidates.map((row) => [row.id, assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)] as const)
+      );
 
-    return {
-      prunedAt: nowIso(),
-      keepLatest: retention,
-      deletedCount: candidates.length,
-      deletedBytes: bytes,
-      retainedCount: rows.length - candidates.length
-    };
+      let bytes = 0;
+      let deletedCount = 0;
+      let failure: string | null = null;
+      for (const row of candidates) {
+        try {
+          const artifactPath = safeArtifactPaths.get(row.id)!;
+          await this.cbm.closeSession(artifactPath);
+          this.database.sqlite.transaction(() => {
+            this.assertNoActiveAgentTurns([row.id]);
+            const marked = this.database.sqlite
+              .prepare("UPDATE space_snapshots SET status = 'pruning', error = NULL WHERE id = ? AND status = ?")
+              .run(row.id, row.status);
+            if (marked.changes !== 1) throw new Error("Snapshot changed during pruning");
+          })();
+
+          let removed;
+          try {
+            removed = this.removeSnapshotArtifact(snapshotRoot, artifactPath);
+          } catch (error) {
+            this.database.sqlite
+              .prepare("UPDATE space_snapshots SET error = ? WHERE id = ? AND status = 'pruning'")
+              .run(sanitizePublicMessage(error, [this.config.memorepoHome]), row.id);
+            throw error;
+          }
+
+          this.database.sqlite.transaction(() => {
+            const deleted = this.database.sqlite
+              .prepare("DELETE FROM space_snapshots WHERE id = ? AND status = 'pruning'")
+              .run(row.id);
+            if (deleted.changes !== 1) throw new Error("Snapshot disappeared during pruning");
+          })();
+          bytes += removed.sizeBytes;
+          deletedCount += 1;
+        } catch (error) {
+          if (deletedCount === 0) throw error;
+          failure = sanitizePublicMessage(error, [this.config.memorepoHome]);
+          break;
+        }
+      }
+
+      return {
+        prunedAt: nowIso(),
+        keepLatest: retention,
+        deletedCount,
+        deletedBytes: bytes,
+        retainedCount: rows.length - deletedCount,
+        incomplete: failure !== null,
+        remainingDeleteCount: candidates.length - deletedCount,
+        error: failure
+      };
+    } finally {
+      for (const snapshotId of candidateIds) this.pruningSnapshotIds.delete(snapshotId);
+    }
+  }
+
+  assertAgentTurnCanStart(snapshotId: string): void {
+    const row = this.database.sqlite
+      .prepare("SELECT status FROM space_snapshots WHERE id = ?")
+      .get(snapshotId) as { status: string } | undefined;
+    if (this.pruningSnapshotIds.has(snapshotId) || row?.status === "pruning") {
+      throw Object.assign(new Error("This chat's snapshot is being pruned"), { statusCode: 409 });
+    }
+  }
+
+  private reconcileInterruptedSnapshotBuilds(): void {
+    const rows = this.database.sqlite
+      .prepare("SELECT id, space_id AS spaceId FROM space_snapshots WHERE status = 'building'")
+      .all() as Array<{ id: string; spaceId: string }>;
+    if (rows.length === 0) return;
+
+    const failedAt = nowIso();
+    const message = "Snapshot build was interrupted by a previous shutdown";
+    this.database.sqlite.transaction(() => {
+      for (const row of rows) {
+        this.database.sqlite
+          .prepare("UPDATE space_snapshots SET status = 'failed', error = ? WHERE id = ? AND status = 'building'")
+          .run(message, row.id);
+      }
+      for (const spaceId of new Set(rows.map((row) => row.spaceId))) {
+        const space = this.database.sqlite
+          .prepare("SELECT active_snapshot_id AS activeSnapshotId FROM spaces WHERE id = ?")
+          .get(spaceId) as { activeSnapshotId: string | null } | undefined;
+        if (!space) continue;
+        this.database.sqlite
+          .prepare(
+            `UPDATE spaces
+             SET snapshot_status = ?, snapshot_status_updated_at = ?, updated_at = ?
+             WHERE id = ? AND snapshot_status = 'building'`
+          )
+          .run(space.activeSnapshotId ? "stale" : "failed", failedAt, failedAt, spaceId);
+      }
+    })();
+  }
+
+  private recoverInterruptedSnapshotPrunes(): void {
+    const rows = this.database.sqlite
+      .prepare("SELECT id, artifact_path AS artifactPath FROM space_snapshots WHERE status = 'pruning'")
+      .all() as Array<{ id: string; artifactPath: string }>;
+    if (rows.length === 0) return;
+
+    const snapshotRoot = ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      this.config.snapshotIndexesDir,
+      "Snapshot index root"
+    );
+    for (const row of rows) {
+      try {
+        const artifactPath = assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath);
+        this.removeSnapshotArtifact(snapshotRoot, artifactPath);
+        this.database.sqlite
+          .prepare("DELETE FROM space_snapshots WHERE id = ? AND status = 'pruning'")
+          .run(row.id);
+      } catch (error) {
+        this.database.sqlite
+          .prepare("UPDATE space_snapshots SET error = ? WHERE id = ? AND status = 'pruning'")
+          .run(sanitizePublicMessage(error, [this.config.memorepoHome]), row.id);
+      }
+    }
+  }
+
+  private assertNoActiveAgentTurns(snapshotIds: string[]): void {
+    if (snapshotIds.length === 0) return;
+    const placeholders = snapshotIds.map(() => "?").join(", ");
+    const active = this.database.sqlite
+      .prepare(
+        `SELECT 1
+         FROM agent_chats c
+         JOIN agent_turns t ON t.chat_id = c.id
+         WHERE c.snapshot_id IN (${placeholders})
+           AND t.status IN ('pending', 'running')
+         LIMIT 1`
+      )
+      .get(...snapshotIds);
+    if (active) {
+      throw Object.assign(new Error("Wait for active agent answers before pruning their snapshots"), {
+        statusCode: 409
+      });
+    }
   }
 
   private getActiveRepositories(spaceId: string): SpaceRepositoryRecord[] {
@@ -320,17 +509,22 @@ export class SnapshotService {
   }
 }
 
-function toPublicSnapshot(row: SnapshotRow, activeSnapshotId: string | null, memorepoHome: string): PublicSnapshot {
+function toPublicSnapshot(
+  row: SnapshotRow,
+  activeSnapshotId: string | null,
+  snapshotRoot: string,
+  memorepoHome: string
+): PublicSnapshot {
   return {
     id: row.id,
     version: row.version,
     status: row.status,
     active: row.id === activeSnapshotId,
     repositoryCount: snapshotRepositoryCount(row.manifestJson),
-    sizeBytes: managedPathSize(memorepoHome, row.artifactPath),
+    sizeBytes: managedPathSize(snapshotRoot, assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)),
     createdAt: row.createdAt,
     activatedAt: row.activatedAt,
-    error: row.error
+    error: row.error ? sanitizePublicMessage(row.error, [memorepoHome]) : null
   };
 }
 
@@ -351,6 +545,234 @@ function boundedRetention(value: number): number {
     throw new Error("keepLatest must be between 1 and 100");
   }
   return value;
+}
+
+function sameSnapshotInputs(
+  captured: SpaceRepositoryRecord[],
+  current: SpaceRepositoryRecord[]
+): boolean {
+  if (captured.length !== current.length) return false;
+  return captured.every((repository, index) => {
+    const latest = current[index];
+    return Boolean(
+      latest
+      && latest.id === repository.id
+      && latest.selected_branch === repository.selected_branch
+      && latest.selected_commit === repository.selected_commit
+      && latest.clone_status === repository.clone_status
+      && latest.removed_at === repository.removed_at
+    );
+  });
+}
+
+export function assertSnapshotArtifactPath(snapshotRoot: string, snapshotId: string, artifactPath: string): string {
+  const safeArtifactPath = assertDeletableManagedPath(snapshotRoot, artifactPath);
+  const expectedPath = assertDeletableManagedPath(snapshotRoot, path.join(snapshotRoot, snapshotId));
+  if (!samePath(safeArtifactPath, expectedPath)) {
+    throw new Error("Snapshot artifact path does not match its snapshot ID");
+  }
+
+  const realSnapshotRoot = fs.realpathSync(snapshotRoot);
+  try {
+    const stat = fs.lstatSync(safeArtifactPath);
+    if (!stat.isSymbolicLink() && !isStrictlyInsidePath(realSnapshotRoot, fs.realpathSync(safeArtifactPath))) {
+      throw new Error("Snapshot artifact escapes the managed snapshot root");
+    }
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  return safeArtifactPath;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function safePathSegment(value: string): string {
+  const segment = value
+    .replace(/[^A-Za-z0-9_.-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 120);
+  return segment || "repository";
+}
+
+async function materializeGitRepository(
+  memorepoHome: string,
+  repositoryPath: string,
+  commit: string,
+  targetPath: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const repository = assertInside(memorepoHome, repositoryPath);
+  const target = assertDeletableManagedPath(memorepoHome, targetPath);
+  ensureInsideDir(memorepoHome, path.dirname(target));
+  if (fs.existsSync(target)) throw new Error("Snapshot source target already exists");
+
+  const stagingParent = snapshotWorktreeRoot(memorepoHome);
+  const staging = assertDeletableManagedPath(
+    memorepoHome,
+    path.join(stagingParent, `w-${createId("tmp").slice(-8)}`)
+  );
+  let worktreeRegistered = false;
+  let materialized = false;
+
+  try {
+    throwIfAborted(signal);
+    const added = await runGit(repository, ["worktree", "add", "--detach", staging, commit], signal);
+    if (added.exitCode !== 0) throw new Error("Git could not create the snapshot source worktree");
+    worktreeRegistered = true;
+
+    fs.cpSync(staging, target, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      filter(source) {
+        const relative = path.relative(staging, source);
+        if (relative === ".git") return false;
+        if (fs.lstatSync(source).isSymbolicLink()) {
+          throw new Error("Snapshot source contains a symbolic link");
+        }
+        return true;
+      }
+    });
+    throwIfAborted(signal);
+    materialized = true;
+  } catch (error) {
+    if (fs.existsSync(target)) removeManagedPath(memorepoHome, target);
+    throw new Error("Could not materialize the selected repository commit for the snapshot", { cause: error });
+  } finally {
+    if (worktreeRegistered) {
+      const removed = await runGit(repository, ["worktree", "remove", "--force", staging]).catch(() => null);
+      if (!removed || removed.exitCode !== 0) {
+        if (fs.existsSync(staging)) removeManagedPath(memorepoHome, staging);
+        await runGit(repository, ["worktree", "prune"]).catch(() => null);
+      }
+    } else if (fs.existsSync(staging)) {
+      removeManagedPath(memorepoHome, staging);
+    }
+  }
+
+  if (!materialized) throw new Error("Snapshot source materialization did not complete");
+}
+
+function cleanupStaleSnapshotWorktrees(memorepoHome: string): void {
+  const stagingParent = snapshotWorktreeRoot(memorepoHome);
+  for (const entry of fs.readdirSync(stagingParent)) {
+    if (!/^w-[0-9a-f]{8}$/i.test(entry)) continue;
+    const staging = path.join(stagingParent, entry);
+    const registration = staleWorktreeRegistration(memorepoHome, staging);
+    if (registration) removeManagedPath(memorepoHome, registration);
+    removeManagedPath(memorepoHome, staging);
+  }
+}
+
+function snapshotWorktreeRoot(memorepoHome: string): string {
+  return ensurePlainManagedDirectory(memorepoHome, path.join(memorepoHome, "tmp", "snapshot-worktrees"), "Snapshot worktree root");
+}
+
+function cleanupOrphanedSnapshotArtifacts(database: AppDatabase, config: AppConfig): void {
+  const snapshotsRoot = ensurePlainManagedDirectory(config.memorepoHome, config.snapshotIndexesDir, "Snapshot index root");
+  const realSnapshotsRoot = fs.realpathSync(snapshotsRoot);
+  for (const entry of fs.readdirSync(snapshotsRoot)) {
+    if (!/^snp_[0-9a-f]{32}$/i.test(entry)) continue;
+    const artifactPath = assertDeletableManagedPath(snapshotsRoot, path.join(snapshotsRoot, entry));
+    const row = database.sqlite
+      .prepare("SELECT artifact_path AS artifactPath FROM space_snapshots WHERE id = ?")
+      .get(entry) as { artifactPath: string } | undefined;
+    if (row && samePath(row.artifactPath, artifactPath)) continue;
+
+    const stat = fs.lstatSync(artifactPath);
+    if (!stat.isSymbolicLink()) {
+      const realArtifactPath = fs.realpathSync(artifactPath);
+      if (!isStrictlyInsidePath(realSnapshotsRoot, realArtifactPath)) {
+        throw new Error("Orphaned snapshot artifact escapes the managed snapshot root");
+      }
+    }
+    removeManagedPath(config.memorepoHome, artifactPath);
+  }
+}
+
+function staleWorktreeRegistration(memorepoHome: string, staging: string): string | null {
+  try {
+    const gitPointer = path.join(staging, ".git");
+    const pointerStat = fs.lstatSync(gitPointer);
+    if (!pointerStat.isFile() || pointerStat.isSymbolicLink()) return null;
+    const match = /^gitdir:\s*(.+)\s*$/i.exec(fs.readFileSync(gitPointer, "utf8").trim());
+    if (!match?.[1]) return null;
+
+    const registration = assertDeletableManagedPath(memorepoHome, path.resolve(staging, match[1]));
+    const worktreesRoot = path.dirname(registration);
+    const repositoryGitRoot = path.dirname(worktreesRoot);
+    if (path.basename(worktreesRoot).toLowerCase() !== "worktrees" || path.basename(repositoryGitRoot).toLowerCase() !== ".git") {
+      return null;
+    }
+    const registrationStat = fs.lstatSync(registration);
+    if (!registrationStat.isDirectory() || registrationStat.isSymbolicLink()) return null;
+    const realHome = fs.realpathSync(memorepoHome);
+    if (!isStrictlyInsidePath(realHome, fs.realpathSync(registration))) return null;
+
+    const backReference = path.join(registration, "gitdir");
+    const backReferenceStat = fs.lstatSync(backReference);
+    if (!backReferenceStat.isFile() || backReferenceStat.isSymbolicLink()) return null;
+    const registeredPointer = path.resolve(registration, fs.readFileSync(backReference, "utf8").trim());
+    return samePath(registeredPointer, gitPointer) ? registration : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ensurePlainManagedDirectory(memorepoHome: string, target: string, label: string): string {
+  const safeTarget = assertInside(memorepoHome, target);
+  const relative = path.relative(path.resolve(memorepoHome), safeTarget);
+  let current = path.resolve(memorepoHome);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = ensureInsideDir(memorepoHome, path.join(current, segment));
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`${label} must be a managed directory`);
+    }
+  }
+  return safeTarget;
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return normalize(left) === normalize(right);
+}
+
+function isStrictlyInsidePath(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function runGit(repositoryPath: string, args: string[], signal?: AbortSignal) {
+  return runProcess({
+    command: "git",
+    args: ["-C", repositoryPath, "-c", "core.autocrlf=false", ...args],
+    env: createSafeProcessEnvironment(),
+    inheritEnv: false,
+    timeoutMs: 120_000,
+    maxCaptureBytes: 64 * 1024,
+    maxLineBytes: 4 * 1024,
+    signal
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = signal.reason instanceof Error ? new Error(signal.reason.message) : new Error("Operation cancelled");
+  error.name = "AbortError";
+  throw error;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 interface SnapshotRow {

@@ -72,7 +72,7 @@ export function JobLog({ jobId, onJob }: JobLogProps) {
           className="secondary-button danger"
           type="button"
           onClick={() => cancelMutation.mutate()}
-          disabled={jobQuery.data?.job.status !== "pending" || cancelMutation.isPending}
+          disabled={!canCancel(jobQuery.data?.job.status) || cancelMutation.isPending}
         >
           <span>Cancel</span>
         </button>
@@ -98,4 +98,8 @@ export function JobLog({ jobId, onJob }: JobLogProps) {
 
 function canRetry(status: string | undefined): boolean {
   return status === "failed" || status === "skipped" || status === "cancelled";
+}
+
+function canCancel(status: string | undefined): boolean {
+  return status === "pending" || status === "running";
 }

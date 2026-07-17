@@ -96,7 +96,7 @@ test("rate limiting isolates request classes and ignores spoofed forwarding head
   app.get("/api/auth/status", async (_request, reply) => reply.code(204).send());
   app.get("/api/known", async () => ({ ok: true }));
   app.post("/api/mutate", async () => ({ ok: true }));
-  app.get("/api/jobs/job_1/events", async () => ({ ok: true }));
+  app.get("/api/agent/turns/turn_1/events", async () => ({ ok: true }));
   app.post("/mcp/example", async () => ({ ok: true }));
   app.options("/api/mutate", async (_request, reply) => reply.code(204).send());
 
@@ -137,11 +137,11 @@ test("rate limiting isolates request classes and ignores spoofed forwarding head
     );
 
     assert.equal(
-      (await app.inject({ method: "GET", url: "/api/jobs/job_1/events", headers: controlHeaders() })).statusCode,
+      (await app.inject({ method: "GET", url: "/api/agent/turns/turn_1/events", headers: controlHeaders() })).statusCode,
       200
     );
     assert.equal(
-      (await app.inject({ method: "GET", url: "/api/jobs/job_1/events", headers: controlHeaders() })).statusCode,
+      (await app.inject({ method: "GET", url: "/api/agent/turns/turn_1/events", headers: controlHeaders() })).statusCode,
       429
     );
 

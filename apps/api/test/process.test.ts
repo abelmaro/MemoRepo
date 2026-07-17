@@ -71,6 +71,19 @@ test("runProcess escalates to SIGKILL when a timed out process ignores SIGTERM",
   );
 });
 
+test("runProcess terminates an active child when its abort signal is cancelled", async () => {
+  const controller = new AbortController();
+  const operation = runProcess({
+    command: process.execPath,
+    args: ["-e", "setInterval(() => {}, 1000);"],
+    timeoutMs: 30_000,
+    killGraceMs: 250,
+    signal: controller.signal
+  });
+  setTimeout(() => controller.abort(new Error("Cancelled by test")), 100);
+  await assert.rejects(operation, /Cancelled by test/);
+});
+
 test("runProcess bounds captured streams and marks truncation", async () => {
   const result = await runProcess({
     command: process.execPath,

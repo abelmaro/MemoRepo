@@ -56,6 +56,7 @@ export interface GitHubDiagnostics {
 }
 
 export interface GitHubConnectionStatus {
+  authenticationMode: "token" | "oauth";
   connected: boolean;
   viewer?: GitHubOAuthViewer;
   scopes?: string[];
@@ -205,6 +206,127 @@ export interface MaintenanceResult {
   removedClones: { count: number; bytes: number; skipped: number };
 }
 
+export interface AgentStatus {
+  configured: boolean;
+  available: boolean;
+  connected: boolean;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  modelName: string;
+  authSource: string | null;
+  version: string | null;
+  message: string | null;
+}
+
+export interface AgentModelCatalog {
+  providers: Array<{
+    id: string;
+    name: string;
+    models: Array<{ id: string; name: string }>;
+  }>;
+  selected: {
+    providerId: string;
+    modelId: string;
+  };
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly requestId: string | null,
+    readonly status: number
+  ) {
+    super(code ? `${message} (${code})` : message);
+    this.name = "ApiError";
+  }
+}
+
+export interface AgentLogin {
+  loginId: string;
+  status: "pending" | "completed" | "failed" | "cancelled";
+  verificationUrl: string | null;
+  userCode: string | null;
+  instructions: string | null;
+  error: string | null;
+}
+
+export interface AgentSource {
+  tool: string;
+  repository?: string;
+  project?: string;
+  path?: string;
+  symbol?: string;
+  commit?: string;
+}
+
+export interface AgentSnapshotContext {
+  id: string | null;
+  version: number;
+  createdAt?: string;
+  activatedAt?: string | null;
+  repositories?: Array<{
+    fullName: string;
+    branch: string;
+    commit: string;
+    projectName: string;
+  }>;
+}
+
+export interface AgentChat {
+  id: string;
+  spaceId: string;
+  title: string;
+  status: "active" | "archived";
+  snapshot: AgentSnapshotContext;
+  activeSnapshot: { id: string | null; version: number } | null;
+  usesLatestSnapshot: boolean;
+  continuable: boolean;
+  continuationReason: string | null;
+  messageCount: number;
+  activeTurnId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface AgentMessage {
+  id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  status: "pending" | "running" | "completed" | "interrupted" | "failed";
+  content: string;
+  sources: AgentSource[];
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentTurn {
+  id: string;
+  chatId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  status: "pending" | "running" | "completed" | "interrupted" | "failed";
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export type AgentTurnEvent =
+  | { type: "state"; turn: AgentTurn; assistantMessage: AgentMessage }
+  | { type: "assistant.delta"; turnId: string; messageId: string; offset: number; delta: string }
+  | { type: "tool.started"; turnId: string; tool: string }
+  | { type: "tool.completed"; turnId: string; tool: string; success: boolean; sources: AgentSource[] }
+  | {
+      type: "turn.completed";
+      turnId: string;
+      status: "completed" | "interrupted" | "failed";
+      error: string | null;
+    };
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const controlToken = getControlToken();
   if (!controlToken) {
@@ -232,8 +354,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `Request failed: ${response.status}`);
+    const body = await response.json().catch(() => ({})) as { error?: unknown; code?: unknown; requestId?: unknown };
+    throw new ApiError(
+      typeof body.error === "string" ? body.error : `Request failed: ${response.status}`,
+      typeof body.code === "string" ? body.code : null,
+      typeof body.requestId === "string" ? body.requestId : null,
+      response.status
+    );
   }
 
   if (response.status === 204) {
@@ -320,6 +447,16 @@ export function subscribeToJobEvents(path: string, onEvent: (event: JobEvent) =>
   return () => controller.abort();
 }
 
+export function subscribeToAgentTurnEvents(
+  turnId: string,
+  onEvent: (event: AgentTurnEvent) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const controller = new AbortController();
+  void streamAgentTurnEvents(`/api/agent/turns/${encodeURIComponent(turnId)}/events`, onEvent, onError, controller.signal);
+  return () => controller.abort();
+}
+
 export function fullName(repository: GitHubRepository): string {
   return repository.full_name ?? repository.fullName ?? `${repository.owner}/${repository.name}`;
 }
@@ -383,7 +520,7 @@ async function streamJobEvents(
         throw new Error(`Job event stream failed: ${response.status}`);
       }
 
-      await consumeEventStream(response.body, onEvent, signal);
+      await consumeEventStream<JobEvent>(response.body, onEvent, signal);
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -391,6 +528,51 @@ async function streamJobEvents(
       onError?.(error instanceof Error ? error : new Error(String(error)));
     }
 
+    await waitForRetry(retryDelayMs, signal);
+  }
+}
+
+async function streamAgentTurnEvents(
+  path: string,
+  onEvent: (event: AgentTurnEvent) => void,
+  onError: ((error: Error) => void) | undefined,
+  signal: AbortSignal
+): Promise<void> {
+  while (!signal.aborted) {
+    let retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+    try {
+      const controlToken = getControlToken();
+      if (!controlToken) {
+        notifyControlUnauthorized();
+        return;
+      }
+      const response = await fetch(`${API_URL}${path}`, {
+        headers: { accept: "text/event-stream", authorization: `Bearer ${controlToken}` },
+        signal
+      });
+      if (response.status === 401) {
+        clearControlToken();
+        notifyControlUnauthorized();
+        return;
+      }
+      if (response.status === 429) {
+        retryDelayMs = retryAfterDelayMs(response.headers.get("retry-after"));
+        throw new Error(`Agent event stream rate limited; retrying in ${Math.ceil(retryDelayMs / 1_000)} seconds`);
+      }
+      if (!response.ok || !response.body) throw new Error(`Agent event stream failed: ${response.status}`);
+      const completed = await consumeEventStream<AgentTurnEvent>(
+        response.body,
+        (event) => {
+          onEvent(event);
+          return event.type === "turn.completed";
+        },
+        signal
+      );
+      if (completed) return;
+    } catch (error) {
+      if (signal.aborted) return;
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
     await waitForRetry(retryDelayMs, signal);
   }
 }
@@ -432,11 +614,11 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function consumeEventStream(
+async function consumeEventStream<T>(
   stream: ReadableStream<Uint8Array>,
-  onEvent: (event: JobEvent) => void,
+  onEvent: (event: T) => boolean | void,
   signal: AbortSignal
-): Promise<void> {
+): Promise<boolean> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -445,7 +627,7 @@ async function consumeEventStream(
     while (!signal.aborted) {
       const chunk = await reader.read();
       if (chunk.done) {
-        return;
+        return false;
       }
       buffer += decoder.decode(chunk.value, { stream: true });
 
@@ -459,11 +641,12 @@ async function consumeEventStream(
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data) {
-          onEvent(JSON.parse(data) as JobEvent);
+          if (onEvent(JSON.parse(data) as T) === true) return true;
         }
         separator = /\r?\n\r?\n/.exec(buffer);
       }
     }
+    return false;
   } finally {
     await reader.cancel().catch(() => undefined);
   }

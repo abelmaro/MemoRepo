@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
 import { managedPathSize, removeManagedPath } from "../domain/files.js";
 import { nowIso } from "../domain/time.js";
+import { assertSnapshotArtifactPath, ensurePlainManagedDirectory } from "./snapshotService.js";
 
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "skipped", "cancelled"] as const;
 
@@ -28,7 +29,7 @@ export class MaintenanceService {
         removedClones: this.removedCloneRows().length
       },
       estimatedBytes: {
-        failedSnapshots: sumBytes(this.failedSnapshotRows().map((row) => row.artifactPath), this.config.memorepoHome),
+        failedSnapshots: this.failedSnapshotBytes(),
         removedRepositoryIndexes: sumBytes(this.removedRepositoryIndexTargets().map((row) => row.cachePath), this.config.memorepoHome),
         orphanRepoIndexDirectories: sumBytes(this.orphanRepoIndexDirectories().map((row) => row.path), this.config.memorepoHome),
         removedClones: sumBytes(this.removedCloneRows().map((row) => row.localPath), this.config.memorepoHome)
@@ -60,7 +61,11 @@ export class MaintenanceService {
   private deleteFailedSnapshots(): FileCleanupResult {
     const rows = this.failedSnapshotRows();
     const affectedSpaceIds = Array.from(new Set(rows.map((row) => row.spaceId)));
-    const removed = removePaths(rows.map((row) => row.artifactPath), this.config.memorepoHome);
+    const snapshotRoot = this.snapshotRoot();
+    const removed = removePaths(
+      rows.map((row) => assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)),
+      snapshotRoot
+    );
     const transaction = this.database.sqlite.transaction(() => {
       for (const row of rows) {
         this.database.sqlite.prepare("DELETE FROM space_snapshots WHERE id = ?").run(row.id);
@@ -86,6 +91,22 @@ export class MaintenanceService {
     });
     transaction();
     return { count: rows.length, bytes: removed.bytes };
+  }
+
+  private failedSnapshotBytes(): number {
+    const snapshotRoot = this.snapshotRoot();
+    return sumBytes(
+      this.failedSnapshotRows().map((row) => assertSnapshotArtifactPath(snapshotRoot, row.id, row.artifactPath)),
+      snapshotRoot
+    );
+  }
+
+  private snapshotRoot(): string {
+    return ensurePlainManagedDirectory(
+      this.config.memorepoHome,
+      this.config.snapshotIndexesDir,
+      "Snapshot index root"
+    );
   }
 
   private deleteRemovedRepositoryIndexes(): FileCleanupResult {

@@ -10,6 +10,7 @@ export interface AppConfig {
   apiPort: number;
   publicApiUrl: string;
   frontendOrigin: string;
+  githubToken: string | null;
   githubOAuthClientId: string;
   memorepoHome: string;
   secretsDir: string;
@@ -24,6 +25,11 @@ export interface AppConfig {
   binDir: string;
   databasePath: string;
   mcpContainerName: string;
+  agentProvider: string;
+  agentModel: string;
+  agentCredentialPath: string;
+  agentMaxRunSeconds: number;
+  agentMaxToolCalls: number;
   snapshotRetentionDefault: number;
   jobRetentionDaysDefault: number;
   jobConcurrency: number;
@@ -84,6 +90,7 @@ export function loadConfig(): AppConfig {
     apiPort,
     publicApiUrl: (process.env.MEMOREPO_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`).replace(/\/+$/, ""),
     frontendOrigin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173",
+    githubToken: process.env.GH_TOKEN?.trim() || null,
     githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || MEMOREPO_GITHUB_OAUTH_CLIENT_ID,
     memorepoHome,
     secretsDir,
@@ -98,6 +105,13 @@ export function loadConfig(): AppConfig {
     binDir,
     databasePath: path.join(dataDir, "memorepo.sqlite"),
     mcpContainerName: process.env.MEMOREPO_API_CONTAINER_NAME ?? "memorepo-api",
+    agentProvider: process.env.MEMOREPO_AGENT_PROVIDER_ID?.trim() ?? "",
+    agentModel: process.env.MEMOREPO_AGENT_MODEL_ID?.trim() ?? "",
+    agentCredentialPath: absolutePath(
+      process.env.MEMOREPO_AGENT_CREDENTIAL_FILE ?? path.join(secretsDir, "agent-credentials.json")
+    ),
+    agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 600),
+    agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 96),
     snapshotRetentionDefault: positiveIntEnv("MEMOREPO_SNAPSHOT_RETENTION", 3),
     jobRetentionDaysDefault: positiveIntEnv("MEMOREPO_JOB_RETENTION_DAYS", 30),
     jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2)

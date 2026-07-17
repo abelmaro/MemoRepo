@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
@@ -7,7 +9,7 @@ import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { createId, createSecretToken, sha256 } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
-import type { SnapshotManifest } from "./snapshotService.js";
+import type { SnapshotManifest, SnapshotManifestRepository } from "./snapshotService.js";
 import type { SpaceService } from "./spaceService.js";
 
 const QUERY_GRAPH_MAX_ROWS = 25;
@@ -38,6 +40,7 @@ const DIRECT_CBM_READ_TOOLS = new Set([
   "get_code_snippet",
   "detect_changes"
 ]);
+const MUTABLE_SNAPSHOT_TOOLS = new Set(["detect_changes"]);
 
 const FORBIDDEN_CBM_INPUT_KEYS = new Set([
   "absolute_path",
@@ -59,6 +62,7 @@ const FORBIDDEN_CBM_INPUT_KEYS = new Set([
 export class McpGateway {
   private readonly manifestCache = new Map<string, SnapshotManifest>();
   private readonly cbmResponseCache = new Map<string, unknown>();
+  private readonly snapshotToolSignal = new AsyncLocalStorage<AbortSignal>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -68,6 +72,7 @@ export class McpGateway {
   ) {}
 
   createConnection(spaceId: string, name: string, client: string) {
+    this.spacesService.assertSpaceAcceptsWork(spaceId);
     const space = this.spacesService.getSpaceById(spaceId);
     const token = createSecretToken();
     const timestamp = nowIso();
@@ -138,8 +143,6 @@ export class McpGateway {
         };
       }
 
-      await this.assertConnection(spaceSlug, token);
-
       if (request.method === "tools/list") {
         return { jsonrpc: "2.0", id: request.id ?? null, result: { tools: await this.availableTools(spaceSlug, token) } };
       }
@@ -171,6 +174,7 @@ export class McpGateway {
         }
       }
 
+      await this.spacesService.withSpaceReaderBySlug(spaceSlug, () => this.assertConnection(spaceSlug, token));
       throw new Error(`Unsupported MCP method: ${request.method}`);
     } catch (error) {
       return {
@@ -185,11 +189,47 @@ export class McpGateway {
   }
 
   async callTool(spaceSlug: string, token: string, toolName: string, args: Record<string, unknown>) {
-    this.validateToolArgs(toolName, args);
-    const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
-    const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
-    this.recordToolStats(space.id, toolName, responseBytes(response));
-    return response;
+    return this.spacesService.withSpaceReaderBySlug(spaceSlug, async () => {
+      this.validateToolArgs(toolName, args);
+      if (MUTABLE_SNAPSHOT_TOOLS.has(toolName)) {
+        throw new Error(`${toolName} is not available for immutable snapshot queries`);
+      }
+      const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
+      const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
+      this.recordToolStats(space.id, toolName, responseBytes(response));
+      return response;
+    });
+  }
+
+  async toolDefinitionsForSnapshot(spaceId: string, snapshotId: string) {
+    return this.spacesService.withSpaceReader(spaceId, async () => {
+      const { snapshot } = this.snapshotContextById(spaceId, snapshotId);
+      return this.filterAvailableTools(snapshot);
+    });
+  }
+
+  async callSnapshotTool(
+    spaceId: string,
+    snapshotId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal
+  ) {
+    const execute = async () => {
+      throwIfAborted(signal);
+      if (MUTABLE_SNAPSHOT_TOOLS.has(toolName)) {
+        throw new Error(`${toolName} is not available for immutable snapshot queries`);
+      }
+      this.validateToolArgs(toolName, args);
+      const { space, snapshot, manifest } = this.snapshotContextById(spaceId, snapshotId);
+      const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
+      throwIfAborted(signal);
+      this.recordToolStats(space.id, toolName, responseBytes(response));
+      return response;
+    };
+    return this.spacesService.withSpaceReader(spaceId, () =>
+      signal ? this.snapshotToolSignal.run(signal, execute) : execute()
+    );
   }
 
   listToolStats(spaceId: string) {
@@ -269,26 +309,29 @@ export class McpGateway {
     const recommendedFlow = `Recommended flow: get_graph_schema before custom Cypher; use an advertised search tool to locate symbols, then trace_path or get_code_snippet. Tool availability is negotiated with the installed CBM engine. Search limits cap at ${SEARCH_RESULT_MAX_LIMIT} results and query_graph at ${QUERY_GRAPH_MAX_ROWS} rows.`;
 
     try {
-      const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
-      if (!snapshot || !manifest) {
+      return await this.spacesService.withSpaceReaderBySlug(spaceSlug, async () => {
+        const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
+        if (!snapshot || !manifest) {
+          return [
+            `MemoRepo serves read-only code intelligence for the "${space.name}" space, but it has no active snapshot yet.`,
+            "Ask the user to open the MemoRepo dashboard and run Reindex space, then reconnect."
+          ].join("\n");
+        }
+
+        const stale = space.snapshotStatus === "stale";
+        const repositories = manifest.repositories
+          .map((repo) => `- ${repo.fullName} (project: ${repo.projectName}, branch: ${repo.branch}, commit: ${repo.commit.slice(0, 12)})`)
+          .join("\n");
+
         return [
-          `MemoRepo serves read-only code intelligence for the "${space.name}" space, but it has no active snapshot yet.`,
-          "Ask the user to open the MemoRepo dashboard and run Reindex space, then reconnect."
-        ].join("\n");
-      }
-
-      const stale = space.snapshotStatus === "stale";
-      const repositories = manifest.repositories
-        .map((repo) => `- ${repo.fullName} (project: ${repo.projectName}, branch: ${repo.branch}, commit: ${repo.commit.slice(0, 12)})`)
-        .join("\n");
-
-      return [
-        `MemoRepo serves read-only code intelligence for the "${space.name}" space from immutable snapshot v${snapshot.version}${stale ? " (stale: repositories changed after this snapshot was built)" : ""}.`,
-        `Repositories in this snapshot:\n${repositories}`,
-        'Pass "project" to scope a tool to one repository; omit it to search across all of them.',
-        recommendedFlow
-      ].join("\n\n");
-    } catch {
+          `MemoRepo serves read-only code intelligence for the "${space.name}" space from immutable snapshot v${snapshot.version}${stale ? " (stale: repositories changed after this snapshot was built)" : ""}.`,
+          `Repositories in this snapshot:\n${repositories}`,
+          'Pass "project" to scope a tool to one repository; omit it to search across all of them.',
+          recommendedFlow
+        ].join("\n\n");
+      });
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 409) throw error;
       return [
         `MemoRepo serves read-only code intelligence for the "${spaceSlug}" space from an immutable snapshot.`,
         "Start with list_space_repositories to see repositories and project names.",
@@ -361,28 +404,93 @@ export class McpGateway {
     };
   }
 
+  private snapshotContextById(spaceId: string, snapshotId: string) {
+    const space = this.spacesService.getSpaceById(spaceId) as SpaceRow;
+    const snapshot = this.database.sqlite
+      .prepare(
+        `
+        SELECT
+          id,
+          version,
+          status,
+          artifact_path AS artifactPath,
+          manifest_json AS manifestJson,
+          created_at AS createdAt,
+          activated_at AS activatedAt
+        FROM space_snapshots
+        WHERE id = ? AND space_id = ?
+      `
+      )
+      .get(snapshotId, spaceId) as SnapshotRow | undefined;
+
+    if (!snapshot) {
+      throw new NotFoundError("Snapshot not found");
+    }
+
+    return { space, snapshot, manifest: this.manifestFor(snapshot) };
+  }
+
   private manifestFor(snapshot: SnapshotRow): SnapshotManifest {
     const cached = this.manifestCache.get(snapshot.id);
     if (cached) {
+      this.assertImmutableSnapshotSources(snapshot, cached);
       return cached;
     }
 
     const manifest = JSON.parse(snapshot.manifestJson) as SnapshotManifest;
+    this.assertImmutableSnapshotSources(snapshot, manifest);
     evictOldest(this.manifestCache, MANIFEST_CACHE_MAX_ENTRIES);
     this.manifestCache.set(snapshot.id, manifest);
     return manifest;
   }
 
+  private assertImmutableSnapshotSources(snapshot: SnapshotRow, manifest: SnapshotManifest): void {
+    try {
+      const managedHome = fs.realpathSync(path.resolve(this.config.memorepoHome));
+      const managedSnapshotsRoot = path.resolve(this.config.snapshotIndexesDir);
+      const realManagedSnapshotsRoot = fs.realpathSync(managedSnapshotsRoot);
+      if (!isStrictlyInside(managedHome, realManagedSnapshotsRoot)) throw legacySnapshotError();
+
+      const artifactPath = path.resolve(snapshot.artifactPath);
+      if (!isStrictlyInside(managedSnapshotsRoot, artifactPath) || !isDirectory(artifactPath)) {
+        throw legacySnapshotError();
+      }
+      const realArtifactPath = fs.realpathSync(artifactPath);
+      if (!isStrictlyInside(realManagedSnapshotsRoot, realArtifactPath)) throw legacySnapshotError();
+
+      const sourcesRoot = path.join(artifactPath, "sources");
+      if (!Array.isArray(manifest.repositories) || manifest.repositories.length === 0 || !isDirectory(sourcesRoot)) {
+        throw legacySnapshotError();
+      }
+      const realSourcesRoot = fs.realpathSync(sourcesRoot);
+      if (!isStrictlyInside(realArtifactPath, realSourcesRoot)) throw legacySnapshotError();
+
+      for (const repository of manifest.repositories) {
+        if (!repository || typeof repository.localPath !== "string") throw legacySnapshotError();
+        const sourcePath = path.resolve(repository.localPath);
+        if (!isStrictlyInside(sourcesRoot, sourcePath) || !isDirectory(sourcePath)) throw legacySnapshotError();
+        const realSourcePath = fs.realpathSync(sourcePath);
+        if (!isStrictlyInside(realSourcesRoot, realSourcePath)) throw legacySnapshotError();
+      }
+    } catch {
+      throw legacySnapshotError();
+    }
+  }
+
   private async cachedCbmTool(snapshot: SnapshotRow, toolName: string, input: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    const signal = this.snapshotToolSignal.getStore();
+    throwIfAborted(signal);
     const key = `${snapshot.id}\n${toolName}\n${stableStringify(input)}`;
     if (this.cbmResponseCache.has(key)) {
       const cached = this.cbmResponseCache.get(key);
       this.cbmResponseCache.delete(key);
       this.cbmResponseCache.set(key, cached);
+      throwIfAborted(signal);
       return cached;
     }
 
-    const response = await this.cbm.tool(toolName, input, snapshot.artifactPath, timeoutMs);
+    const response = await this.cbm.tool(toolName, input, snapshot.artifactPath, timeoutMs, signal);
+    throwIfAborted(signal);
     if (responseBytes(response) <= CBM_RESPONSE_CACHE_MAX_ITEM_BYTES) {
       evictOldest(this.cbmResponseCache, CBM_RESPONSE_CACHE_MAX_ENTRIES);
       this.cbmResponseCache.set(key, response);
@@ -983,8 +1091,14 @@ export class McpGateway {
   }
 
   private async availableTools(spaceSlug: string, token: string) {
-    const declared = this.tools();
-    const { snapshot } = await this.snapshotContext(spaceSlug, token);
+    return this.spacesService.withSpaceReaderBySlug(spaceSlug, async () => {
+      const { snapshot } = await this.snapshotContext(spaceSlug, token);
+      return this.filterAvailableTools(snapshot);
+    });
+  }
+
+  private async filterAvailableTools(snapshot: SnapshotRow | null) {
+    const declared = this.tools().filter((candidate) => !MUTABLE_SNAPSHOT_TOOLS.has(candidate.name));
     const native = new Set(await this.cbm.listTools(snapshot?.artifactPath ?? this.config.memorepoHome));
     return declared.filter((candidate) =>
       candidate.name === "list_space_repositories" || (candidate.name === "query_graph" ? native.has("query_graph") : native.has(candidate.name))
@@ -1220,9 +1334,19 @@ export class McpGateway {
   }
 
   private validateToolArgs(toolName: string, args: Record<string, unknown>): void {
-    if (!this.tools().some((candidate) => candidate.name === toolName)) {
+    const definition = this.tools().find((candidate) => candidate.name === toolName);
+    if (!definition) {
       throw new Error(`Unknown MCP tool: ${toolName}`);
     }
+    const schema = definition.inputSchema as Record<string, unknown>;
+    const schemaProperties = isRecord(schema.properties)
+      ? new Set(Object.keys(schema.properties))
+      : new Set<string>();
+    const unsupported = Object.keys(args).filter((key) => !schemaProperties.has(key));
+    if (unsupported.length > 0) {
+      throw new Error(`${toolName} received unsupported arguments: ${unsupported.join(", ")}`);
+    }
+    assertNoForbiddenCbmInput(args, toolName);
     if (args.project !== undefined) {
       requiredNonEmptyString(args.project, `${toolName} project`);
     }
@@ -1451,13 +1575,13 @@ export class McpGateway {
   }
 
   private mcpRepositories(spaceId: string, manifest: SnapshotManifest | null, options: McpRepositoryListOptions): McpRepository[] {
-    const projectsBySpaceRepositoryId = new Map(
-      manifest?.repositories.map((repository) => [repository.spaceRepositoryId, repository.projectName]) ?? []
-    );
+    if (manifest) {
+      return manifest.repositories.map((repository) => toSnapshotMcpRepository(repository, options));
+    }
     return this.spacesService
       .listSpaceRepositories(spaceId)
       .map((repository) =>
-        toMcpRepository(repository as Record<string, unknown>, projectsBySpaceRepositoryId.get(String((repository as Record<string, unknown>).id)), options)
+        toMcpRepository(repository as Record<string, unknown>, undefined, options)
       );
   }
 }
@@ -1514,7 +1638,22 @@ function maskCypherLiteralsAndComments(query: string): string {
 }
 
 function tool(name: string, description: string, inputSchema: Record<string, unknown>) {
-  return { name, description, inputSchema: inputSchema.type ? inputSchema : { type: "object", properties: {} } };
+  const schema = inputSchema.type ? inputSchema : { type: "object", properties: {} };
+  return { name, description, inputSchema: { ...schema, additionalProperties: false } };
+}
+
+function assertNoForbiddenCbmInput(value: unknown, toolName: string): void {
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoForbiddenCbmInput(item, toolName);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (FORBIDDEN_CBM_INPUT_KEYS.has(key)) {
+      throw new Error(`${toolName} cannot receive filesystem path arguments through MemoRepo MCP`);
+    }
+    assertNoForbiddenCbmInput(nested, toolName);
+  }
 }
 
 function protocolVersionFrom(params: unknown): string {
@@ -2380,6 +2519,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Snapshot query was interrupted");
+  error.name = "AbortError";
+  throw error;
+}
+
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let nextIndex = 0;
@@ -2640,6 +2786,26 @@ function relativeInside(root: string, candidate: string): string | null {
   return relative;
 }
 
+function toSnapshotMcpRepository(
+  repository: SnapshotManifestRepository,
+  options: McpRepositoryListOptions
+): McpRepository {
+  const result: McpRepository = {
+    fullName: repository.fullName,
+    project: repository.projectName
+  };
+  if (options.includeBranches) result.branches = [repository.branch];
+  if (options.includeDetails) {
+    result.spaceRepositoryId = repository.spaceRepositoryId;
+    result.githubRepositoryId = repository.githubRepositoryId;
+    result.selectedBranch = repository.branch;
+    result.selectedCommit = repository.commit;
+    result.snapshotIncluded = true;
+    result.branchCount = 1;
+  }
+  return result;
+}
+
 function toMcpRepository(repository: Record<string, unknown>, project: string | undefined, options: McpRepositoryListOptions): McpRepository {
   const branches = parseBranches(repository.branches_json, String(repository.default_branch));
   const result: McpRepository = {
@@ -2723,6 +2889,23 @@ function parseBranches(value: unknown, fallback: string): string[] {
   } catch {
     return [fallback].filter(Boolean);
   }
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isStrictlyInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function legacySnapshotError(): Error {
+  return Object.assign(new Error("Rebuild this snapshot before using immutable code queries"), { statusCode: 409 });
 }
 
 interface JsonRpcRequest {

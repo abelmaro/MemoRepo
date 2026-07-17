@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Filter, Github, Link, Loader2, Plus, RefreshCw, Search } from "lucide-react";
 import { api, booleanValue, fullName, type GitHubRepository, type Job, type Space } from "../lib/api";
@@ -11,6 +11,7 @@ export function AddRepoModal({ space, onClose, onJob }: { space: Space; onClose:
   const [query, setQuery] = useState("");
   const [locator, setLocator] = useState("");
   const [kindFilter, setKindFilter] = useState<RepositoryKindFilter>("all");
+  const [syncJobId, setSyncJobId] = useState<string | null>(null);
   const normalizedQuery = query.trim();
   const searchReady = normalizedQuery.length >= 2;
 
@@ -36,25 +37,37 @@ export function AddRepoModal({ space, onClose, onJob }: { space: Space; onClose:
   const syncMutation = useMutation({
     mutationFn: () => api<{ job: Job }>("/api/github/sync", { method: "POST", body: "{}" }),
     onSuccess: ({ job }) => {
-      onJob(job.id);
-      void queryClient.invalidateQueries({ queryKey: ["github-repositories"] });
+      setSyncJobId(job.id);
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      onClose();
     }
   });
+
+  const syncJobQuery = useQuery({
+    queryKey: ["job", syncJobId],
+    queryFn: () => api<{ job: Job }>(`/api/jobs/${syncJobId}`),
+    enabled: Boolean(syncJobId),
+    refetchInterval: (query) => ["pending", "running"].includes(query.state.data?.job.status ?? "") ? 1_000 : false
+  });
+
+  useEffect(() => {
+    if (syncJobQuery.data?.job.status === "succeeded") {
+      void queryClient.invalidateQueries({ queryKey: ["github-repositories"] });
+    }
+  }, [queryClient, syncJobQuery.data?.job.status]);
 
   const repositories = repositoriesQuery.data?.repositories ?? [];
   const visibleRepositories = repositories.slice(0, 50);
   const mutationError = addMutation.error ?? syncMutation.error;
+  const syncActive = ["pending", "running"].includes(syncJobQuery.data?.job.status ?? "");
 
   return (
     <Modal title="Add repository" onClose={onClose} wide>
       <div className="add-repo-dialog">
         <div className="modal-intro">
           <p>Search the GitHub catalog, then add a repository to <strong>{space.name}</strong>. Cloning and indexing run in the background.</p>
-          <button className="text-button with-icon" type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
-            {syncMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            <span>Refresh GitHub catalog</span>
+          <button className="text-button with-icon" type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending || syncActive}>
+            {syncMutation.isPending || syncActive ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            <span>{syncActive ? "Refreshing GitHub catalog…" : "Refresh GitHub catalog"}</span>
           </button>
         </div>
 
@@ -155,6 +168,11 @@ export function AddRepoModal({ space, onClose, onJob }: { space: Space; onClose:
           <div className="inline-alert error" role="alert">
             {mutationError instanceof Error ? mutationError.message : "The repository action failed."}
           </div>
+        ) : null}
+        {syncJobQuery.data?.job.status === "succeeded" ? (
+          <div className="inline-alert success" role="status">GitHub catalog refreshed. Search results are up to date.</div>
+        ) : syncJobQuery.data?.job.status === "failed" ? (
+          <div className="inline-alert error" role="alert">{syncJobQuery.data.job.error ?? "GitHub catalog refresh failed."}</div>
         ) : null}
       </div>
     </Modal>
