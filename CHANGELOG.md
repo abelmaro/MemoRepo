@@ -7,8 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-16
+
 ### Added
 
+- Add snapshot-pinned Ask this Space agent chats powered by the Pi SDK, with persistent conversations, streamed answers, interrupt support, and read-only snapshot tools.
 - Add runtime provider/model discovery and selection for OAuth-capable Pi integrations, with environment-defined initial values and configurable 600-second/96-tool answer budgets.
 - Add stable `MR-*` codes and request IDs to handled API failures, plus coded job failures and clone/index/snapshot phase timings for easier diagnosis.
 
@@ -202,7 +205,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/abelmaro/MemoRepo/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abelmaro/MemoRepo/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/abelmaro/MemoRepo/compare/v0.1.8...v0.1.9
