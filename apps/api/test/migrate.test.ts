@@ -23,8 +23,13 @@ test("migrate creates and versions a new database", () => {
       [
         "provider_id",
         "model_id",
+        "mode",
         "effort",
         "verbosity",
+        "max_run_seconds",
+        "max_tool_calls",
+        "max_provider_rounds",
+        "submission_sequence",
         "stop_reason",
         "provider_round_count",
         "length_stop_count",
@@ -42,6 +47,12 @@ test("migrate creates and versions a new database", () => {
     assert.ok(indexNames(sqlite).has("agent_chats_space_updated_idx"));
     assert.ok(indexNames(sqlite).has("agent_messages_chat_sequence_unique"));
     assert.ok(indexNames(sqlite).has("agent_turns_active_chat_unique"));
+    assert.ok(indexNames(sqlite).has("agent_turns_queue_created_idx"));
+    assert.ok(indexNames(sqlite).has("agent_turns_submission_sequence_unique"));
+    assert.match(
+      sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'agent_turns_active_chat_unique'").pluck().get() as string,
+      /queued.*pending.*running/
+    );
   } finally {
     sqlite.close();
   }
@@ -176,6 +187,61 @@ test("migrate repairs a version 5 database that is missing agent chat tables", (
     assert.ok(tableNames(sqlite).has("agent_messages"));
     assert.ok(tableNames(sqlite).has("agent_turns"));
     assert.ok(indexNames(sqlite).has("agent_turns_active_chat_unique"));
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("migrate repairs a version 9 queue schema missing submission order", () => {
+  const sqlite = new Database(":memory:");
+  try {
+    migrate(sqlite);
+    sqlite.exec(`
+      DROP INDEX agent_turns_queue_created_idx;
+      DROP INDEX agent_turns_submission_sequence_unique;
+      ALTER TABLE agent_turns DROP COLUMN submission_sequence;
+
+      INSERT INTO spaces (
+        id, name, slug, root_path, snapshot_status, snapshot_status_updated_at, created_at, updated_at
+      ) VALUES ('space-queue', 'Queue', 'queue', '/tmp/queue', 'ready', '2026-01-01', '2026-01-01', '2026-01-01');
+      INSERT INTO space_snapshots (
+        id, space_id, version, status, artifact_path, manifest_json, created_at
+      ) VALUES ('snapshot-queue', 'space-queue', 1, 'active', '/tmp/snapshot-queue', '{}', '2026-01-01');
+      INSERT INTO agent_account_sessions (
+        id, provider_id, account_key, connected_at
+      ) VALUES ('account-queue', 'test-provider', 'test-account', '2026-01-01');
+      INSERT INTO agent_chats (
+        id, space_id, account_session_id, snapshot_id, snapshot_version, snapshot_meta_json,
+        title, status, created_at, updated_at
+      ) VALUES (
+        'chat-queue', 'space-queue', 'account-queue', 'snapshot-queue', 1, '{}',
+        'Queue', 'active', '2026-01-01', '2026-01-01'
+      );
+      INSERT INTO agent_messages (
+        id, chat_id, sequence, role, status, content, created_at
+      ) VALUES
+        ('message-a-user', 'chat-queue', 1, 'user', 'completed', 'A', '2026-01-01'),
+        ('message-a-assistant', 'chat-queue', 2, 'assistant', 'completed', 'A', '2026-01-01'),
+        ('message-b-user', 'chat-queue', 3, 'user', 'completed', 'B', '2026-01-01'),
+        ('message-b-assistant', 'chat-queue', 4, 'assistant', 'completed', 'B', '2026-01-01');
+      INSERT INTO agent_turns (
+        id, chat_id, user_message_id, assistant_message_id, status, created_at, finished_at
+      ) VALUES
+        ('turn-b', 'chat-queue', 'message-b-user', 'message-b-assistant', 'completed', '2026-01-01', '2026-01-01'),
+        ('turn-a', 'chat-queue', 'message-a-user', 'message-a-assistant', 'completed', '2026-01-01', '2026-01-01');
+    `);
+    sqlite.pragma("user_version = 9");
+
+    migrate(sqlite);
+
+    assert.deepEqual(
+      sqlite.prepare("SELECT id, submission_sequence AS sequence FROM agent_turns ORDER BY submission_sequence").all(),
+      [{ id: "turn-a", sequence: 1 }, { id: "turn-b", sequence: 2 }]
+    );
+    assert.deepEqual(
+      sqlite.prepare("SELECT DISTINCT mode, max_run_seconds, max_tool_calls, max_provider_rounds FROM agent_turns").get(),
+      { mode: "standard", max_run_seconds: 360, max_tool_calls: 32, max_provider_rounds: 6 }
+    );
   } finally {
     sqlite.close();
   }

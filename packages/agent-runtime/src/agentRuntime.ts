@@ -18,10 +18,12 @@ interface ActiveRun {
 export interface AgentRuntimeOptions {
   maxRunMs?: number;
   maxToolCalls?: number;
+  maxProviderRounds?: number;
 }
 
 const DEFAULT_MAX_RUN_MS = 600_000;
 const DEFAULT_MAX_TOOL_CALLS = 96;
+const DEFAULT_MAX_PROVIDER_ROUNDS = 16;
 
 export class AgentRuntime {
   private readonly runs = new Map<string, ActiveRun>();
@@ -35,10 +37,12 @@ export class AgentRuntime {
 
   private readonly maxRunMs: number;
   private readonly maxToolCalls: number;
+  private readonly maxProviderRounds: number;
 
   constructor(private readonly adapter: AgentRuntimeAdapter, options: AgentRuntimeOptions = {}) {
     this.maxRunMs = positiveInteger(options.maxRunMs, DEFAULT_MAX_RUN_MS);
     this.maxToolCalls = positiveInteger(options.maxToolCalls, DEFAULT_MAX_TOOL_CALLS);
+    this.maxProviderRounds = positiveInteger(options.maxProviderRounds, DEFAULT_MAX_PROVIDER_ROUNDS);
   }
 
   async status(): Promise<AgentProviderStatus> {
@@ -190,13 +194,16 @@ export class AgentRuntime {
     let failure: unknown = null;
     let toolCalls = 0;
     const providerObservations: AgentProviderTurnObservation[] = [];
+    const maxRunMs = boundedPositiveInteger(input.limits?.maxRunMs, this.maxRunMs);
+    const maxToolCalls = boundedPositiveInteger(input.limits?.maxToolCalls, this.maxToolCalls);
+    const maxProviderRounds = boundedPositiveInteger(input.limits?.maxProviderRounds, this.maxProviderRounds);
     const deadline = setTimeout(() => {
       abort.abort(
         new AgentRunLimitError(
-          `Agent run exceeded the configured ${Math.ceil(this.maxRunMs / 1_000)}-second limit (MR-AGENT-TIME-LIMIT)`
+          `Agent run exceeded the configured ${Math.ceil(maxRunMs / 1_000)}-second limit (MR-AGENT-TIME-LIMIT)`
         )
       );
-    }, this.maxRunMs);
+    }, maxRunMs);
     try {
       await emit({ type: "run.started", runId: input.runId });
       await this.adapter.run({
@@ -207,17 +214,17 @@ export class AgentRuntime {
         tools: input.tools,
         requestTool: async (request) => {
           toolCalls += 1;
-          if (toolCalls > this.maxToolCalls) {
+          if (toolCalls > maxToolCalls) {
             abort.abort(
               new AgentRunLimitError(
-                `Agent run exceeded the configured ${this.maxToolCalls} tool-call limit (MR-AGENT-TOOL-LIMIT)`
+                `Agent run exceeded the configured ${maxToolCalls} tool-call limit (MR-AGENT-TOOL-LIMIT)`
               )
             );
             return {
               ok: false,
               error: {
                 code: "MR-AGENT-TOOL-LIMIT",
-                message: `Agent run exceeded the configured ${this.maxToolCalls} tool-call limit`,
+                message: `Agent run exceeded the configured ${maxToolCalls} tool-call limit`,
                 retryable: false
               }
             };
@@ -228,6 +235,13 @@ export class AgentRuntime {
         onEvent: emit,
         onProviderTurn: (observation) => {
           providerObservations.push(observation);
+          if (observation.stopReason === "toolUse" && providerObservations.length >= maxProviderRounds) {
+            abort.abort(
+              new AgentRunLimitError(
+                `Agent run exceeded the configured ${maxProviderRounds} provider-round limit (MR-AGENT-ROUND-LIMIT)`
+              )
+            );
+          }
         }
       });
     } catch (error) {
@@ -338,4 +352,8 @@ function authenticationChangingStatus(status: AgentProviderStatus): AgentProvide
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && (value ?? 0) > 0 ? value! : fallback;
+}
+
+function boundedPositiveInteger(value: number | undefined, maximum: number): number {
+  return Math.min(positiveInteger(value, maximum), maximum);
 }

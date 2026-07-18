@@ -20,6 +20,9 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     agentModel: process.env.MEMOREPO_AGENT_MODEL_ID,
     agentMaxRunSeconds: process.env.MEMOREPO_AGENT_MAX_RUN_SECONDS,
     agentMaxToolCalls: process.env.MEMOREPO_AGENT_MAX_TOOL_CALLS,
+    agentMaxProviderRounds: process.env.MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS,
+    agentMaxActiveTurns: process.env.MEMOREPO_AGENT_MAX_ACTIVE_TURNS,
+    agentMaxQueuedTurns: process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS,
     cbmIndexConcurrency: process.env.MEMOREPO_CBM_INDEX_CONCURRENCY,
     cbmInteractiveConcurrency: process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY
   };
@@ -32,12 +35,22 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     delete process.env.MEMOREPO_AGENT_CREDENTIAL_FILE;
     delete process.env.MEMOREPO_AGENT_PROVIDER_ID;
     delete process.env.MEMOREPO_AGENT_MODEL_ID;
+    delete process.env.MEMOREPO_AGENT_MAX_RUN_SECONDS;
+    delete process.env.MEMOREPO_AGENT_MAX_TOOL_CALLS;
+    delete process.env.MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS;
+    delete process.env.MEMOREPO_AGENT_MAX_ACTIVE_TURNS;
+    delete process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS;
     delete process.env.MEMOREPO_CBM_INDEX_CONCURRENCY;
     delete process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY;
 
     const unconfiguredAgent = loadConfig();
     assert.equal(unconfiguredAgent.agentProvider, "");
     assert.equal(unconfiguredAgent.agentModel, "");
+    assert.equal(unconfiguredAgent.agentMaxRunSeconds, 600);
+    assert.equal(unconfiguredAgent.agentMaxToolCalls, 96);
+    assert.equal(unconfiguredAgent.agentMaxProviderRounds, 16);
+    assert.equal(unconfiguredAgent.agentMaxActiveTurns, 2);
+    assert.equal(unconfiguredAgent.agentMaxQueuedTurns, 20);
     assert.equal(unconfiguredAgent.cbmIndexConcurrency, 1);
     assert.equal(unconfiguredAgent.cbmInteractiveConcurrency, 2);
 
@@ -45,6 +58,9 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     process.env.MEMOREPO_AGENT_MODEL_ID = "test-model";
     process.env.MEMOREPO_AGENT_MAX_RUN_SECONDS = "720";
     process.env.MEMOREPO_AGENT_MAX_TOOL_CALLS = "120";
+    process.env.MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS = "14";
+    process.env.MEMOREPO_AGENT_MAX_ACTIVE_TURNS = "3";
+    process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS = "30";
     process.env.MEMOREPO_CBM_INDEX_CONCURRENCY = "3";
     process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY = "4";
 
@@ -58,6 +74,9 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     assert.equal(officialConfig.agentModel, "test-model");
     assert.equal(officialConfig.agentMaxRunSeconds, 720);
     assert.equal(officialConfig.agentMaxToolCalls, 120);
+    assert.equal(officialConfig.agentMaxProviderRounds, 14);
+    assert.equal(officialConfig.agentMaxActiveTurns, 3);
+    assert.equal(officialConfig.agentMaxQueuedTurns, 30);
     assert.equal(officialConfig.cbmIndexConcurrency, 3);
     assert.equal(officialConfig.cbmInteractiveConcurrency, 4);
     assert.equal(officialConfig.agentCredentialPath, path.join(officialConfig.secretsDir, "agent-credentials.json"));
@@ -84,6 +103,9 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     restoreEnvironment("MEMOREPO_AGENT_MODEL_ID", previous.agentModel);
     restoreEnvironment("MEMOREPO_AGENT_MAX_RUN_SECONDS", previous.agentMaxRunSeconds);
     restoreEnvironment("MEMOREPO_AGENT_MAX_TOOL_CALLS", previous.agentMaxToolCalls);
+    restoreEnvironment("MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS", previous.agentMaxProviderRounds);
+    restoreEnvironment("MEMOREPO_AGENT_MAX_ACTIVE_TURNS", previous.agentMaxActiveTurns);
+    restoreEnvironment("MEMOREPO_AGENT_MAX_QUEUED_TURNS", previous.agentMaxQueuedTurns);
     restoreEnvironment("MEMOREPO_CBM_INDEX_CONCURRENCY", previous.cbmIndexConcurrency);
     restoreEnvironment("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", previous.cbmInteractiveConcurrency);
     fs.rmSync(testRoot, { recursive: true, force: true });

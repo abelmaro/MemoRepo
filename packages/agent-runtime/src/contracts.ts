@@ -20,6 +20,12 @@ export interface AgentRunSettings {
   verbosity?: AgentVerbosity;
 }
 
+export interface AgentRunLimits {
+  maxRunMs: number;
+  maxToolCalls: number;
+  maxProviderRounds: number;
+}
+
 export type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 export interface AgentTokenUsage {
@@ -121,9 +127,13 @@ export interface AgentLoginAttempt {
 export interface AgentRunInput {
   runId: string;
   sessionId: string;
+  providerId?: string;
+  modelId?: string;
   systemPrompt: string;
   history: AgentHistoryMessage[];
   tools: AgentToolDefinition[];
+  settings?: AgentRunSettings;
+  limits?: Partial<AgentRunLimits>;
   requestTool(request: AgentToolRequest, signal: AbortSignal): Promise<AgentToolResult>;
   onEvent(event: AgentRuntimeEvent): void | Promise<void>;
 }

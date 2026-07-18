@@ -31,6 +31,9 @@ export interface AppConfig {
   agentCredentialPath: string;
   agentMaxRunSeconds: number;
   agentMaxToolCalls: number;
+  agentMaxProviderRounds: number;
+  agentMaxActiveTurns: number;
+  agentMaxQueuedTurns: number;
   snapshotRetentionDefault: number;
   jobRetentionDaysDefault: number;
   jobConcurrency: number;
@@ -118,6 +121,9 @@ export function loadConfig(): AppConfig {
     ),
     agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 600),
     agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 96),
+    agentMaxProviderRounds: positiveIntEnv("MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS", 16),
+    agentMaxActiveTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_ACTIVE_TURNS", 2),
+    agentMaxQueuedTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_QUEUED_TURNS", 20),
     snapshotRetentionDefault: positiveIntEnv("MEMOREPO_SNAPSHOT_RETENTION", 3),
     jobRetentionDaysDefault: positiveIntEnv("MEMOREPO_JOB_RETENTION_DAYS", 30),
     jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2),

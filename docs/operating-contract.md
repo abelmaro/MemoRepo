@@ -33,6 +33,9 @@ MemoRepo accepts these runtime inputs:
 - `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`: the initial Ask this Space selection. They are read from the environment; `.env.example` supplies `openai-codex` and `gpt-5.4`. The dashboard can change the in-memory selection until the API restarts.
 - `MEMOREPO_AGENT_MAX_RUN_SECONDS`: the per-answer wall-clock budget, defaulting to `600`.
 - `MEMOREPO_AGENT_MAX_TOOL_CALLS`: the per-answer tool-call budget, defaulting to `96`.
+- `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS`: the global ceiling for provider rounds in one answer, defaulting to `16`.
+- `MEMOREPO_AGENT_MAX_ACTIVE_TURNS`: the number of answers that may run concurrently, defaulting to `2`.
+- `MEMOREPO_AGENT_MAX_QUEUED_TURNS`: the maximum durable waiting queue, defaulting to `20`.
 - `CODEBASE_MEMORY_MCP_VERSION`: the `codebase-memory-mcp` release used by the API Docker image.
 - `CODEBASE_MEMORY_MCP_SHA256_AMD64` and `CODEBASE_MEMORY_MCP_SHA256_ARM64`: trusted hashes for the portable CBM release archives. Update them together with the CBM version.
 - `MEMOREPO_SNAPSHOT_RETENTION`: the default number of latest snapshots to keep when pruning a space, defaulting to `3`.
@@ -199,7 +202,9 @@ The GitHub access token is encrypted before it is stored in SQLite. Its randomly
 
 Repository and snapshot indexes can be regenerated. SQLite contains the durable operational record and should be backed up before destructive maintenance.
 
-Visible agent messages, source references, chat metadata, provider account-session identifiers, selected provider/model settings, and aggregate turn diagnostics are stored in SQLite. Turn diagnostics include the final stop reason, provider round and length-stop counts, tool-call count, and input, output, reasoning, cache, and total token usage. Raw model reasoning and internal tool request or response payloads are not persisted there. Managed agent OAuth credentials are stored separately in an owner-only file under `MEMOREPO_SECRETS_DIR`; Docker Compose persists that file in the existing private `memorepo-secrets` volume.
+Visible agent messages, source references, chat metadata, provider account-session identifiers, selected provider/model settings, answer mode and limits, queue state, and aggregate turn diagnostics are stored in SQLite. Turn diagnostics include the final stop reason, provider round and length-stop counts, tool-call count, and input, output, reasoning, cache, and total token usage. Raw model reasoning and internal tool request or response payloads are not persisted there. Managed agent OAuth credentials are stored separately in an owner-only file under `MEMOREPO_SECRETS_DIR`; Docker Compose persists that file in the existing private `memorepo-secrets` volume.
+
+Answers run through a configurable-capacity FIFO dispatcher. Waiting answers survive an API restart and resume when the matching provider connection is available; answers that were running during shutdown become interrupted. Queue position and aggregate capacity are part of the API contract. Queued and running answers can be cancelled, while failed or interrupted answers can be retried as new turns. A queue-full response is returned only after the configured waiting capacity is exhausted.
 
 If an inactive snapshot is pruned, its chats keep their stored transcripts and snapshot metadata but become non-continuable. A chat pinned to a retained older snapshot remains continuable; activating a newer snapshot only offers a separate new chat.
 

@@ -98,7 +98,7 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
     ]);
     assert.ok(queryLog.definitions.length >= 2);
     assert.equal(queryLog.definitions.every((entry) => entry.snapshotId === "snp_one"), true);
-    assert.deepEqual(guardCalls, ["snp_one", "snp_one"]);
+    assert.deepEqual(guardCalls, ["snp_one", "snp_one", "snp_one"]);
 
     const detail = service.getChat("spc_test", created.chat.id);
     assert.equal(detail.messages.length, 2);
@@ -118,6 +118,180 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
     assert.equal(pruned.chat.continuationReason, "Its pinned snapshot was pruned");
     assert.equal(pruned.messages[1]?.content, "It is built in the indexed service.");
     assert.deepEqual(pruned.messages[1]?.sources, detail.messages[1]?.sources);
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("agent turns use configurable FIFO capacity and persist mode budgets", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const queryLog: QueryLog = { definitions: [], calls: [] };
+  const service = new AgentService(
+    database,
+    { ...testConfig(), agentMaxActiveTurns: 1, agentMaxQueuedTurns: 2 },
+    runtime,
+    snapshotQueries(queryLog),
+    snapshotGuard([])
+  );
+
+  try {
+    const firstChat = await service.createChat("spc_test");
+    const secondChat = await service.createChat("spc_test");
+    const thirdChat = await service.createChat("spc_test");
+    const fourthChat = await service.createChat("spc_test");
+    const first = await service.sendMessage("spc_test", firstChat.chat.id, "First", "quick");
+    const second = await service.sendMessage("spc_test", secondChat.chat.id, "Second", "standard");
+    const third = await service.sendMessage("spc_test", thirdChat.chat.id, "Third", "deep");
+
+    assert.equal(runtime.runs.length, 1);
+    assert.equal(runtime.runs[0]?.input.runId, first.turn.id);
+    assert.deepEqual(runtime.runs[0]?.input.limits, {
+      maxRunMs: 180_000,
+      maxToolCalls: 12,
+      maxProviderRounds: 3
+    });
+    assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /Answer mode: quick/);
+    assert.equal(service.getTurn(first.turn.id).mode, "quick");
+    assert.equal(service.getTurn(second.turn.id).status, "queued");
+    assert.equal(service.getTurn(second.turn.id).queuePosition, 1);
+    assert.equal(service.getTurn(third.turn.id).queuePosition, 2);
+    assert.deepEqual((await service.status()).capacity, { active: 1, maxActive: 1, queued: 2, maxQueued: 2 });
+    await assert.rejects(
+      () => service.sendMessage("spc_test", fourthChat.chat.id, "Queue overflow"),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 429
+    );
+
+    await runtime.completeRun(first.turn.id, { answer: "First answer" });
+    await waitUntil(() => runtime.runs.length === 2);
+    assert.equal(runtime.runs[1]?.input.runId, second.turn.id);
+    assert.equal(service.getTurn(second.turn.id).status, "running");
+    assert.equal(service.getTurn(third.turn.id).queuePosition, 1);
+
+    await runtime.completeRun(second.turn.id, { answer: "Second answer" });
+    await waitUntil(() => runtime.runs.length === 3);
+    assert.equal(runtime.runs[2]?.input.runId, third.turn.id);
+    assert.deepEqual(runtime.runs[2]?.input.limits, {
+      maxRunMs: 600_000,
+      maxToolCalls: 96,
+      maxProviderRounds: 12
+    });
+    await runtime.completeRun(third.turn.id, { answer: "Third answer" });
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("queued turns survive restart while running turns are interrupted", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const queryLog: QueryLog = { definitions: [], calls: [] };
+  const config = { ...testConfig(), agentMaxActiveTurns: 1 };
+  const firstRuntime = new FakeAgentRuntime();
+  const firstService = new AgentService(
+    database,
+    config,
+    firstRuntime,
+    snapshotQueries(queryLog),
+    snapshotGuard([])
+  );
+  let secondService: AgentService | null = null;
+
+  try {
+    const firstChat = await firstService.createChat("spc_test");
+    const secondChat = await firstService.createChat("spc_test");
+    const first = await firstService.sendMessage("spc_test", firstChat.chat.id, "Running answer");
+    const queued = await firstService.sendMessage("spc_test", secondChat.chat.id, "Queued answer", "deep");
+    assert.equal(firstService.getTurn(queued.turn.id).status, "queued");
+
+    await firstService.close();
+    assert.equal(firstService.getTurn(first.turn.id).status, "interrupted");
+    assert.equal(firstService.getTurn(queued.turn.id).status, "queued");
+
+    const secondRuntime = new FakeAgentRuntime();
+    secondService = new AgentService(
+      database,
+      config,
+      secondRuntime,
+      snapshotQueries(queryLog),
+      snapshotGuard([])
+    );
+    await waitUntil(() => secondRuntime.runs.length === 1);
+    assert.equal(secondRuntime.runs[0]?.input.runId, queued.turn.id);
+    assert.equal(secondService.getTurn(queued.turn.id).status, "running");
+    assert.equal(secondRuntime.runs[0]?.input.history.at(-1)?.content, "Queued answer");
+    await secondRuntime.completeRun(queued.turn.id, { answer: "Recovered answer" });
+    assert.equal(secondService.getTurn(queued.turn.id).status, "completed");
+  } finally {
+    await secondService?.close();
+    await firstService.close();
+    database.sqlite.close();
+  }
+});
+
+test("queued turns can be cancelled and retried without consuming runtime capacity", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const service = new AgentService(
+    database,
+    { ...testConfig(), agentMaxActiveTurns: 1 },
+    runtime,
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([])
+  );
+
+  try {
+    const firstChat = await service.createChat("spc_test");
+    const secondChat = await service.createChat("spc_test");
+    const running = await service.sendMessage("spc_test", firstChat.chat.id, "Keep running");
+    const queued = await service.sendMessage("spc_test", secondChat.chat.id, "Try later", "quick");
+
+    await service.interruptTurn("spc_test", secondChat.chat.id, queued.turn.id);
+    assert.equal(service.getTurn(queued.turn.id).status, "interrupted");
+    assert.equal(runtime.interruptCalls.includes(queued.turn.id), false);
+    assert.equal(runtime.runs.length, 1);
+
+    const retried = await service.retryTurn("spc_test", secondChat.chat.id, queued.turn.id);
+    assert.equal(retried.turn.status, "queued");
+    assert.equal(retried.turn.mode, "quick");
+    await runtime.completeRun(running.turn.id, { answer: "Released" });
+    await waitUntil(() => runtime.runs.length === 2);
+    assert.equal(runtime.runs[1]?.input.runId, retried.turn.id);
+    await runtime.completeRun(retried.turn.id, { answer: "Retried" });
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("identical read-only tool calls are memoized within a turn", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const queryLog: QueryLog = { definitions: [], calls: [] };
+  const service = new AgentService(
+    database,
+    testConfig(),
+    runtime,
+    snapshotQueries(queryLog),
+    snapshotGuard([])
+  );
+
+  try {
+    const chat = await service.createChat("spc_test");
+    const sent = await service.sendMessage("spc_test", chat.chat.id, "Find the implementation");
+    const [first, second] = await Promise.all([
+      runtime.requestTool(sent.turn.id, "search_code", { query: "answerQuestion", limit: 5 }),
+      runtime.requestTool(sent.turn.id, "search_code", { limit: 5, query: "answerQuestion" })
+    ]);
+
+    assert.deepEqual(first, second);
+    assert.equal(queryLog.calls.length, 1);
+    await runtime.completeRun(sent.turn.id, { answer: "Done" });
   } finally {
     await service.close();
     database.sqlite.close();
@@ -1506,6 +1680,11 @@ function testConfig(root = "C:\\private"): AppConfig {
     agentProvider: "test-provider",
     agentModel: "test-model",
     agentCredentialPath: path.join(root, "secrets", "agent-credentials.json"),
+    agentMaxRunSeconds: 600,
+    agentMaxToolCalls: 96,
+    agentMaxProviderRounds: 16,
+    agentMaxActiveTurns: 2,
+    agentMaxQueuedTurns: 20,
     snapshotRetentionDefault: 3,
     jobRetentionDaysDefault: 30,
     jobConcurrency: 2,
@@ -1535,5 +1714,13 @@ async function completesWithin<T>(promise: Promise<T>, timeoutMs: number): Promi
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Condition was not met within ${timeoutMs}ms`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
 }

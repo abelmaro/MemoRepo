@@ -219,6 +219,12 @@ export interface AgentStatus {
   authSource: string | null;
   version: string | null;
   message: string | null;
+  capacity?: {
+    active: number;
+    maxActive: number;
+    queued: number;
+    maxQueued: number;
+  };
 }
 
 export interface AgentModelCatalog {
@@ -248,6 +254,8 @@ export interface AgentRunSettings {
   effort?: AgentEffort;
   verbosity?: AgentVerbosity;
 }
+
+export type AgentRunMode = "quick" | "standard" | "deep";
 
 export interface AgentRunMetrics {
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" | null;
@@ -341,11 +349,18 @@ export interface AgentTurn {
   chatId: string;
   userMessageId: string;
   assistantMessageId: string;
-  status: "pending" | "running" | "completed" | "interrupted" | "failed";
+  status: "queued" | "pending" | "running" | "completed" | "interrupted" | "failed";
   error: string | null;
   providerId: string | null;
   modelId: string | null;
+  mode: AgentRunMode;
+  queuePosition: number | null;
   settings: AgentRunSettings;
+  limits: {
+    maxRunSeconds: number;
+    maxToolCalls: number;
+    maxProviderRounds: number;
+  };
   metrics: AgentRunMetrics;
   createdAt: string;
   startedAt: string | null;
@@ -354,6 +369,7 @@ export interface AgentTurn {
 
 export type AgentTurnEvent =
   | { type: "state"; turn: AgentTurn; assistantMessage: AgentMessage }
+  | { type: "turn.started"; turnId: string; turn: AgentTurn }
   | { type: "assistant.delta"; turnId: string; messageId: string; offset: number; delta: string }
   | { type: "tool.started"; turnId: string; tool: string }
   | { type: "tool.completed"; turnId: string; tool: string; success: boolean; sources: AgentSource[] }

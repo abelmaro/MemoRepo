@@ -327,6 +327,55 @@ test("aborts after the configured tool-call budget", async () => {
   await runtime.close();
 });
 
+test("applies stricter per-run tool and provider-round budgets", async () => {
+  const toolEvents = collectEvents();
+  const toolResults: unknown[] = [];
+  const toolAdapter = new FakeAdapter(async (input) => {
+    const request = (requestId: string): AgentToolRequest => ({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      requestId,
+      name: "search_snapshot",
+      arguments: {}
+    });
+    toolResults.push(await input.requestTool(request("tool-1"), input.signal));
+    toolResults.push(await input.requestTool(request("tool-2"), input.signal));
+    if (input.signal.aborted) throw input.signal.reason;
+  });
+  const toolRuntime = new AgentRuntime(toolAdapter, { maxToolCalls: 10 });
+  toolRuntime.startRun(
+    makeRunInput({
+      limits: { maxRunMs: 60_000, maxToolCalls: 1, maxProviderRounds: 8 },
+      onEvent: toolEvents.onEvent
+    })
+  );
+
+  assert.equal((await toolEvents.completed.promise).status, "failed");
+  assert.equal((toolResults[1] as { error?: { code?: string } }).error?.code, "MR-AGENT-TOOL-LIMIT");
+  await toolRuntime.close();
+
+  const roundEvents = collectEvents();
+  const roundAdapter = new FakeAdapter(async (input) => {
+    const usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    await input.onProviderTurn({ stopReason: "toolUse", usage });
+    await input.onProviderTurn({ stopReason: "toolUse", usage });
+    if (input.signal.aborted) throw input.signal.reason;
+  });
+  const roundRuntime = new AgentRuntime(roundAdapter, { maxProviderRounds: 10 });
+  roundRuntime.startRun(
+    makeRunInput({
+      limits: { maxRunMs: 60_000, maxToolCalls: 10, maxProviderRounds: 2 },
+      onEvent: roundEvents.onEvent
+    })
+  );
+
+  const roundCompleted = await roundEvents.completed.promise;
+  assert.equal(roundCompleted.status, "failed");
+  assert.match(roundCompleted.error ?? "", /MR-AGENT-ROUND-LIMIT/);
+  assert.equal(roundCompleted.metrics.providerRoundCount, 2);
+  await roundRuntime.close();
+});
+
 test("logout blocks new runs and login attempts until credential removal settles", async () => {
   const logoutStarted = deferred<void>();
   const finishLogout = deferred<void>();
