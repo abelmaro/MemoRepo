@@ -6,6 +6,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const DEFAULT_EVENT_STREAM_RETRY_MS = 1_000;
 const MIN_EVENT_STREAM_RETRY_MS = 1_000;
 const MAX_EVENT_STREAM_RETRY_MS = 60_000;
+const DASHBOARD_EVENT_STREAM_WATCHDOG_MS = 45_000;
 let inMemoryControlToken: string | null = null;
 
 export interface Space {
@@ -16,6 +17,18 @@ export interface Space {
   snapshot_status: string;
   repository_count?: number;
 }
+
+export interface DashboardResource {
+  type: string;
+  spaceId?: string;
+  jobId?: string;
+  chatId?: string;
+  [key: string]: unknown;
+}
+
+export type DashboardEvent =
+  | { type: "ready"; eventId: string; occurredAt: string; [key: string]: unknown }
+  | { type: "invalidate"; eventId: string; occurredAt: string; resources: DashboardResource[]; [key: string]: unknown };
 
 export interface GitHubRepository {
   id: string;
@@ -511,6 +524,15 @@ export function subscribeToAgentTurnEvents(
   return () => controller.abort();
 }
 
+export function subscribeToDashboardEvents(
+  onEvent: (event: DashboardEvent) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const controller = new AbortController();
+  void streamDashboardEvents(onEvent, onError, controller.signal);
+  return () => controller.abort();
+}
+
 export function fullName(repository: GitHubRepository): string {
   return repository.full_name ?? repository.fullName ?? `${repository.owner}/${repository.name}`;
 }
@@ -631,6 +653,60 @@ async function streamAgentTurnEvents(
   }
 }
 
+async function streamDashboardEvents(
+  onEvent: (event: DashboardEvent) => void,
+  onError: ((error: Error) => void) | undefined,
+  signal: AbortSignal
+): Promise<void> {
+  let retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+  while (!signal.aborted) {
+    const connectionController = new AbortController();
+    const abortConnection = () => connectionController.abort();
+    signal.addEventListener("abort", abortConnection, { once: true });
+    let watchdogId: number | undefined;
+    const touch = () => {
+      retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+      if (watchdogId !== undefined) window.clearTimeout(watchdogId);
+      watchdogId = window.setTimeout(() => connectionController.abort(), DASHBOARD_EVENT_STREAM_WATCHDOG_MS);
+    };
+
+    try {
+      const controlToken = getControlToken();
+      if (!controlToken) {
+        notifyControlUnauthorized();
+        return;
+      }
+      const response = await fetch(`${API_URL}/api/dashboard/events`, {
+        headers: { accept: "text/event-stream", authorization: `Bearer ${controlToken}` },
+        signal: connectionController.signal
+      });
+      if (response.status === 401) {
+        clearControlToken();
+        notifyControlUnauthorized();
+        return;
+      }
+      if (response.status === 429) {
+        retryDelayMs = retryAfterDelayMs(response.headers.get("retry-after"));
+        throw new Error(`Dashboard event stream rate limited; retrying in ${Math.ceil(retryDelayMs / 1_000)} seconds`);
+      }
+      if (!response.ok || !response.body) throw new Error(`Dashboard event stream failed: ${response.status}`);
+      touch();
+      await consumeEventStream<DashboardEvent>(response.body, onEvent, connectionController.signal, touch);
+    } catch (error) {
+      if (!signal.aborted && !connectionController.signal.aborted) {
+        onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    } finally {
+      signal.removeEventListener("abort", abortConnection);
+      if (watchdogId !== undefined) window.clearTimeout(watchdogId);
+    }
+
+    if (signal.aborted) return;
+    await waitForRetry(retryDelayMs, signal);
+    retryDelayMs = Math.min(MAX_EVENT_STREAM_RETRY_MS, retryDelayMs * 2);
+  }
+}
+
 function retryAfterDelayMs(value: string | null, nowMs = Date.now()): number {
   const retryAfter = value?.trim();
   let delayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
@@ -671,7 +747,8 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
 async function consumeEventStream<T>(
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: T) => boolean | void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onActivity?: () => void
 ): Promise<boolean> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -683,6 +760,7 @@ async function consumeEventStream<T>(
       if (chunk.done) {
         return false;
       }
+      onActivity?.();
       buffer += decoder.decode(chunk.value, { stream: true });
 
       let separator = /\r?\n\r?\n/.exec(buffer);

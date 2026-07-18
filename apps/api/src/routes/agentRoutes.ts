@@ -35,7 +35,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.put("/api/agent/model", async (request) => {
     const { providerId, modelId, settings } = modelSelectionBody.parse(request.body);
-    return app.services.agent.selectModel(
+    const result = app.services.agent.selectModel(
       providerId,
       modelId,
       settings
@@ -45,26 +45,33 @@ export async function agentRoutes(app: FastifyInstance) {
           }
         : undefined
     );
+    app.services.dashboardEvents.publish({ type: "agent" }, { type: "system" });
+    return result;
   });
 
   app.post("/api/agent/login", async (_request, reply) => {
     const login = await app.services.agent.startLogin();
+    app.services.dashboardEvents.publish({ type: "agent" }, { type: "system" });
     return reply.code(201).send({ login });
   });
 
   app.get("/api/agent/logins/:loginId", async (request) => {
     const { loginId } = loginParams.parse(request.params);
-    return { login: await app.services.agent.loginStatus(loginId) };
+    const login = await app.services.agent.loginStatus(loginId);
+    if (login.status !== "pending") app.services.dashboardEvents.publish({ type: "agent" }, { type: "system" });
+    return { login };
   });
 
   app.delete("/api/agent/logins/:loginId", async (request, reply) => {
     const { loginId } = loginParams.parse(request.params);
     await app.services.agent.cancelLogin(loginId);
+    app.services.dashboardEvents.publish({ type: "agent" }, { type: "system" });
     return reply.code(204).send();
   });
 
   app.post("/api/agent/logout", async (_request, reply) => {
     await app.services.agent.logout();
+    app.services.dashboardEvents.publish({ type: "agent" }, { type: "system" });
     return reply.code(204).send();
   });
 
@@ -76,7 +83,9 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.post("/api/agent/spaces/:spaceId/chats", async (request, reply) => {
     const { spaceId } = spaceParams.parse(request.params);
-    return reply.code(201).send(await app.services.agent.createChat(spaceId));
+    const result = await app.services.agent.createChat(spaceId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId });
+    return reply.code(201).send(result);
   });
 
   app.get("/api/agent/spaces/:spaceId/chats/:chatId", async (request) => {
@@ -87,29 +96,37 @@ export async function agentRoutes(app: FastifyInstance) {
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/messages", async (request, reply) => {
     const { spaceId, chatId } = chatParams.parse(request.params);
     const { message, mode } = messageBody.parse(request.body);
-    return reply.code(202).send(await app.services.agent.sendMessage(spaceId, chatId, message, mode));
+    const result = await app.services.agent.sendMessage(spaceId, chatId, message, mode);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
+    return reply.code(202).send(result);
   });
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/archive", async (request) => {
     const { spaceId, chatId } = chatParams.parse(request.params);
-    return app.services.agent.archiveChat(spaceId, chatId);
+    const result = await app.services.agent.archiveChat(spaceId, chatId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
+    return result;
   });
 
   app.delete("/api/agent/spaces/:spaceId/chats/:chatId", async (request, reply) => {
     const { spaceId, chatId } = chatParams.parse(request.params);
     await app.services.agent.deleteChat(spaceId, chatId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
     return reply.code(204).send();
   });
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/turns/:turnId/interrupt", async (request, reply) => {
     const { spaceId, chatId, turnId } = turnParams.parse(request.params);
     await app.services.agent.interruptTurn(spaceId, chatId, turnId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
     return reply.code(204).send();
   });
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/turns/:turnId/retry", async (request, reply) => {
     const { spaceId, chatId, turnId } = turnParams.parse(request.params);
-    return reply.code(202).send(await app.services.agent.retryTurn(spaceId, chatId, turnId));
+    const result = await app.services.agent.retryTurn(spaceId, chatId, turnId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
+    return reply.code(202).send(result);
   });
 
   app.get("/api/agent/turns/:turnId/events", async (request, reply) => {

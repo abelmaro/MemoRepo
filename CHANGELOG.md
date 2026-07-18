@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Add capability-aware advanced Ask this Space controls for model verbosity and reasoning effort.
 - Persist per-turn provider stop reasons, token usage, provider round counts, and tool-call counts for answer diagnostics.
+- Add an authenticated dashboard event stream for reactive state invalidation and automatic reconciliation after reconnecting.
 
 ### Changed
 
@@ -19,6 +20,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Use a Docker-managed data volume for new installations while preserving existing bind-mount configurations.
 - Separate heavyweight indexing capacity from interactive snapshot queries and reuse one CBM session across each agent turn.
 - Batch job-log and streamed assistant-content persistence to reduce SQLite contention without delaying live events.
+- Replace idle dashboard polling with selective event-driven refetches while retaining polling for active external authorization flows.
+- Measure the real dashboard event stream separately from normal HTTP latency in performance baseline reports.
 
 ### Fixed
 

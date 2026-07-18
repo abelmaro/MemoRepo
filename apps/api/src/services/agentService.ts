@@ -23,6 +23,7 @@ import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { nowIso } from "../domain/time.js";
 import type { SnapshotQueryService } from "./snapshotQueryService.js";
 import type { SnapshotManifest, SnapshotService } from "./snapshotService.js";
+import type { DashboardEventBus } from "./dashboardEventBus.js";
 
 const MAX_HISTORY_MESSAGES = 100;
 const MAX_HISTORY_BYTES = 192_000;
@@ -206,7 +207,8 @@ export class AgentService {
     private readonly runtime: AgentRuntimePort,
     private readonly snapshotQueries: SnapshotQueryService,
     private readonly snapshots: Pick<SnapshotService, "assertAgentTurnCanStart">,
-    private readonly modelSelection?: AgentModelSelectionPort
+    private readonly modelSelection?: AgentModelSelectionPort,
+    private readonly dashboardEvents?: DashboardEventBus
   ) {
     this.recoverInterruptedTurns();
     this.deleteOrphanedAccountSessions();
@@ -1271,6 +1273,15 @@ export class AgentService {
       } catch {
         this.events.off(eventName, callback);
       }
+    }
+    if (event.type === "turn.started" || event.type === "turn.completed") {
+      const context = this.database.sqlite
+        .prepare("SELECT c.id AS chatId, c.space_id AS spaceId FROM agent_turns t JOIN agent_chats c ON c.id = t.chat_id WHERE t.id = ?")
+        .get(turnId) as { chatId: string; spaceId: string } | undefined;
+      this.dashboardEvents?.publish({
+        type: "agent",
+        ...(context ? { spaceId: context.spaceId, chatId: context.chatId } : {})
+      });
     }
   }
 

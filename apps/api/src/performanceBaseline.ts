@@ -24,7 +24,7 @@ export interface BaselineConfig {
 }
 
 export interface BaselineReport {
-  schemaVersion: 1;
+  schemaVersion: 2;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -121,10 +121,71 @@ interface AgentRunReport {
 }
 
 interface IdleProbeReport {
-  mode: "api-cadence-simulation" | "disabled";
+  mode: "dashboard-event-stream" | "disabled";
   durationMs: number;
-  requests: number;
+  connectionAttempts: number;
+  successfulConnections: number;
+  reconnections: number;
+  handshakeMs: {
+    median: number | null;
+    p95: number | null;
+    max: number | null;
+  };
+  events: {
+    total: number;
+    ready: number;
+    invalidations: number;
+    other: number;
+  };
+  heartbeats: number;
+  streamBytes: number;
   browserPreflightsIncluded: false;
+}
+
+export interface DashboardSseCounts {
+  total: number;
+  ready: number;
+  invalidations: number;
+  other: number;
+  heartbeats: number;
+}
+
+export class DashboardSseParser {
+  private buffered = "";
+  readonly counts: DashboardSseCounts = { total: 0, ready: 0, invalidations: 0, other: 0, heartbeats: 0 };
+
+  push(chunk: string): void {
+    this.buffered += chunk;
+    let boundary = this.buffered.search(/\r?\n\r?\n/);
+    while (boundary >= 0) {
+      const block = this.buffered.slice(0, boundary);
+      const separator = this.buffered.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+      this.buffered = this.buffered.slice(boundary + separator.length);
+      this.consumeBlock(block);
+      boundary = this.buffered.search(/\r?\n\r?\n/);
+    }
+  }
+
+  discardIncompleteFrame(): void {
+    this.buffered = "";
+  }
+
+  private consumeBlock(block: string): void {
+    const lines = block.split(/\r?\n/);
+    if (lines.some((line) => line.startsWith(":"))) this.counts.heartbeats += 1;
+    const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+    const data = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (!data) return;
+    const parsed = parseJson(data);
+    const type = isRecord(parsed) && typeof parsed.type === "string" ? parsed.type : eventName;
+    this.counts.total += 1;
+    if (type === "ready") this.counts.ready += 1;
+    else if (type === "invalidate") this.counts.invalidations += 1;
+    else this.counts.other += 1;
+  }
 }
 
 interface StorageMeasurement {
@@ -308,10 +369,6 @@ class ApiClient {
     }
   }
 
-  requestCount(): number {
-    return this.samples.length;
-  }
-
   summary(): HttpAggregate {
     const grouped = new Map<string, HttpSample[]>();
     for (const sample of this.samples) {
@@ -435,12 +492,12 @@ export async function runPerformanceBaseline(config: BaselineConfig): Promise<Ba
   }
   const ingestionDurationMs = Math.round(performance.now() - ingestionStartedAt);
   const agents = await runAgentScenario(client, spaces[0]!.id, config);
-  const idleProbe = await runIdleProbe(client, spaces[0]!.id, config);
+  const idleProbe = await runIdleProbe(config);
   const storageAfter = await measureStorage(config.storageRoot);
   const finishedAt = new Date();
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
     durationMs: finishedAt.getTime() - startedAt.getTime(),
@@ -608,35 +665,87 @@ function measureTurn(label: string, httpStatus: number, startedAt: number, turn:
   };
 }
 
-async function runIdleProbe(client: ApiClient, spaceId: string, config: BaselineConfig): Promise<IdleProbeReport> {
-  if (config.idleSeconds === 0) return { mode: "disabled", durationMs: 0, requests: 0, browserPreflightsIncluded: false };
-  const schedules = [
-    { intervalMs: 3_000, route: "/api/jobs", path: "/api/jobs" },
-    { intervalMs: 5_000, route: "/api/spaces", path: "/api/spaces" },
-    { intervalMs: 5_000, route: "/api/spaces/:spaceId", path: `/api/spaces/${encodeURIComponent(spaceId)}` },
-    { intervalMs: 10_000, route: "/api/spaces/:spaceId/mcp-connections", path: `/api/spaces/${encodeURIComponent(spaceId)}/mcp-connections` },
-    { intervalMs: 30_000, route: "/api/system", path: "/api/system" }
-  ].map((schedule) => ({ ...schedule, nextAt: performance.now() }));
+async function runIdleProbe(config: BaselineConfig): Promise<IdleProbeReport> {
+  if (config.idleSeconds === 0) return emptyIdleProbe();
   const startedAt = performance.now();
-  const startingRequestCount = client.requestCount();
   const deadline = startedAt + config.idleSeconds * 1_000;
+  const parser = new DashboardSseParser();
+  const handshakeDurations: number[] = [];
+  let connectionAttempts = 0;
+  let successfulConnections = 0;
+  let streamBytes = 0;
+
   while (performance.now() < deadline) {
-    const now = performance.now();
-    const due = schedules.filter((schedule) => schedule.nextAt <= now);
-    if (due.length > 0) {
-      await Promise.all(due.map(async (schedule) => {
-        schedule.nextAt += schedule.intervalMs;
-        await client.required(schedule.route, schedule.path);
-      }));
-      continue;
+    connectionAttempts += 1;
+    const connectedAt = performance.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1, deadline - performance.now()));
+    try {
+      const response = await fetch(`${config.apiUrl}/api/dashboard/events`, {
+        headers: {
+          accept: "text/event-stream",
+          authorization: `Bearer ${config.controlToken}`
+        },
+        signal: controller.signal
+      });
+      handshakeDurations.push(Math.round(performance.now() - connectedAt));
+      if (!response.ok || !response.body) {
+        throw new Error(`Dashboard event stream failed with HTTP ${response.status}`);
+      }
+      successfulConnections += 1;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (performance.now() < deadline) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        streamBytes += chunk.value.byteLength;
+        parser.push(decoder.decode(chunk.value, { stream: true }));
+      }
+      parser.push(decoder.decode());
+    } catch (error) {
+      if (!controller.signal.aborted && performance.now() < deadline) throw error;
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+      parser.discardIncompleteFrame();
     }
-    const nextAt = Math.min(...schedules.map((schedule) => schedule.nextAt), deadline);
-    await sleep(Math.max(10, Math.min(250, nextAt - performance.now())));
+    if (performance.now() < deadline) await sleep(Math.min(100, deadline - performance.now()));
   }
+
   return {
-    mode: "api-cadence-simulation",
+    mode: "dashboard-event-stream",
     durationMs: Math.round(performance.now() - startedAt),
-    requests: client.requestCount() - startingRequestCount,
+    connectionAttempts,
+    successfulConnections,
+    reconnections: Math.max(0, connectionAttempts - 1),
+    handshakeMs: {
+      median: percentile(handshakeDurations, 0.5),
+      p95: percentile(handshakeDurations, 0.95),
+      max: handshakeDurations.length > 0 ? Math.max(...handshakeDurations) : null
+    },
+    events: {
+      total: parser.counts.total,
+      ready: parser.counts.ready,
+      invalidations: parser.counts.invalidations,
+      other: parser.counts.other
+    },
+    heartbeats: parser.counts.heartbeats,
+    streamBytes,
+    browserPreflightsIncluded: false
+  };
+}
+
+function emptyIdleProbe(): IdleProbeReport {
+  return {
+    mode: "disabled",
+    durationMs: 0,
+    connectionAttempts: 0,
+    successfulConnections: 0,
+    reconnections: 0,
+    handshakeMs: { median: null, p95: null, max: null },
+    events: { total: 0, ready: 0, invalidations: 0, other: 0 },
+    heartbeats: 0,
+    streamBytes: 0,
     browserPreflightsIncluded: false
   };
 }

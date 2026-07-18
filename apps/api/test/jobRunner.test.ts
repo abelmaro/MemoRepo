@@ -10,6 +10,32 @@ import { migrate } from "../src/db/migrate.js";
 import { schema } from "../src/db/schema.js";
 import { JOB_EVENT_MESSAGE_MAX_BYTES, JOB_LOG_EVENT_MAX_COUNT, JobRunner } from "../src/services/jobRunner.js";
 import { SpaceService } from "../src/services/spaceService.js";
+import { DashboardEventBus } from "../src/services/dashboardEventBus.js";
+
+test("terminal snapshot jobs invalidate jobs, the space, and snapshots without forwarding logs", async () => {
+  const database = createTestDatabase();
+  const dashboardEvents = new DashboardEventBus(1);
+  const jobs = new JobRunner(database, 1, dashboardEvents);
+  const events: Array<{ resources: Array<{ type: string; jobId?: string; spaceId?: string }> }> = [];
+  dashboardEvents.subscribe((event) => events.push(event));
+  jobs.register("rebuild_space_snapshot", async (_payload, context) => context.log("private operation output"));
+
+  try {
+    const job = jobs.enqueue({ type: "rebuild_space_snapshot", spaceId: "spc_test", payload: { spaceId: "spc_test" } });
+    await waitFor(() => (jobs.getJob(job.id) as { status: string }).status === "succeeded");
+    await waitFor(() => events.some((event) => event.resources.some((resource) => resource.type === "snapshots")));
+    const serialized = JSON.stringify(events);
+    assert.match(serialized, /"type":"jobs"/);
+    assert.match(serialized, /"type":"job","jobId":"[^"]+"/);
+    assert.match(serialized, /"type":"space","spaceId":"spc_test"/);
+    assert.match(serialized, /"type":"snapshots","spaceId":"spc_test"/);
+    assert.equal(serialized.includes("private operation output"), false);
+  } finally {
+    jobs.stop();
+    dashboardEvents.close();
+    database.sqlite.close();
+  }
+});
 
 test("enqueue returns the existing active logical job and releases the key for terminal jobs", () => {
   const database = createTestDatabase();
@@ -249,4 +275,13 @@ async function waitForTerminalJob(database: AppDatabase, jobId: string): Promise
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out waiting for job completion");
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }

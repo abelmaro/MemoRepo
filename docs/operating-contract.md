@@ -120,7 +120,7 @@ A persistent visible user/assistant transcript associated with one provider acco
 ## Runtime Boundaries
 
 Frontend:
-The dashboard calls the API. It does not run shell commands and does not touch repository paths directly.
+The dashboard calls the API. It does not run shell commands and does not touch repository paths directly. After its initial reads, it keeps one authenticated server-sent event stream open for state invalidations and selectively refetches the affected API resources. Reconnection, returning online, and returning to a visible tab trigger a one-time reconciliation from the API. Periodic reads remain only while an external GitHub or agent-provider authorization is actively pending.
 
 API:
 The API is the only component that mutates managed clones, writes SQLite state, runs `git`, invokes `codebase-memory-mcp`, and creates MCP configs.
@@ -216,7 +216,7 @@ MemoRepo is designed for trusted local use. It binds services to localhost throu
 
 The API validates the HTTP hostname and browser origin before routing requests. Browser origins must match the configured dashboard origin, cross-site browser requests are rejected, and POST/PUT/PATCH calls to MemoRepo routes must use a JSON content type. Except for health checks and CORS preflight, `/api` requires `MEMOREPO_CONTROL_TOKEN` as a bearer credential. State-changing `/api` methods also require `X-MemoRepo-CSRF: 1`. Local non-browser clients may omit `Origin`, but still need an allowed API hostname, the bearer credential, and the CSRF header for mutations.
 
-The dashboard stores the control token only in the current tab's `sessionStorage`. It does not place it in URLs, build arguments, generated MCP configs, or API responses, and it does not send it to `/mcp`. That endpoint accepts separate per-connection bearer tokens. Authentication checks, control reads, mutations, SSE handshakes, and MCP calls have separate per-IP rate limits; forwarded IP headers are not trusted.
+The dashboard stores the control token only in the current tab's `sessionStorage`. It does not place it in URLs, build arguments, generated MCP configs, or API responses, and it does not send it to `/mcp`. That endpoint accepts separate per-connection bearer tokens. The dashboard event stream carries only typed invalidation scopes and opaque event metadata; current state remains available from the existing JSON APIs. Authentication checks, control reads, mutations, SSE handshakes, and MCP calls have separate per-IP rate limits; forwarded IP headers are not trusted.
 
 API and dashboard responses set defensive content security, framing, referrer, content-type, and no-store cache policies. MemoRepo creates new private artifacts with a restrictive process umask and applies owner-only directory and database modes when the backing storage supports POSIX permissions. Docker Desktop bind mounts backed by Windows may not expose POSIX mode changes, so host access controls remain part of the local trust boundary.
 

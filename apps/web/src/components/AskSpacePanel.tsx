@@ -133,12 +133,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   const statusQuery = useQuery({
     queryKey: ["agent", "status"],
     queryFn: () => api<AgentStatus>("/api/agent/status"),
-    enabled: open,
-    refetchInterval: (query) => {
-      const capacity = query.state.data?.capacity;
-      if (capacity && capacity.active + capacity.queued > 0) return 3_000;
-      return query.state.data?.connected ? 30_000 : 5_000;
-    }
+    enabled: open
   });
 
   const modelCatalogQuery = useQuery({
@@ -174,9 +169,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
       api<ChatDetail>(
         `/api/agent/spaces/${encodeURIComponent(space!.id)}/chats/${encodeURIComponent(selectedChatId!)}`
       ),
-    enabled: open && Boolean(space && selectedChatId),
-    refetchInterval: (query) =>
-      query.state.data?.turns?.some((turn) => turn.status === "queued") ? 3_000 : false
+    enabled: open && Boolean(space && selectedChatId)
   });
 
   const loginQuery = useQuery({

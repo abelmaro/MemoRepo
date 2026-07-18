@@ -3,6 +3,7 @@ import { AgentRuntime, FileCredentialStore, PiAgentRuntimeAdapter } from "@memor
 import { loadConfig } from "../config.js";
 import { createDatabase } from "../db/connection.js";
 import { AgentService } from "./agentService.js";
+import { DashboardEventBus } from "./dashboardEventBus.js";
 import { CbmService } from "./cbmService.js";
 import { GitService } from "./gitService.js";
 import { GitHubCredentialProvider } from "./githubCredentialProvider.js";
@@ -35,11 +36,12 @@ export function createServices() {
   const github = new GitHubService(database, githubCredentials);
   const git = new GitService(config, githubCredentials);
   const cbm = new CbmService(config);
+  const dashboardEvents = new DashboardEventBus();
   const spaces = new SpaceService(database, config, cbm);
   const snapshots = new SnapshotService(database, config, cbm);
-  const jobs = new JobRunner(database, config.jobConcurrency);
+  const jobs = new JobRunner(database, config.jobConcurrency, dashboardEvents);
   const operations = new OperationsService(database, config, spaces, github, git, cbm, snapshots, jobs);
-  const mcp = new McpGateway(database, config, spaces, cbm);
+  const mcp = new McpGateway(database, config, spaces, cbm, dashboardEvents);
   const snapshotQueries = new SnapshotQueryService(mcp);
   const agentCredentials = new FileCredentialStore(config.agentCredentialPath);
   const agentAdapter = new PiAgentRuntimeAdapter({
@@ -53,7 +55,7 @@ export function createServices() {
     maxToolCalls: config.agentMaxToolCalls,
     maxProviderRounds: config.agentMaxProviderRounds
   });
-  const agent = new AgentService(database, config, agentRuntime, snapshotQueries, snapshots, agentAdapter);
+  const agent = new AgentService(database, config, agentRuntime, snapshotQueries, snapshots, agentAdapter, dashboardEvents);
   const maintenance = new MaintenanceService(database, config);
 
   operations.registerJobHandlers();
@@ -67,6 +69,7 @@ export function createServices() {
     github,
     git,
     cbm,
+    dashboardEvents,
     spaces,
     snapshots,
     jobs,

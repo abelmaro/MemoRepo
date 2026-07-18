@@ -130,7 +130,9 @@ export async function systemRoutes(app: FastifyInstance) {
 
   app.post("/api/maintenance/gc", async (request) => {
     const body = z.object({ jobRetentionDays: z.number().int().min(1).max(3650).optional() }).parse(request.body ?? {});
-    return app.services.maintenance.runGarbageCollection(body.jobRetentionDays);
+    const result = app.services.maintenance.runGarbageCollection(body.jobRetentionDays);
+    app.services.dashboardEvents.publish({ type: "maintenance" }, { type: "jobs" }, { type: "snapshots" });
+    return result;
   });
 }
 
