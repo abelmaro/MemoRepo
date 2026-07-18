@@ -53,6 +53,18 @@ Persistent local state lives under `MEMOREPO_HOME`. Docker Compose uses the `mem
 
 For direct Node development, prefer setting `MEMOREPO_HOME` to a path outside this repository so managed clones, indexes, and SQLite state do not sit next to the source tree.
 
+### Performance baseline
+
+The baseline runner exercises the production API with two spaces, three sequential repository additions per space, an optional three-agent concurrency probe, and an idle control-plane polling sample. It records timings, job counts, usage totals, request aggregates, and storage growth without retaining repository locators, prompts, responses, tool payloads, or managed paths. Reports are written under the operating system temporary directory by default.
+
+Start MemoRepo with an empty `MEMOREPO_HOME`, then run:
+
+```bash
+pnpm perf:baseline -- --repositories owner/one,owner/two,owner/three --include-agents
+```
+
+Use `--idle-seconds 0` for a fast pipeline-only run or `--output <path>` to choose another report location. `MEMOREPO_PERF_REPOSITORIES` can provide the three comma-separated locators without adding them to shell history. The idle sample reproduces the dashboard's core API polling cadence; it does not launch a browser and therefore does not include browser-generated CORS preflights.
+
 ## Ask this Space
 
 Each space includes an optional **Ask this Space** panel. `AgentService` coordinates chats with the in-process `agent-runtime`, whose adapter uses the Pi SDK. Open the panel from the floating launcher, choose an available OAuth-capable provider and model, then complete that provider's authorization flow.
