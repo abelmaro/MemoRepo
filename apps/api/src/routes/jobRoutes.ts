@@ -25,12 +25,16 @@ export async function jobRoutes(app: FastifyInstance) {
 
   app.post("/api/jobs/:jobId/retry", async (request) => {
     const { jobId } = paramsWithJobId.parse(request.params);
-    return { job: app.services.jobs.retryJob(jobId) };
+    const job = app.services.jobs.retryJob(jobId);
+    app.services.dashboardEvents.publish({ type: "jobs" }, { type: "job", jobId });
+    return { job };
   });
 
   app.post("/api/jobs/:jobId/cancel", async (request) => {
     const { jobId } = paramsWithJobId.parse(request.params);
-    return { job: app.services.jobs.cancelJob(jobId) };
+    const job = app.services.jobs.cancelJob(jobId);
+    app.services.dashboardEvents.publish({ type: "jobs" }, { type: "job", jobId });
+    return { job };
   });
 
   app.get("/api/jobs/:jobId/events", async (request, reply) => {

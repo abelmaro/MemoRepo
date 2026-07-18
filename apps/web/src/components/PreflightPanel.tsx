@@ -22,8 +22,7 @@ interface PreflightCheck {
 export function PreflightPanel() {
   const preflightQuery = useQuery({
     queryKey: ["preflight"],
-    queryFn: () => api<PreflightState>("/api/preflight"),
-    refetchInterval: 30000
+    queryFn: () => api<PreflightState>("/api/preflight")
   });
 
   return (

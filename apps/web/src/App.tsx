@@ -16,6 +16,7 @@ import { RemovedRepositoryRow } from "./components/RemovedRepositoryRow";
 import { RepositoryRow } from "./components/RepositoryRow";
 import { StatusStrip } from "./components/StatusStrip";
 import { api, type Job, type Space, type SpaceRepository } from "./lib/api";
+import { useDashboardEvents } from "./lib/dashboardEvents";
 import { matchesRepositoryKind, REPOSITORY_KIND_FILTERS, type RepositoryKindFilter } from "./lib/repositoryKinds";
 import { snapshotStateSummary } from "./lib/snapshotState";
 
@@ -23,6 +24,7 @@ type ManagementView = "activity" | "system" | "settings";
 
 export function App() {
   const queryClient = useQueryClient();
+  useDashboardEvents();
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
@@ -41,8 +43,7 @@ export function App() {
 
   const spacesQuery = useQuery({
     queryKey: ["spaces"],
-    queryFn: () => api<{ spaces: Space[] }>("/api/spaces"),
-    refetchInterval: 5000
+    queryFn: () => api<{ spaces: Space[] }>("/api/spaces")
   });
 
   const selectedSpace = useMemo(() => {
@@ -57,14 +58,12 @@ export function App() {
     queryKey: ["space", selectedSpace?.id],
     queryFn: () =>
       api<{ space: Space; repositories: SpaceRepository[]; removedRepositories: SpaceRepository[] }>(`/api/spaces/${selectedSpace!.id}`),
-    enabled: Boolean(selectedSpace),
-    refetchInterval: 5000
+    enabled: Boolean(selectedSpace)
   });
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
-    queryFn: () => api<{ jobs: Job[] }>("/api/jobs"),
-    refetchInterval: 3000
+    queryFn: () => api<{ jobs: Job[] }>("/api/jobs")
   });
 
   const updateSpaceMutation = useMutation({

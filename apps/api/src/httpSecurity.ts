@@ -150,7 +150,7 @@ function isJobEventPath(pathname: string): boolean {
 }
 
 function isEventStreamPath(pathname: string): boolean {
-  return isJobEventPath(pathname) || /^\/api\/agent\/turns\/[^/]+\/events$/.test(pathname);
+  return pathname === "/api/dashboard/events" || isJobEventPath(pathname) || /^\/api\/agent\/turns\/[^/]+\/events$/.test(pathname);
 }
 
 function bearerCredential(value: string | undefined): string | null {

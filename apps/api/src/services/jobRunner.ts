@@ -6,6 +6,7 @@ import { insertRecord, updateRecord, type SqlValue } from "../db/sql.js";
 import { NotFoundError } from "../domain/errors.js";
 import { createId } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
+import type { DashboardEventBus } from "./dashboardEventBus.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
 
@@ -44,7 +45,8 @@ export class JobRunner {
 
   constructor(
     private readonly database: AppDatabase,
-    private readonly concurrency = 2
+    private readonly concurrency = 2,
+    private readonly dashboardEvents?: DashboardEventBus
   ) {}
 
   register(type: string, handler: JobHandler): void {
@@ -407,6 +409,26 @@ export class JobRunner {
     this.flushLogEvents(jobId);
     insertRecord(this.database, "job_events", record);
     this.events.emit(jobId, record);
+    if (eventType === "status") this.publishJobInvalidation(jobId);
+  }
+
+  private publishJobInvalidation(jobId: string): void {
+    if (!this.dashboardEvents) return;
+    const job = this.database.sqlite.prepare("SELECT space_id AS spaceId, type, status FROM jobs WHERE id = ?").get(jobId) as
+      | { spaceId: string | null; type: string; status: JobStatus }
+      | undefined;
+    const snapshotChanged = Boolean(
+      job?.spaceId &&
+      job.status === "succeeded" &&
+      /snapshot|reindex|repository|checkout/.test(job.type)
+    );
+    this.dashboardEvents.publish(
+      { type: "jobs" },
+      { type: "job", jobId },
+      ...(job?.spaceId ? [{ type: "space" as const, spaceId: job.spaceId }] : []),
+      ...(snapshotChanged ? [{ type: "snapshots" as const, spaceId: job!.spaceId! }] : []),
+      ...(job?.type === "sync_github_repositories" && job.status === "succeeded" ? [{ type: "spaces" as const }] : [])
+    );
   }
 
   private acceptLogEvent(jobId: string): boolean {

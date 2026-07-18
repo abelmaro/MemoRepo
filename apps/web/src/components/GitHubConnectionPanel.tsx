@@ -34,8 +34,7 @@ export function GitHubConnectionPanel({ signInRequest, onSignInRequestHandled }:
 
   const connectionQuery = useQuery({
     queryKey: ["github-auth-status"],
-    queryFn: () => api<GitHubConnectionStatus>("/api/github/auth/status"),
-    refetchInterval: 30_000
+    queryFn: () => api<GitHubConnectionStatus>("/api/github/auth/status")
   });
 
   const diagnosticsQuery = useQuery({

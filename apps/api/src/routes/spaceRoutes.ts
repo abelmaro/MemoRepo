@@ -10,7 +10,9 @@ export async function spaceRoutes(app: FastifyInstance) {
 
   app.post("/api/spaces", async (request) => {
     const body = z.object({ name: z.string().min(1) }).parse(request.body);
-    return { space: app.services.spaces.createSpace(body.name) };
+    const space = app.services.spaces.createSpace(body.name);
+    app.services.dashboardEvents.publish({ type: "spaces" }, { type: "space", spaceId: String(space.id) });
+    return { space };
   });
 
   app.get("/api/spaces/:spaceId", async (request) => {
@@ -28,17 +30,23 @@ export async function spaceRoutes(app: FastifyInstance) {
   app.patch("/api/spaces/:spaceId", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
     const body = z.object({ name: z.string().min(1) }).parse(request.body);
-    return { space: app.services.spaces.renameSpace(spaceId, body.name) };
+    const space = app.services.spaces.renameSpace(spaceId, body.name);
+    app.services.dashboardEvents.publish({ type: "spaces" }, { type: "space", spaceId });
+    return { space };
   });
 
   app.delete("/api/spaces/:spaceId", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
-    return app.services.spaces.deleteSpace(spaceId);
+    const result = app.services.spaces.deleteSpace(spaceId);
+    app.services.dashboardEvents.publish({ type: "spaces" }, { type: "space", spaceId }, { type: "connections", spaceId });
+    return result;
   });
 
   app.delete("/api/spaces/:spaceId/managed-data", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
-    return app.services.spaces.deleteSpaceWithManagedData(spaceId);
+    const result = await app.services.spaces.deleteSpaceWithManagedData(spaceId);
+    app.services.dashboardEvents.publish({ type: "spaces" }, { type: "space", spaceId }, { type: "connections", spaceId });
+    return result;
   });
 
   app.get("/api/spaces/:spaceId/snapshots", async (request) => {
@@ -49,7 +57,9 @@ export async function spaceRoutes(app: FastifyInstance) {
   app.post("/api/spaces/:spaceId/snapshots/prune", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
     const body = z.object({ keepLatest: z.number().int().min(1).max(100).optional() }).parse(request.body ?? {});
-    return app.services.snapshots.pruneSpaceSnapshots(spaceId, body.keepLatest);
+    const result = await app.services.snapshots.pruneSpaceSnapshots(spaceId, body.keepLatest);
+    app.services.dashboardEvents.publish({ type: "snapshots", spaceId }, { type: "space", spaceId }, { type: "maintenance" });
+    return result;
   });
 
   app.get("/api/spaces/:spaceId/repositories", async (request) => {
@@ -75,7 +85,9 @@ export async function spaceRoutes(app: FastifyInstance) {
 
   app.post("/api/spaces/:spaceId/reconcile", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
-    return { reconciliation: app.services.spaces.reconcileSpaceFilesystem(spaceId) };
+    const reconciliation = app.services.spaces.reconcileSpaceFilesystem(spaceId);
+    app.services.dashboardEvents.publish({ type: "space", spaceId });
+    return { reconciliation };
   });
 
   app.delete("/api/space-repositories/:spaceRepositoryId", async (request) => {
@@ -85,7 +97,9 @@ export async function spaceRoutes(app: FastifyInstance) {
 
   app.delete("/api/space-repositories/:spaceRepositoryId/files", async (request) => {
     const { spaceRepositoryId } = paramsWithSpaceRepositoryId.parse(request.params);
-    return app.services.spaces.cleanupSpaceRepositoryFiles(spaceRepositoryId);
+    const result = app.services.spaces.cleanupSpaceRepositoryFiles(spaceRepositoryId);
+    app.services.dashboardEvents.publish({ type: "spaces" });
+    return result;
   });
 
   app.post("/api/space-repositories/:spaceRepositoryId/checkout", async (request) => {
@@ -120,12 +134,16 @@ export async function spaceRoutes(app: FastifyInstance) {
       name: z.string().min(1).default("Local agent"),
       client: z.string().min(1).default("generic")
     }).parse(request.body ?? {});
-    return app.services.mcp.createConnection(spaceId, body.name, body.client);
+    const result = app.services.mcp.createConnection(spaceId, body.name, body.client);
+    app.services.dashboardEvents.publish({ type: "connections", spaceId }, { type: "space", spaceId });
+    return result;
   });
 
   app.delete("/api/mcp-connections/:connectionId", async (request) => {
     const { connectionId } = paramsWithConnectionId.parse(request.params);
-    return app.services.mcp.deleteConnection(connectionId);
+    const result = app.services.mcp.deleteConnection(connectionId);
+    app.services.dashboardEvents.publish({ type: "connections" });
+    return result;
   });
 }
 

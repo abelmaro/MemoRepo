@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   aggregateJobs,
   BaselineInputError,
+  DashboardSseParser,
   parseBaselineArguments,
   type JobMeasurement
 } from "../src/performanceBaseline.js";
@@ -28,6 +29,23 @@ test("performance baseline arguments require exactly three repositories", () => 
   assert.equal(config.idleSeconds, 0);
   assert.equal(config.storageRoot, path.resolve("./managed-data"));
   assert.match(config.outputPath, /memorepo-performance[\\/]baseline-/);
+});
+
+test("dashboard stream parser counts typed events and heartbeat comments across chunks", () => {
+  const parser = new DashboardSseParser();
+  parser.push(": heartbeat\r\n\r\ndata: {\"type\":\"ready\",\"eventId\":\"ignored");
+  parser.push("\"}\n\nevent: invalidate\ndata: {\"eventId\":\"ignored\",\"resources\":[]}\n\n");
+  parser.push("data: {\"type\":\"discarded");
+  parser.discardIncompleteFrame();
+  parser.push("data: {\"type\":\"future-event\",\"optional\":true}\n\n");
+
+  assert.deepEqual(parser.counts, {
+    total: 3,
+    ready: 1,
+    invalidations: 1,
+    other: 1,
+    heartbeats: 1
+  });
 });
 
 test("performance baseline accepts environment-backed repository configuration", () => {

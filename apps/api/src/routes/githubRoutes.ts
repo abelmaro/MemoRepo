@@ -7,22 +7,30 @@ export async function githubRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/github/auth/device", async () => {
-    return app.services.githubOAuth.startDeviceAuthorization();
+    const result = await app.services.githubOAuth.startDeviceAuthorization();
+    app.services.dashboardEvents.publish({ type: "system" }, { type: "preflight" });
+    return result;
   });
 
   app.get("/api/github/auth/device/:attemptId", async (request) => {
     const params = z.object({ attemptId: z.string().min(8).max(128) }).parse(request.params);
-    return app.services.githubOAuth.getDeviceAuthorizationStatus(params.attemptId);
+    const result = await app.services.githubOAuth.getDeviceAuthorizationStatus(params.attemptId);
+    if (result.status !== "pending") {
+      app.services.dashboardEvents.publish({ type: "system" }, { type: "preflight" });
+    }
+    return result;
   });
 
   app.delete("/api/github/auth/device/:attemptId", async (request, reply) => {
     const params = z.object({ attemptId: z.string().min(8).max(128) }).parse(request.params);
     app.services.githubOAuth.cancelDeviceAuthorization(params.attemptId);
+    app.services.dashboardEvents.publish({ type: "system" }, { type: "preflight" });
     return reply.code(204).send();
   });
 
   app.delete("/api/github/auth", async (_request, reply) => {
     app.services.githubOAuth.disconnect();
+    app.services.dashboardEvents.publish({ type: "system" }, { type: "preflight" });
     return reply.code(204).send();
   });
 

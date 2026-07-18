@@ -33,13 +33,11 @@ export function LifecyclePanel({
 
   const snapshotsQuery = useQuery({
     queryKey: ["space-snapshots", space.id],
-    queryFn: () => api<SnapshotListResponse>(`/api/spaces/${space.id}/snapshots`),
-    refetchInterval: 10000
+    queryFn: () => api<SnapshotListResponse>(`/api/spaces/${space.id}/snapshots`)
   });
   const maintenanceQuery = useQuery({
     queryKey: ["maintenance-summary"],
-    queryFn: () => api<MaintenanceSummary>("/api/maintenance/summary"),
-    refetchInterval: 30000
+    queryFn: () => api<MaintenanceSummary>("/api/maintenance/summary")
   });
   const effectiveSnapshotRetention = snapshotRetention ?? snapshotsQuery.data?.defaultRetention ?? 3;
   const effectiveJobRetentionDays = jobRetentionDays ?? maintenanceQuery.data?.defaults.jobRetentionDays ?? 30;

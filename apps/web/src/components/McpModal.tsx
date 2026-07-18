@@ -25,8 +25,7 @@ export function McpModal({ space, onClose }: { space: Space; onClose: () => void
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const connectionsQuery = useQuery({
     queryKey: ["mcp-connections", space.id],
-    queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`),
-    refetchInterval: 5000
+    queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`)
   });
   const mutation = useMutation({
     mutationFn: () =>

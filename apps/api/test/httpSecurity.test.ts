@@ -97,6 +97,7 @@ test("rate limiting isolates request classes and ignores spoofed forwarding head
   app.get("/api/known", async () => ({ ok: true }));
   app.post("/api/mutate", async () => ({ ok: true }));
   app.get("/api/agent/turns/turn_1/events", async () => ({ ok: true }));
+  app.get("/api/dashboard/events", async () => ({ ok: true }));
   app.post("/mcp/example", async () => ({ ok: true }));
   app.options("/api/mutate", async (_request, reply) => reply.code(204).send());
 

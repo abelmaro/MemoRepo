@@ -17,6 +17,7 @@ import {
   snapshotToolWorkflow
 } from "./snapshotAgentInstructions.js";
 import type { SpaceService } from "./spaceService.js";
+import type { DashboardEventBus } from "./dashboardEventBus.js";
 
 const QUERY_GRAPH_MAX_ROWS = SNAPSHOT_QUERY_GRAPH_MAX_ROWS;
 const ENGINE_RESULT_WINDOW = 250;
@@ -74,7 +75,8 @@ export class McpGateway {
     private readonly database: AppDatabase,
     private readonly config: AppConfig,
     private readonly spacesService: SpaceService,
-    private readonly cbm: CbmService
+    private readonly cbm: CbmService,
+    private readonly dashboardEvents?: DashboardEventBus
   ) {}
 
   createConnection(spaceId: string, name: string, client: string) {
@@ -386,6 +388,7 @@ export class McpGateway {
     const lastUsedMs = connection.lastUsedAt ? Date.parse(connection.lastUsedAt) : Number.NaN;
     if (Number.isNaN(lastUsedMs) || Date.now() - lastUsedMs >= LAST_USED_WRITE_INTERVAL_MS) {
       updateRecord(this.database, "mcp_connections", { lastUsedAt: nowIso() }, "id", connection.id);
+      this.dashboardEvents?.publish({ type: "connections", spaceId: connection.spaceId });
     }
 
     return { space, connection };
