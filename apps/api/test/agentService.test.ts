@@ -79,6 +79,9 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
     assert.deepEqual(service.getTurn(sent.turn.id), {
       ...sent.turn,
       status: "completed",
+      phase: "completed",
+      completionReason: "natural",
+      answerQuality: "complete",
       metrics: {
         stopReason: "stop",
         providerRoundCount: 2,
@@ -124,7 +127,7 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
   }
 });
 
-test("agent turns use configurable FIFO capacity and persist mode budgets", async () => {
+test("agent turns use configurable FIFO capacity and one adaptive budget", async () => {
   const database = memoryDatabase();
   seedSpace(database);
   const runtime = new FakeAgentRuntime();
@@ -142,19 +145,19 @@ test("agent turns use configurable FIFO capacity and persist mode budgets", asyn
     const secondChat = await service.createChat("spc_test");
     const thirdChat = await service.createChat("spc_test");
     const fourthChat = await service.createChat("spc_test");
-    const first = await service.sendMessage("spc_test", firstChat.chat.id, "First", "quick");
-    const second = await service.sendMessage("spc_test", secondChat.chat.id, "Second", "standard");
-    const third = await service.sendMessage("spc_test", thirdChat.chat.id, "Third", "deep");
+    const first = await service.sendMessage("spc_test", firstChat.chat.id, "First");
+    const second = await service.sendMessage("spc_test", secondChat.chat.id, "Second");
+    const third = await service.sendMessage("spc_test", thirdChat.chat.id, "Third");
 
     assert.equal(runtime.runs.length, 1);
     assert.equal(runtime.runs[0]?.input.runId, first.turn.id);
     assert.deepEqual(runtime.runs[0]?.input.limits, {
-      maxRunMs: 180_000,
-      maxToolCalls: 12,
-      maxProviderRounds: 3
+      maxRunMs: 600_000,
+      maxToolCalls: 96,
+      maxProviderRounds: 16
     });
-    assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /Answer mode: quick/);
-    assert.equal(service.getTurn(first.turn.id).mode, "quick");
+    assert.match(runtime.runs[0]?.input.systemPrompt ?? "", /Choose the investigation depth dynamically/);
+    assert.equal(service.getTurn(first.turn.id).executionPolicy, "adaptive");
     assert.equal(service.getTurn(second.turn.id).status, "queued");
     assert.equal(service.getTurn(second.turn.id).queuePosition, 1);
     assert.equal(service.getTurn(third.turn.id).queuePosition, 2);
@@ -176,7 +179,7 @@ test("agent turns use configurable FIFO capacity and persist mode budgets", asyn
     assert.deepEqual(runtime.runs[2]?.input.limits, {
       maxRunMs: 600_000,
       maxToolCalls: 96,
-      maxProviderRounds: 12
+      maxProviderRounds: 16
     });
     await runtime.completeRun(third.turn.id, { answer: "Third answer" });
   } finally {
@@ -185,7 +188,7 @@ test("agent turns use configurable FIFO capacity and persist mode budgets", asyn
   }
 });
 
-test("queued turns survive restart while running turns are interrupted", async () => {
+test("queued and running turns survive a controlled restart in submission order", async () => {
   const database = memoryDatabase();
   seedSpace(database);
   const queryLog: QueryLog = { definitions: [], calls: [] };
@@ -204,11 +207,12 @@ test("queued turns survive restart while running turns are interrupted", async (
     const firstChat = await firstService.createChat("spc_test");
     const secondChat = await firstService.createChat("spc_test");
     const first = await firstService.sendMessage("spc_test", firstChat.chat.id, "Running answer");
-    const queued = await firstService.sendMessage("spc_test", secondChat.chat.id, "Queued answer", "deep");
+    const queued = await firstService.sendMessage("spc_test", secondChat.chat.id, "Queued answer");
     assert.equal(firstService.getTurn(queued.turn.id).status, "queued");
 
     await firstService.close();
-    assert.equal(firstService.getTurn(first.turn.id).status, "interrupted");
+    assert.equal(firstService.getTurn(first.turn.id).status, "queued");
+    assert.equal(firstService.getTurn(first.turn.id).phase, "recovering");
     assert.equal(firstService.getTurn(queued.turn.id).status, "queued");
 
     const secondRuntime = new FakeAgentRuntime();
@@ -220,9 +224,14 @@ test("queued turns survive restart while running turns are interrupted", async (
       snapshotGuard([])
     );
     await waitUntil(() => secondRuntime.runs.length === 1);
-    assert.equal(secondRuntime.runs[0]?.input.runId, queued.turn.id);
+    assert.equal(secondRuntime.runs[0]?.input.runId, first.turn.id);
+    assert.equal(secondService.getTurn(first.turn.id).status, "running");
+    assert.equal(secondRuntime.runs[0]?.input.history.at(-1)?.content, "Running answer");
+    await secondRuntime.completeRun(first.turn.id, { answer: "Recovered running answer" });
+    await waitUntil(() => secondRuntime.runs.length === 2);
+    assert.equal(secondRuntime.runs[1]?.input.runId, queued.turn.id);
     assert.equal(secondService.getTurn(queued.turn.id).status, "running");
-    assert.equal(secondRuntime.runs[0]?.input.history.at(-1)?.content, "Queued answer");
+    assert.equal(secondRuntime.runs[1]?.input.history.at(-1)?.content, "Queued answer");
     await secondRuntime.completeRun(queued.turn.id, { answer: "Recovered answer" });
     assert.equal(secondService.getTurn(queued.turn.id).status, "completed");
   } finally {
@@ -232,7 +241,7 @@ test("queued turns survive restart while running turns are interrupted", async (
   }
 });
 
-test("queued turns can be cancelled and retried without consuming runtime capacity", async () => {
+test("queued turns can be cancelled and resumed without consuming runtime capacity", async () => {
   const database = memoryDatabase();
   seedSpace(database);
   const runtime = new FakeAgentRuntime();
@@ -248,7 +257,7 @@ test("queued turns can be cancelled and retried without consuming runtime capaci
     const firstChat = await service.createChat("spc_test");
     const secondChat = await service.createChat("spc_test");
     const running = await service.sendMessage("spc_test", firstChat.chat.id, "Keep running");
-    const queued = await service.sendMessage("spc_test", secondChat.chat.id, "Try later", "quick");
+    const queued = await service.sendMessage("spc_test", secondChat.chat.id, "Try later");
 
     await service.interruptTurn("spc_test", secondChat.chat.id, queued.turn.id);
     assert.equal(service.getTurn(queued.turn.id).status, "interrupted");
@@ -257,7 +266,9 @@ test("queued turns can be cancelled and retried without consuming runtime capaci
 
     const retried = await service.retryTurn("spc_test", secondChat.chat.id, queued.turn.id);
     assert.equal(retried.turn.status, "queued");
-    assert.equal(retried.turn.mode, "quick");
+    assert.equal(retried.turn.id, queued.turn.id);
+    assert.equal(retried.turn.executionPolicy, "adaptive");
+    assert.equal(service.getChat("spc_test", secondChat.chat.id).messages.length, 2);
     await runtime.completeRun(running.turn.id, { answer: "Released" });
     await waitUntil(() => runtime.runs.length === 2);
     assert.equal(runtime.runs[1]?.input.runId, retried.turn.id);
@@ -292,6 +303,125 @@ test("identical read-only tool calls are memoized within a turn", async () => {
     assert.deepEqual(first, second);
     assert.equal(queryLog.calls.length, 1);
     await runtime.completeRun(sent.turn.id, { answer: "Done" });
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("resuming a turn reuses durable tool results without duplicating the transcript", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const queryLog: QueryLog = { definitions: [], calls: [] };
+  const service = new AgentService(
+    database,
+    testConfig(),
+    runtime,
+    snapshotQueries(queryLog),
+    snapshotGuard([])
+  );
+
+  try {
+    const chat = await service.createChat("spc_test");
+    const sent = await service.sendMessage("spc_test", chat.chat.id, "Trace the answer path");
+    const firstResult = await runtime.requestTool(sent.turn.id, "search_code", { query: "answerQuestion" });
+    const firstRun = runtime.runs[0];
+    assert.ok(firstRun);
+    await firstRun.input.onEvent({
+      type: "assistant.delta",
+      runId: sent.turn.id,
+      delta: "The partial trace reaches the indexed service."
+    });
+    await service.interruptTurn("spc_test", chat.chat.id, sent.turn.id);
+
+    const resumed = await service.resumeTurn("spc_test", chat.chat.id, sent.turn.id);
+    await waitUntil(() => runtime.runs.length === 2);
+    assert.equal(resumed.turn.id, sent.turn.id);
+    assert.equal(resumed.userMessage.id, sent.userMessage.id);
+    assert.equal(resumed.assistantMessage.id, sent.assistantMessage.id);
+    assert.equal(service.getChat("spc_test", chat.chat.id).messages.length, 2);
+    assert.match(runtime.runs[1]?.input.systemPrompt ?? "", /Recovered evidence from an earlier attempt/);
+    assert.match(runtime.runs[1]?.input.systemPrompt ?? "", /partial trace reaches the indexed service/i);
+
+    const recoveredResult = await runtime.requestTool(sent.turn.id, "search_code", { query: "answerQuestion" });
+    assert.deepEqual(recoveredResult, firstResult);
+    assert.equal(queryLog.calls.length, 1);
+    await runtime.completeRun(sent.turn.id, { answer: "The resumed trace is complete." });
+    assert.equal(service.getTurn(sent.turn.id).attemptCount, 2);
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("provider failures recover automatically before exposing a resumable terminal failure", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const service = new AgentService(
+    database,
+    testConfig(),
+    runtime,
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([])
+  );
+
+  try {
+    const chat = await service.createChat("spc_test");
+    const sent = await service.sendMessage("spc_test", chat.chat.id, "Recover transiently");
+
+    await runtime.failRun(sent.turn.id);
+    assert.equal(service.getTurn(sent.turn.id).phase, "recovering");
+    await waitUntil(() => runtime.runs.length === 2);
+    await runtime.failRun(sent.turn.id);
+    await waitUntil(() => runtime.runs.length === 3);
+    await runtime.failRun(sent.turn.id);
+
+    const failed = service.getTurn(sent.turn.id);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.attemptCount, 3);
+    assert.equal(failed.completionReason, "provider_failure");
+    assert.equal(failed.answerQuality, "best_effort");
+    assert.equal(failed.resumable, true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 600));
+    assert.equal(runtime.runs.length, 3);
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("a completed best-effort answer can continue on the same logical turn", async () => {
+  const database = memoryDatabase();
+  seedSpace(database);
+  const runtime = new FakeAgentRuntime();
+  const service = new AgentService(
+    database,
+    testConfig(),
+    runtime,
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([])
+  );
+
+  try {
+    const chat = await service.createChat("spc_test");
+    const sent = await service.sendMessage("spc_test", chat.chat.id, "Investigate broadly");
+    await runtime.completeRun(sent.turn.id, {
+      answer: "This is the best supported answer so far.",
+      completionReason: "budget",
+      answerQuality: "best_effort"
+    });
+    assert.equal(service.getTurn(sent.turn.id).answerQuality, "best_effort");
+
+    const continued = await service.resumeTurn("spc_test", chat.chat.id, sent.turn.id);
+    await waitUntil(() => runtime.runs.length === 2);
+    assert.equal(continued.turn.id, sent.turn.id);
+    assert.equal(service.getChat("spc_test", chat.chat.id).messages.length, 2);
+    assert.match(runtime.runs[1]?.input.systemPrompt ?? "", /best supported answer so far/i);
+    await runtime.completeRun(sent.turn.id, { answer: "The extended investigation is complete." });
+    assert.equal(service.getTurn(sent.turn.id).status, "completed");
+    assert.equal(service.getTurn(sent.turn.id).attemptCount, 2);
   } finally {
     await service.close();
     database.sqlite.close();
@@ -918,7 +1048,7 @@ test("runtime history contains only complete turn pairs plus the current user wi
   }
 });
 
-test("service construction recovers orphaned running agent turns", async () => {
+test("service construction automatically resumes orphaned running agent turns", async () => {
   const database = memoryDatabase();
   seedSpace(database);
   seedOrphanedTurn(database);
@@ -932,11 +1062,12 @@ test("service construction recovers orphaned running agent turns", async () => {
   );
 
   try {
-    assert.equal(service.getTurn("atr_orphan").status, "interrupted");
+    await waitUntil(() => runtime.runs.length === 1);
+    assert.equal(service.getTurn("atr_orphan").status, "running");
     const detail = service.getChat("spc_test", "ach_orphan");
-    assert.equal(detail.messages[1]?.status, "interrupted");
-    assert.notEqual(detail.messages[1]?.completedAt, null);
-    assert.equal(detail.chat.activeTurnId, null);
+    assert.equal(detail.messages[1]?.status, "running");
+    assert.equal(detail.messages[1]?.completedAt, null);
+    assert.equal(detail.chat.activeTurnId, "atr_orphan");
   } finally {
     await service.close();
     database.sqlite.close();
@@ -1349,7 +1480,12 @@ class FakeAgentRuntime implements AgentRuntimePort {
 
   async completeRun(
     runId: string,
-    options: { answer: string; tool?: { name: string; arguments: Record<string, JsonValue> } }
+    options: {
+      answer: string;
+      tool?: { name: string; arguments: Record<string, JsonValue> };
+      completionReason?: "natural" | "budget" | "no_progress";
+      answerQuality?: "complete" | "best_effort";
+    }
   ): Promise<void> {
     const run = this.run(runId);
     assert.equal(run.finished, false);
@@ -1392,13 +1528,32 @@ class FakeAgentRuntime implements AgentRuntimePort {
         lengthStopCount: 0,
         toolCallCount: options.tool ? 1 : 0,
         usage: { input: 120, output: 50, reasoning: 20, cacheRead: 10, cacheWrite: 0, total: 200 }
-      }
+      },
+      completionReason: options.completionReason ?? "natural",
+      answerQuality: options.answerQuality ?? "complete",
+      resumable: false
+    });
+  }
+
+  async failRun(runId: string): Promise<void> {
+    const run = this.run(runId);
+    assert.equal(run.finished, false);
+    run.finished = true;
+    await run.input.onEvent({
+      type: "run.completed",
+      runId,
+      status: "failed",
+      error: "Agent run failed",
+      metrics: emptyRunMetrics(),
+      completionReason: "provider_failure",
+      answerQuality: "best_effort",
+      resumable: true
     });
   }
 
   async interrupt(runId: string): Promise<void> {
     this.interruptCalls.push(runId);
-    const run = this.runs.find((candidate) => candidate.input.runId === runId);
+    const run = [...this.runs].reverse().find((candidate) => candidate.input.runId === runId && !candidate.finished);
     if (!run || run.finished) return;
     run.controller.abort(new Error("Agent run interrupted"));
     await Promise.allSettled([...(this.activeToolRequests.get(runId) ?? [])]);
@@ -1408,7 +1563,10 @@ class FakeAgentRuntime implements AgentRuntimePort {
       runId,
       status: "interrupted",
       error: null,
-      metrics: emptyRunMetrics()
+      metrics: emptyRunMetrics(),
+      completionReason: "cancelled",
+      answerQuality: "best_effort",
+      resumable: true
     });
   }
 
@@ -1419,7 +1577,7 @@ class FakeAgentRuntime implements AgentRuntimePort {
   }
 
   private run(runId: string): FakeRun {
-    const run = this.runs.find((candidate) => candidate.input.runId === runId);
+    const run = [...this.runs].reverse().find((candidate) => candidate.input.runId === runId && !candidate.finished);
     if (!run) throw new Error("Fake agent run not found: " + runId);
     return run;
   }
@@ -1594,8 +1752,10 @@ function seedOrphanedTurn(database: AppDatabase): void {
   database.sqlite
     .prepare(
       `INSERT INTO agent_turns
-        (id, chat_id, user_message_id, assistant_message_id, status, error, created_at, started_at, finished_at)
-       VALUES ('atr_orphan', 'ach_orphan', 'agm_orphan_user', 'agm_orphan_assistant', 'running', NULL, ?, ?, NULL)`
+        (id, chat_id, user_message_id, assistant_message_id, status, error, provider_id, model_id,
+         execution_policy, phase, created_at, started_at, finished_at)
+       VALUES ('atr_orphan', 'ach_orphan', 'agm_orphan_user', 'agm_orphan_assistant', 'running', NULL,
+         'test-provider', 'test-model', 'adaptive', 'researching', ?, ?, NULL)`
     )
     .run(at, at);
 }

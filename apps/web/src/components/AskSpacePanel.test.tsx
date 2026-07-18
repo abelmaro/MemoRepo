@@ -390,7 +390,7 @@ it("streams an answer into the persistent assistant message", async () => {
 
   renderPanel();
   fireEvent.click(await screen.findByRole("button", { name: /New chat/i }));
-  fireEvent.change(await screen.findByLabelText("Answer mode"), { target: { value: "deep" } });
+  expect(screen.queryByLabelText("Answer mode")).toBeNull();
   const textarea = await screen.findByLabelText("Message to agent");
   fireEvent.change(textarea, { target: { value: "Explain the flow" } });
   fireEvent.click(screen.getByRole("button", { name: "Send message" }));
@@ -398,7 +398,7 @@ it("streams an answer into the persistent assistant message", async () => {
   await waitFor(() =>
     expect(apiMock).toHaveBeenCalledWith(
       "/api/agent/spaces/space_1/chats/chat_1/messages",
-      { method: "POST", body: JSON.stringify({ message: "Explain the flow", mode: "deep" }) }
+      { method: "POST", body: JSON.stringify({ message: "Explain the flow" }) }
     )
   );
 
@@ -439,7 +439,7 @@ it("shows queue capacity and lets a queued answer be cancelled", async () => {
         chat,
         messages: [
           {
-            id: "message_user", sequence: 1, role: "user", status: "completed", content: "Deep question",
+            id: "message_user", sequence: 1, role: "user", status: "completed", content: "Queued question",
             sources: [], error: null, createdAt, completedAt: createdAt
           },
           {
@@ -449,8 +449,10 @@ it("shows queue capacity and lets a queued answer be cancelled", async () => {
         ],
         turns: [{
           id: "turn_queued", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
-          status: "queued", error: null, providerId: "example", modelId: "example-model", mode: "deep",
-          queuePosition: 2, settings: {}, limits: { maxRunSeconds: 600, maxToolCalls: 96, maxProviderRounds: 12 },
+          status: "queued", error: null, providerId: "example", modelId: "example-model",
+          executionPolicy: "adaptive", phase: "queued", completionReason: null, answerQuality: null,
+          resumable: false, attemptCount: 0, queuePosition: 2, settings: {},
+          limits: { maxRunSeconds: 1800, maxToolCalls: 200, maxProviderRounds: 50 },
           metrics: null, createdAt, startedAt: null, finishedAt: null
         }]
       });
@@ -468,6 +470,54 @@ it("shows queue capacity and lets a queued answer be cancelled", async () => {
   await waitFor(() =>
     expect(apiMock).toHaveBeenCalledWith(
       "/api/agent/spaces/space_1/chats/chat_queued/turns/turn_queued/interrupt",
+      { method: "POST", body: "{}" }
+    )
+  );
+});
+
+it("continues a best-effort answer on the same turn", async () => {
+  const chat = { ...chatFixture("chat_best_effort", "Broad investigation"), messageCount: 2 };
+  const createdAt = chat.createdAt;
+  const turn = {
+    id: "turn_best_effort", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+    status: "completed", error: null, providerId: "example", modelId: "example-model",
+    executionPolicy: "adaptive", phase: "completed", completionReason: "budget", answerQuality: "best_effort",
+    resumable: false, attemptCount: 1, queuePosition: null, settings: {},
+    limits: { maxRunSeconds: 1800, maxToolCalls: 200, maxProviderRounds: 50 },
+    metrics: null, createdAt, startedAt: createdAt, finishedAt: createdAt
+  };
+  const userMessage = {
+    id: "message_user", sequence: 1, role: "user", status: "completed", content: "Investigate broadly",
+    sources: [], error: null, createdAt, completedAt: createdAt
+  };
+  const assistantMessage = {
+    id: "message_assistant", sequence: 2, role: "assistant", status: "completed", content: "Supported so far.",
+    sources: [], error: null, createdAt, completedAt: createdAt
+  };
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("example", "Example AI", "example-model", "Example Model"));
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_best_effort" && !init) {
+      return Promise.resolve({ chat, messages: [userMessage, assistantMessage], turns: [turn] });
+    }
+    if (path.endsWith("/turns/turn_best_effort/resume") && init?.method === "POST") {
+      return Promise.resolve({
+        turn: { ...turn, status: "queued", phase: "recovering", completionReason: null, answerQuality: null, finishedAt: null },
+        userMessage,
+        assistantMessage: { ...assistantMessage, status: "pending", content: "", completedAt: null }
+      });
+    }
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Broad investigation/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "Continue investigating" }));
+
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_best_effort/turns/turn_best_effort/resume",
       { method: "POST", body: "{}" }
     )
   );

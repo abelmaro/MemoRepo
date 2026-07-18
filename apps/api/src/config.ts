@@ -119,9 +119,9 @@ export function loadConfig(): AppConfig {
     agentCredentialPath: absolutePath(
       process.env.MEMOREPO_AGENT_CREDENTIAL_FILE ?? path.join(secretsDir, "agent-credentials.json")
     ),
-    agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 600),
-    agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 96),
-    agentMaxProviderRounds: positiveIntEnv("MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS", 16),
+    agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 1_800),
+    agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 200),
+    agentMaxProviderRounds: positiveIntEnv("MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS", 50),
     agentMaxActiveTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_ACTIVE_TURNS", 2),
     agentMaxQueuedTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_QUEUED_TURNS", 20),
     snapshotRetentionDefault: positiveIntEnv("MEMOREPO_SNAPSHOT_RETENTION", 3),

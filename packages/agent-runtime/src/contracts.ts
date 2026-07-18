@@ -24,7 +24,17 @@ export interface AgentRunLimits {
   maxRunMs: number;
   maxToolCalls: number;
   maxProviderRounds: number;
+  finalizationReserveMs: number;
+  finalizationReserveToolCalls: number;
+  finalizationReserveProviderRounds: number;
+  maxNoProgressRounds: number;
+  maxRepeatedToolCalls: number;
+  maxConsecutiveToolErrors: number;
 }
+
+export type AgentRunPhase = "researching" | "finalizing" | "recovering";
+export type AgentRunCompletionReason = "natural" | "budget" | "no_progress" | "cancelled" | "provider_failure";
+export type AgentAnswerQuality = "complete" | "best_effort";
 
 export type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -64,6 +74,12 @@ export type AgentToolResult =
 
 export type AgentRuntimeEvent =
   | { type: "run.started"; runId: string }
+  | {
+      type: "run.phase_changed";
+      runId: string;
+      phase: AgentRunPhase;
+      reason: AgentRunCompletionReason | null;
+    }
   | { type: "assistant.delta"; runId: string; delta: string }
   | { type: "tool.started"; runId: string; requestId: string; name: string }
   | { type: "tool.completed"; runId: string; requestId: string; name: string; success: boolean }
@@ -73,6 +89,9 @@ export type AgentRuntimeEvent =
       status: "completed" | "interrupted" | "failed";
       error: string | null;
       metrics: AgentRunMetrics;
+      completionReason: AgentRunCompletionReason;
+      answerQuality: AgentAnswerQuality;
+      resumable: boolean;
     };
 
 export interface AgentProviderStatus {

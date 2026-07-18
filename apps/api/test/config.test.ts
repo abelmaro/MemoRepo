@@ -46,9 +46,9 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     const unconfiguredAgent = loadConfig();
     assert.equal(unconfiguredAgent.agentProvider, "");
     assert.equal(unconfiguredAgent.agentModel, "");
-    assert.equal(unconfiguredAgent.agentMaxRunSeconds, 600);
-    assert.equal(unconfiguredAgent.agentMaxToolCalls, 96);
-    assert.equal(unconfiguredAgent.agentMaxProviderRounds, 16);
+    assert.equal(unconfiguredAgent.agentMaxRunSeconds, 1_800);
+    assert.equal(unconfiguredAgent.agentMaxToolCalls, 200);
+    assert.equal(unconfiguredAgent.agentMaxProviderRounds, 50);
     assert.equal(unconfiguredAgent.agentMaxActiveTurns, 2);
     assert.equal(unconfiguredAgent.agentMaxQueuedTurns, 20);
     assert.equal(unconfiguredAgent.cbmIndexConcurrency, 1);

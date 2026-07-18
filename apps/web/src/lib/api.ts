@@ -268,8 +268,6 @@ export interface AgentRunSettings {
   verbosity?: AgentVerbosity;
 }
 
-export type AgentRunMode = "quick" | "standard" | "deep";
-
 export interface AgentRunMetrics {
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" | null;
   providerRoundCount: number;
@@ -366,7 +364,12 @@ export interface AgentTurn {
   error: string | null;
   providerId: string | null;
   modelId: string | null;
-  mode: AgentRunMode;
+  executionPolicy: "adaptive" | "legacy" | string;
+  phase: "queued" | "researching" | "finalizing" | "recovering" | "completed" | "interrupted" | "failed";
+  completionReason: "natural" | "budget" | "no_progress" | "cancelled" | "provider_failure" | null;
+  answerQuality: "complete" | "best_effort" | null;
+  resumable: boolean;
+  attemptCount: number;
   queuePosition: number | null;
   settings: AgentRunSettings;
   limits: {
@@ -383,6 +386,7 @@ export interface AgentTurn {
 export type AgentTurnEvent =
   | { type: "state"; turn: AgentTurn; assistantMessage: AgentMessage }
   | { type: "turn.started"; turnId: string; turn: AgentTurn }
+  | { type: "turn.phase_changed"; turnId: string; phase: string; reason: string | null }
   | { type: "assistant.delta"; turnId: string; messageId: string; offset: number; delta: string }
   | { type: "tool.started"; turnId: string; tool: string }
   | { type: "tool.completed"; turnId: string; tool: string; success: boolean; sources: AgentSource[] }
@@ -392,6 +396,9 @@ export type AgentTurnEvent =
       status: "completed" | "interrupted" | "failed";
       error: string | null;
       metrics: AgentRunMetrics;
+      completionReason: string;
+      answerQuality: string;
+      resumable: boolean;
     };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

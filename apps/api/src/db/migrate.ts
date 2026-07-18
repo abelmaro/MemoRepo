@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 interface Migration {
   version: number;
@@ -18,6 +18,7 @@ const migrations: Migration[] = [
   { version: 8, up: addSnapshotSizes },
   { version: 9, up: addAgentQueueAndModes },
   { version: 10, up: addAgentSubmissionSequence },
+  { version: 11, up: addAdaptiveAgentRuns },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -358,6 +359,74 @@ function addAgentSubmissionSequence(sqlite: Database.Database): void {
       ON agent_turns(submission_sequence);
     CREATE INDEX agent_turns_queue_created_idx
       ON agent_turns(status, submission_sequence);
+  `);
+}
+
+function addAdaptiveAgentRuns(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma("table_info(agent_turns)") as Array<{ name: string }>).map((column) => column.name)
+  );
+  const addColumn = (name: string, definition: string) => {
+    if (!columns.has(name)) sqlite.exec(`ALTER TABLE agent_turns ADD COLUMN ${definition};`);
+  };
+  addColumn("execution_policy", "execution_policy TEXT NOT NULL DEFAULT 'legacy'");
+  addColumn("phase", "phase TEXT NOT NULL DEFAULT 'queued'");
+  addColumn("completion_reason", "completion_reason TEXT");
+  addColumn("answer_quality", "answer_quality TEXT");
+  addColumn("resumable", "resumable INTEGER NOT NULL DEFAULT 0");
+  addColumn("attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0");
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS agent_turn_attempts (
+      id TEXT PRIMARY KEY,
+      turn_id TEXT NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+      attempt_number INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      assistant_content TEXT NOT NULL DEFAULT '',
+      sources_json TEXT NOT NULL DEFAULT '[]',
+      stop_reason TEXT,
+      provider_round_count INTEGER NOT NULL DEFAULT 0,
+      length_stop_count INTEGER NOT NULL DEFAULT 0,
+      tool_call_count INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      UNIQUE(turn_id, attempt_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_turn_attempts_turn_idx
+      ON agent_turn_attempts(turn_id, attempt_number DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_tool_cache (
+      cache_key TEXT PRIMARY KEY,
+      snapshot_id TEXT NOT NULL REFERENCES space_snapshots(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      arguments_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      sources_json TEXT NOT NULL DEFAULT '[]',
+      result_bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_tool_cache_snapshot_lru_idx
+      ON agent_tool_cache(snapshot_id, last_used_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_turn_tool_results (
+      turn_id TEXT NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+      cache_key TEXT NOT NULL REFERENCES agent_tool_cache(cache_key) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      PRIMARY KEY(turn_id, cache_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_turn_tool_results_turn_sequence_idx
+      ON agent_turn_tool_results(turn_id, sequence);
   `);
 }
 

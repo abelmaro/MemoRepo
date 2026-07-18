@@ -7,11 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-18
+
 ### Added
 
 - Add capability-aware advanced Ask this Space controls for model verbosity and reasoning effort.
 - Persist per-turn provider stop reasons, token usage, provider round counts, and tool-call counts for answer diagnostics.
 - Add an authenticated dashboard event stream for reactive state invalidation and automatic reconciliation after reconnecting.
+- Add durable per-attempt recovery and a size-bounded, snapshot-scoped cache for successful read-only tool results.
 
 ### Changed
 
@@ -22,12 +25,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Batch job-log and streamed assistant-content persistence to reduce SQLite contention without delaying live events.
 - Replace idle dashboard polling with selective event-driven refetches while retaining polling for active external authorization flows.
 - Measure the real dashboard event stream separately from normal HTTP latency in performance baseline reports.
+- Replace Quick, Standard, and Deep answer modes with one adaptive investigation policy that chooses depth from the question and evidence.
+- Raise the default internal safety ceilings to 1,800 seconds, 200 tool calls, and 50 provider rounds while reserving capacity for final synthesis.
 
 ### Fixed
 
 - Avoid synchronous recursive size scans on repeated snapshot-list requests by persisting snapshot artifact sizes and backfilling legacy rows asynchronously.
 - Skip redundant clean Git checkouts and repairs when a managed clone already matches its selected remote commit.
 - Reclaim content-addressed revision trees after their last retained snapshot reference is removed and garbage collection runs.
+- Preserve collected evidence across provider failures and API restarts, automatically retry transient failures, and resume exhausted or interrupted answers on the same logical turn.
+- Finalize with the best supported answer when research reaches a soft budget or stops making progress instead of exposing a terminal limit error.
 
 ## [0.3.0] - 2026-07-16
 
@@ -227,7 +234,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/abelmaro/MemoRepo/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abelmaro/MemoRepo/compare/v0.1.9...v0.2.0

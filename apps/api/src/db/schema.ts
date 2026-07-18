@@ -255,9 +255,15 @@ export const agentTurns = sqliteTable(
     effort: text("effort"),
     verbosity: text("verbosity"),
     mode: text("mode").notNull().default("standard"),
-    maxRunSeconds: integer("max_run_seconds").notNull().default(360),
-    maxToolCalls: integer("max_tool_calls").notNull().default(32),
-    maxProviderRounds: integer("max_provider_rounds").notNull().default(6),
+    executionPolicy: text("execution_policy").notNull().default("legacy"),
+    phase: text("phase").notNull().default("queued"),
+    completionReason: text("completion_reason"),
+    answerQuality: text("answer_quality"),
+    resumable: integer("resumable", { mode: "boolean" }).notNull().default(false),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxRunSeconds: integer("max_run_seconds").notNull().default(1800),
+    maxToolCalls: integer("max_tool_calls").notNull().default(200),
+    maxProviderRounds: integer("max_provider_rounds").notNull().default(50),
     submissionSequence: integer("submission_sequence").notNull().default(0),
     stopReason: text("stop_reason"),
     providerRoundCount: integer("provider_round_count").notNull().default(0),
@@ -283,6 +289,72 @@ export const agentTurns = sqliteTable(
   ]
 );
 
+export const agentTurnAttempts = sqliteTable(
+  "agent_turn_attempts",
+  {
+    id: text("id").primaryKey(),
+    turnId: text("turn_id")
+      .notNull()
+      .references(() => agentTurns.id, { onDelete: "cascade" }),
+    attemptNumber: integer("attempt_number").notNull(),
+    status: text("status").notNull(),
+    error: text("error"),
+    assistantContent: text("assistant_content").notNull().default(""),
+    sourcesJson: text("sources_json").notNull().default("[]"),
+    stopReason: text("stop_reason"),
+    providerRoundCount: integer("provider_round_count").notNull().default(0),
+    lengthStopCount: integer("length_stop_count").notNull().default(0),
+    toolCallCount: integer("tool_call_count").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at")
+  },
+  (table) => [
+    uniqueIndex("agent_turn_attempts_turn_number_unique").on(table.turnId, table.attemptNumber),
+    index("agent_turn_attempts_turn_idx").on(table.turnId, table.attemptNumber)
+  ]
+);
+
+export const agentToolCache = sqliteTable(
+  "agent_tool_cache",
+  {
+    cacheKey: text("cache_key").primaryKey(),
+    snapshotId: text("snapshot_id")
+      .notNull()
+      .references(() => spaceSnapshots.id, { onDelete: "cascade" }),
+    toolName: text("tool_name").notNull(),
+    argumentsJson: text("arguments_json").notNull(),
+    resultJson: text("result_json").notNull(),
+    sourcesJson: text("sources_json").notNull().default("[]"),
+    resultBytes: integer("result_bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+    lastUsedAt: text("last_used_at").notNull()
+  },
+  (table) => [index("agent_tool_cache_snapshot_lru_idx").on(table.snapshotId, table.lastUsedAt)]
+);
+
+export const agentTurnToolResults = sqliteTable(
+  "agent_turn_tool_results",
+  {
+    turnId: text("turn_id")
+      .notNull()
+      .references(() => agentTurns.id, { onDelete: "cascade" }),
+    cacheKey: text("cache_key")
+      .notNull()
+      .references(() => agentToolCache.cacheKey, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull()
+  },
+  (table) => [
+    primaryKey({ columns: [table.turnId, table.cacheKey] }),
+    index("agent_turn_tool_results_turn_sequence_idx").on(table.turnId, table.sequence)
+  ]
+);
+
 export const databaseTables = {
   spaces,
   github_oauth_credentials: githubOauthCredentials,
@@ -297,7 +369,10 @@ export const databaseTables = {
   agent_account_sessions: agentAccountSessions,
   agent_chats: agentChats,
   agent_messages: agentMessages,
-  agent_turns: agentTurns
+  agent_turns: agentTurns,
+  agent_turn_attempts: agentTurnAttempts,
+  agent_tool_cache: agentToolCache,
+  agent_turn_tool_results: agentTurnToolResults
 } as const;
 
 export const schema = {
@@ -314,7 +389,10 @@ export const schema = {
   agentAccountSessions,
   agentChats,
   agentMessages,
-  agentTurns
+  agentTurns,
+  agentTurnAttempts,
+  agentToolCache,
+  agentTurnToolResults
 };
 
 export type DatabaseTableName = keyof typeof databaseTables;

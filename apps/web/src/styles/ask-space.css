@@ -859,31 +859,11 @@
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "mode mode" "message action" "meta meta";
+  grid-template-areas: "message action" "meta meta";
   gap: var(--space-8);
   padding: var(--space-10) var(--space-12) var(--space-12);
   border-top: var(--border-width-default) solid var(--color-border-subtle);
   background: var(--color-surface-primary);
-}
-
-.ask-space-mode-select {
-  grid-area: mode;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-8);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-caption);
-}
-
-.ask-space-mode-select select {
-  min-width: 112px;
-  padding: var(--space-5) var(--space-8);
-  border: var(--border-width-default) solid var(--color-control-border);
-  border-radius: var(--radius-md);
-  background: var(--color-control-background);
-  color: var(--color-text-primary);
-  font: inherit;
 }
 
 .ask-space-capacity {

@@ -132,17 +132,15 @@ The connection button remains disabled until you accept the data disclosure. Que
 
 The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or running answer is active. Open **Advanced** to change verbosity or reasoning effort when the selected model supports them; unsupported controls are omitted. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
 
-Choose **Quick** for a narrow lookup, **Standard** for the normal balance, or **Deep** for a broad investigation. Each mode supplies its own runtime, tool-call, provider-round, effort, verbosity, and response guidance within the global ceilings configured by `MEMOREPO_AGENT_MAX_RUN_SECONDS`, `MEMOREPO_AGENT_MAX_TOOL_CALLS`, and `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS`. Limit failures include the stable codes `MR-AGENT-TIME-LIMIT`, `MR-AGENT-TOOL-LIMIT`, or `MR-AGENT-ROUND-LIMIT`.
+Ask the question directly; there is no research-mode selector. The agent chooses the investigation depth from the question and available evidence, stops naturally when the answer is supported, and reserves part of its budget to synthesize a response. `MEMOREPO_AGENT_MAX_RUN_SECONDS`, `MEMOREPO_AGENT_MAX_TOOL_CALLS`, and `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS` are high internal safety ceilings rather than user-facing quality modes. The defaults are 1,800 seconds, 200 tool calls, and 50 provider rounds.
 
-- **Quick:** up to 180 seconds, 12 tool calls, and 3 provider rounds, with low effort and a concise response target.
-- **Standard:** up to 360 seconds, 32 tool calls, and 6 provider rounds, with balanced effort and detail. This is the default.
-- **Deep:** up to 600 seconds, 96 tool calls, and 12 provider rounds, with high effort for broad or conflicting evidence.
+By default, two answers run at once and up to twenty more wait in a durable FIFO queue. The panel shows current capacity and queue position. You can cancel a queued or running answer. A transient provider failure is retried automatically up to three total attempts; if recovery is exhausted, **Resume** continues the same logical turn. A best-effort answer offers **Continue investigating**. Both paths reuse successful tool results from the pinned snapshot and keep the original two transcript messages.
 
-By default, two answers run at once and up to twenty more wait in a durable FIFO queue. The panel shows current capacity and queue position. You can cancel a queued or running answer and retry a failed or interrupted one. Waiting answers survive an API restart; an answer that was running during shutdown is marked interrupted.
+Waiting and active answers survive an API restart. An answer that was running resumes from its recorded attempts and cached evidence once the matching provider is available.
 
 Chats are read-only, are pinned to the active immutable snapshot at creation time, and remain visible after signing out. If a pinned snapshot is pruned, its transcript remains readable but can no longer be continued.
 
-Every turn records its final provider stop reason, provider round count, tool-call count, and token totals. These diagnostics help distinguish a naturally concise answer from provider length termination or a bounded investigation; raw reasoning and tool payloads are not retained.
+Every turn records its completion reason, answer quality, attempt count, final provider stop reason, provider round count, tool-call count, and token totals. Raw model reasoning is not retained. Successful bounded read-only tool results are cached separately by immutable snapshot for recovery and are deleted with that snapshot.
 
 Each snapshot indexes exact-commit trees stored in MemoRepo's content-addressed immutable source store. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot, while unchanged commits avoid another full source copy.
 

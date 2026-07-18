@@ -3,6 +3,7 @@ import type {
   AgentLoginAttempt,
   AgentProviderStatus,
   AgentProviderTurnObservation,
+  AgentRunCompletionReason,
   AgentRunInput,
   AgentRunMetrics,
   AgentRuntimeEvent,
@@ -19,11 +20,23 @@ export interface AgentRuntimeOptions {
   maxRunMs?: number;
   maxToolCalls?: number;
   maxProviderRounds?: number;
+  finalizationReserveMs?: number;
+  finalizationReserveToolCalls?: number;
+  finalizationReserveProviderRounds?: number;
+  maxNoProgressRounds?: number;
+  maxRepeatedToolCalls?: number;
+  maxConsecutiveToolErrors?: number;
 }
 
-const DEFAULT_MAX_RUN_MS = 600_000;
-const DEFAULT_MAX_TOOL_CALLS = 96;
-const DEFAULT_MAX_PROVIDER_ROUNDS = 16;
+const DEFAULT_MAX_RUN_MS = 1_800_000;
+const DEFAULT_MAX_TOOL_CALLS = 200;
+const DEFAULT_MAX_PROVIDER_ROUNDS = 50;
+const DEFAULT_FINALIZATION_RESERVE_MS = 180_000;
+const DEFAULT_FINALIZATION_RESERVE_TOOL_CALLS = 20;
+const DEFAULT_FINALIZATION_RESERVE_PROVIDER_ROUNDS = 5;
+const DEFAULT_MAX_NO_PROGRESS_ROUNDS = 4;
+const DEFAULT_MAX_REPEATED_TOOL_CALLS = 3;
+const DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
 export class AgentRuntime {
   private readonly runs = new Map<string, ActiveRun>();
@@ -38,11 +51,35 @@ export class AgentRuntime {
   private readonly maxRunMs: number;
   private readonly maxToolCalls: number;
   private readonly maxProviderRounds: number;
+  private readonly finalizationReserveMs: number;
+  private readonly finalizationReserveToolCalls: number;
+  private readonly finalizationReserveProviderRounds: number;
+  private readonly maxNoProgressRounds: number;
+  private readonly maxRepeatedToolCalls: number;
+  private readonly maxConsecutiveToolErrors: number;
 
   constructor(private readonly adapter: AgentRuntimeAdapter, options: AgentRuntimeOptions = {}) {
     this.maxRunMs = positiveInteger(options.maxRunMs, DEFAULT_MAX_RUN_MS);
     this.maxToolCalls = positiveInteger(options.maxToolCalls, DEFAULT_MAX_TOOL_CALLS);
     this.maxProviderRounds = positiveInteger(options.maxProviderRounds, DEFAULT_MAX_PROVIDER_ROUNDS);
+    this.finalizationReserveMs = positiveInteger(options.finalizationReserveMs, DEFAULT_FINALIZATION_RESERVE_MS);
+    this.finalizationReserveToolCalls = positiveInteger(
+      options.finalizationReserveToolCalls,
+      DEFAULT_FINALIZATION_RESERVE_TOOL_CALLS
+    );
+    this.finalizationReserveProviderRounds = positiveInteger(
+      options.finalizationReserveProviderRounds,
+      DEFAULT_FINALIZATION_RESERVE_PROVIDER_ROUNDS
+    );
+    this.maxNoProgressRounds = positiveInteger(options.maxNoProgressRounds, DEFAULT_MAX_NO_PROGRESS_ROUNDS);
+    this.maxRepeatedToolCalls = positiveInteger(
+      options.maxRepeatedToolCalls,
+      DEFAULT_MAX_REPEATED_TOOL_CALLS
+    );
+    this.maxConsecutiveToolErrors = positiveInteger(
+      options.maxConsecutiveToolErrors,
+      DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS
+    );
   }
 
   async status(): Promise<AgentProviderStatus> {
@@ -193,10 +230,50 @@ export class AgentRuntime {
     };
     let failure: unknown = null;
     let toolCalls = 0;
+    let finalizationReason: AgentRunCompletionReason | null = null;
+    let consecutiveToolErrors = 0;
+    let noProgressRounds = 0;
+    let observedSuccessfulResultCount = 0;
+    const successfulResultFingerprints = new Set<string>();
+    const toolCallCounts = new Map<string, number>();
     const providerObservations: AgentProviderTurnObservation[] = [];
+    const startedAt = Date.now();
     const maxRunMs = boundedPositiveInteger(input.limits?.maxRunMs, this.maxRunMs);
     const maxToolCalls = boundedPositiveInteger(input.limits?.maxToolCalls, this.maxToolCalls);
     const maxProviderRounds = boundedPositiveInteger(input.limits?.maxProviderRounds, this.maxProviderRounds);
+    const finalizationReserveMs = boundedReserve(
+      input.limits?.finalizationReserveMs,
+      this.finalizationReserveMs,
+      maxRunMs
+    );
+    const finalizationReserveToolCalls = boundedReserve(
+      input.limits?.finalizationReserveToolCalls,
+      this.finalizationReserveToolCalls,
+      maxToolCalls
+    );
+    const finalizationReserveProviderRounds = boundedReserve(
+      input.limits?.finalizationReserveProviderRounds,
+      this.finalizationReserveProviderRounds,
+      maxProviderRounds
+    );
+    const maxNoProgressRounds = boundedPositiveInteger(
+      input.limits?.maxNoProgressRounds,
+      this.maxNoProgressRounds
+    );
+    const maxRepeatedToolCalls = boundedPositiveInteger(
+      input.limits?.maxRepeatedToolCalls,
+      this.maxRepeatedToolCalls
+    );
+    const maxConsecutiveToolErrors = boundedPositiveInteger(
+      input.limits?.maxConsecutiveToolErrors,
+      this.maxConsecutiveToolErrors
+    );
+    const researchRunMs = Math.max(1, maxRunMs - finalizationReserveMs);
+    const researchToolCalls = Math.max(1, maxToolCalls - finalizationReserveToolCalls);
+    const researchProviderRounds = Math.max(1, maxProviderRounds - finalizationReserveProviderRounds);
+    const requestFinalization = (reason: AgentRunCompletionReason) => {
+      finalizationReason ??= reason;
+    };
     const deadline = setTimeout(() => {
       abort.abort(
         new AgentRunLimitError(
@@ -214,34 +291,56 @@ export class AgentRuntime {
         tools: input.tools,
         requestTool: async (request) => {
           toolCalls += 1;
+          const signature = `${request.name}:${stableJson(request.arguments)}`;
+          const signatureCount = (toolCallCounts.get(signature) ?? 0) + 1;
+          toolCallCounts.set(signature, signatureCount);
+          if (signatureCount >= maxRepeatedToolCalls) requestFinalization("no_progress");
+          if (toolCalls >= researchToolCalls) requestFinalization("budget");
           if (toolCalls > maxToolCalls) {
-            abort.abort(
-              new AgentRunLimitError(
-                `Agent run exceeded the configured ${maxToolCalls} tool-call limit (MR-AGENT-TOOL-LIMIT)`
-              )
-            );
+            requestFinalization("budget");
             return {
               ok: false,
               error: {
-                code: "MR-AGENT-TOOL-LIMIT",
-                message: `Agent run exceeded the configured ${maxToolCalls} tool-call limit`,
+                code: "research_budget_reached",
+                message: "The research budget is complete. Answer with the evidence already collected.",
                 retryable: false
               }
             };
           }
-          return input.requestTool(request, abort.signal);
+          const result = await input.requestTool(request, abort.signal);
+          if (result.ok) {
+            consecutiveToolErrors = 0;
+            successfulResultFingerprints.add(stableJson(result.value));
+          } else {
+            consecutiveToolErrors += 1;
+            if (consecutiveToolErrors >= maxConsecutiveToolErrors) requestFinalization("no_progress");
+          }
+          return result;
         },
         signal: abort.signal,
         onEvent: emit,
         onProviderTurn: (observation) => {
           providerObservations.push(observation);
-          if (observation.stopReason === "toolUse" && providerObservations.length >= maxProviderRounds) {
+          if (observation.stopReason !== "toolUse") return;
+          if (successfulResultFingerprints.size === observedSuccessfulResultCount && providerObservations.length > 1) {
+            noProgressRounds += 1;
+          } else {
+            noProgressRounds = 0;
+            observedSuccessfulResultCount = successfulResultFingerprints.size;
+          }
+          if (noProgressRounds >= maxNoProgressRounds) requestFinalization("no_progress");
+          if (providerObservations.length >= researchProviderRounds) requestFinalization("budget");
+          if (providerObservations.length >= maxProviderRounds) {
             abort.abort(
               new AgentRunLimitError(
                 `Agent run exceeded the configured ${maxProviderRounds} provider-round limit (MR-AGENT-ROUND-LIMIT)`
               )
             );
           }
+        },
+        finalizationReason: () => {
+          if (Date.now() - startedAt >= researchRunMs) requestFinalization("budget");
+          return finalizationReason;
         }
       });
     } catch (error) {
@@ -253,13 +352,25 @@ export class AgentRuntime {
     if (failure === null && abort.signal.aborted) failure = abort.signal.reason;
 
     const limited = abort.signal.reason instanceof AgentRunLimitError;
-    const interrupted = failure !== null && !limited && (abort.signal.aborted || isAbortError(failure));
+    const interrupted = failure !== null && (abort.signal.aborted || isAbortError(failure));
+    const status = failure === null ? "completed" : interrupted ? "interrupted" : "failed";
+    const completionReason: AgentRunCompletionReason =
+      failure === null
+        ? finalizationReason ?? "natural"
+        : limited
+          ? "budget"
+          : interrupted
+            ? "cancelled"
+            : "provider_failure";
     const terminal: AgentRuntimeEvent = {
       type: "run.completed",
       runId: input.runId,
-      status: failure === null ? "completed" : interrupted ? "interrupted" : "failed",
-      error: failure === null || interrupted ? null : limited ? abort.signal.reason.message : publicRuntimeError(),
-      metrics: runMetrics(providerObservations, toolCalls)
+      status,
+      error: failure === null || interrupted ? null : publicRuntimeError(),
+      metrics: runMetrics(providerObservations, toolCalls),
+      completionReason,
+      answerQuality: failure !== null || finalizationReason || limited ? "best_effort" : "complete",
+      resumable: status !== "completed"
     };
     // AgentService durably closes the turn inside this callback. Release the
     // runtime session first so a client reacting to that terminal event cannot
@@ -278,7 +389,10 @@ export class AgentRuntime {
       runId: input.runId,
       status: terminal.status === "interrupted" ? "interrupted" : "failed",
       error: terminal.status === "interrupted" ? null : "Agent event handling failed",
-      metrics: terminal.metrics
+      metrics: terminal.metrics,
+      completionReason: terminal.completionReason,
+      answerQuality: terminal.answerQuality,
+      resumable: terminal.resumable
     }).catch(() => undefined);
   }
 }
@@ -356,4 +470,20 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 
 function boundedPositiveInteger(value: number | undefined, maximum: number): number {
   return Math.min(positiveInteger(value, maximum), maximum);
+}
+
+function boundedReserve(value: number | undefined, fallback: number, maximum: number): number {
+  if (maximum <= 1) return 0;
+  return Math.min(positiveInteger(value, fallback), maximum - 1);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }

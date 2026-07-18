@@ -28,7 +28,6 @@ import {
   type AgentLogin,
   type AgentModelCatalog,
   type AgentRunSettings,
-  type AgentRunMode,
   type AgentMessage,
   type AgentSource,
   type AgentStatus,
@@ -76,7 +75,6 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   const selectedChatIdRef = useRef<string | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [runMode, setRunMode] = useState<AgentRunMode>("standard");
   const [loginAttempt, setLoginAttempt] = useState<AgentLogin | null>(null);
   const [providerDisclosureAccepted, setProviderDisclosureAccepted] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -229,10 +227,10 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   });
 
   const sendMessageMutation = useMutation({
-    mutationFn: (request: { spaceId: string; chatId: string; message: string; mode: AgentRunMode }) =>
+    mutationFn: (request: { spaceId: string; chatId: string; message: string }) =>
       api<SendMessageResponse>(
         `/api/agent/spaces/${encodeURIComponent(request.spaceId)}/chats/${encodeURIComponent(request.chatId)}/messages`,
-        { method: "POST", body: JSON.stringify({ message: request.message, mode: request.mode }) }
+        { method: "POST", body: JSON.stringify({ message: request.message }) }
       ),
     onSuccess: (result, request) => {
       if (currentSpaceIdRef.current === request.spaceId && selectedChatIdRef.current === request.chatId) {
@@ -253,10 +251,10 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
     }
   });
 
-  const retryMutation = useMutation({
+  const resumeMutation = useMutation({
     mutationFn: (request: { spaceId: string; chatId: string; turnId: string }) =>
       api<SendMessageResponse>(
-        `/api/agent/spaces/${encodeURIComponent(request.spaceId)}/chats/${encodeURIComponent(request.chatId)}/turns/${encodeURIComponent(request.turnId)}/retry`,
+        `/api/agent/spaces/${encodeURIComponent(request.spaceId)}/chats/${encodeURIComponent(request.chatId)}/turns/${encodeURIComponent(request.turnId)}/resume`,
         { method: "POST", body: "{}" }
       ),
     onSuccess: (result, request) => {
@@ -265,8 +263,12 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
         current
           ? {
               chat: { ...current.chat, activeTurnId: result.turn.id, updatedAt: result.turn.createdAt },
-              messages: [...current.messages, result.userMessage, result.assistantMessage],
-              turns: [...(current.turns ?? []), result.turn]
+              messages: current.messages.map((message) => {
+                if (message.id === result.userMessage.id) return result.userMessage;
+                if (message.id === result.assistantMessage.id) return result.assistantMessage;
+                return message;
+              }),
+              turns: upsertTurn(current.turns ?? [], result.turn)
             }
           : current
       );
@@ -364,7 +366,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   function submitMessage() {
     const message = draft.trim();
     if (message && canSend && space && selectedChatId) {
-      sendMessageMutation.mutate({ spaceId: space.id, chatId: selectedChatId, message, mode: runMode });
+      sendMessageMutation.mutate({ spaceId: space.id, chatId: selectedChatId, message });
     }
   }
 
@@ -466,8 +468,6 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
               draft={draft}
               onDraftChange={setDraft}
               onSubmit={submitMessage}
-              runMode={runMode}
-              onRunModeChange={setRunMode}
               canSend={canSend}
               sending={sendMessageMutation.isPending}
               sendError={sendMessageMutation.error}
@@ -483,12 +483,12 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
                 interruptMutation.mutate({ spaceId: space.id, chatId: selectedChatId, turnId: activeTurnId })
               }
               onRetry={(turnId) =>
-                retryMutation.mutate({ spaceId: space.id, chatId: selectedChatId, turnId })
+                resumeMutation.mutate({ spaceId: space.id, chatId: selectedChatId, turnId })
               }
               archiving={archiveMutation.isPending}
               deleting={deleteMutation.isPending}
               interrupting={interruptMutation.isPending}
-              retrying={retryMutation.isPending}
+              retrying={resumeMutation.isPending}
             />
           ) : (
             <HistoryView
@@ -870,8 +870,6 @@ function ChatView(props: {
   draft: string;
   onDraftChange: (value: string) => void;
   onSubmit: () => void;
-  runMode: AgentRunMode;
-  onRunModeChange: (mode: AgentRunMode) => void;
   canSend: boolean;
   sending: boolean;
   sendError: Error | null;
@@ -968,19 +966,6 @@ function ChatView(props: {
 
       {chat.continuable && props.status?.connected ? (
         <div className="ask-space-composer">
-          <label className="ask-space-mode-select">
-            <span>Answer mode</span>
-            <select
-              aria-label="Answer mode"
-              value={props.runMode}
-              onChange={(event) => props.onRunModeChange(event.target.value as AgentRunMode)}
-              disabled={running}
-            >
-              <option value="quick">Quick</option>
-              <option value="standard">Standard</option>
-              <option value="deep">Deep</option>
-            </select>
-          </label>
           <textarea
             value={props.draft}
             onChange={(event) => props.onDraftChange(event.target.value)}
@@ -1010,7 +995,7 @@ function ChatView(props: {
               {props.sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
             </button>
           )}
-          <small>{modeDescription(props.runMode)} · Read-only · snapshot v{chat.snapshot.version}</small>
+          <small>Adaptive research · Read-only · snapshot v{chat.snapshot.version}</small>
         </div>
       ) : (
         <div className="ask-space-readonly-note">
@@ -1061,8 +1046,22 @@ function ChatMessage({
           disabled={retrying}
         >
           {retrying ? <Loader2 className="spin" size={13} /> : null}
-          Retry in {settingLabel(turn.mode)} mode
+          Resume
         </button>
+      ) : null}
+      {message.role === "assistant" && turn?.status === "completed" && turn.answerQuality === "best_effort" ? (
+        <>
+          <small>Answered with the evidence available before the research guardrail.</small>
+          <button
+            className="ask-space-retry-answer"
+            type="button"
+            onClick={() => onRetry(turn.id)}
+            disabled={retrying}
+          >
+            {retrying ? <Loader2 className="spin" size={13} /> : null}
+            Continue investigating
+          </button>
+        </>
       ) : null}
     </article>
   );
@@ -1155,6 +1154,20 @@ function handleTurnEvent(
     );
     return;
   }
+  if (event.type === "turn.phase_changed") {
+    setToolActivity(event.phase === "finalizing" ? "Preparing the answer…" : event.phase === "recovering" ? "Recovering previous work…" : null);
+    queryClient.setQueryData<ChatDetail>(key, (current) =>
+      current
+        ? {
+            ...current,
+            turns: (current.turns ?? []).map((turn) =>
+              turn.id === event.turnId ? { ...turn, phase: event.phase as AgentTurn["phase"] } : turn
+            )
+          }
+        : current
+    );
+    return;
+  }
   if (event.type === "tool.started") {
     setToolActivity(friendlyToolActivity(event.tool));
     return;
@@ -1185,14 +1198,6 @@ function upsertTurn(turns: AgentTurn[], incoming: AgentTurn): AgentTurn[] {
   const index = turns.findIndex((turn) => turn.id === incoming.id);
   if (index < 0) return [...turns, incoming];
   return turns.map((turn) => turn.id === incoming.id ? incoming : turn);
-}
-
-function modeDescription(mode: AgentRunMode): string {
-  return {
-    quick: "Quick · up to 3 rounds / 12 tools",
-    standard: "Standard · up to 6 rounds / 32 tools",
-    deep: "Deep · up to 12 rounds / 96 tools"
-  }[mode];
 }
 
 function friendlyToolActivity(tool: string): string {

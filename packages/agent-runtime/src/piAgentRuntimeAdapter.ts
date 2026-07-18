@@ -279,6 +279,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       const settings = input.settings
         ? validateSettings(model, input.settings, this.config.thinkingLevel)
         : this.settingsFor(model);
+      let finalizationApplied = false;
       const agent = new Agent({
         initialState: {
           systemPrompt: input.systemPrompt,
@@ -299,6 +300,34 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
             });
           }
           return this.models.streamSimple(activeModel, context, options);
+        },
+        prepareNextTurnWithContext: async ({ context }) => {
+          if (finalizationApplied) return undefined;
+          const reason = input.finalizationReason?.() ?? null;
+          if (!reason) return undefined;
+          finalizationApplied = true;
+          await input.onEvent({
+            type: "run.phase_changed",
+            runId: input.runId,
+            phase: "finalizing",
+            reason
+          });
+          return {
+            context: {
+              ...context,
+              tools: [],
+              messages: [
+                ...context.messages,
+                {
+                  role: "user",
+                  content:
+                    "Research is complete. Do not call more tools. Produce the best supported final answer now, " +
+                    "clearly separating direct evidence from uncertainty and mentioning material gaps only when needed.",
+                  timestamp: Date.now()
+                }
+              ]
+            }
+          };
         },
         toolExecution: "parallel"
       });

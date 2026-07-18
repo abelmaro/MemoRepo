@@ -24,6 +24,12 @@ test("migrate creates and versions a new database", () => {
         "provider_id",
         "model_id",
         "mode",
+        "execution_policy",
+        "phase",
+        "completion_reason",
+        "answer_quality",
+        "resumable",
+        "attempt_count",
         "effort",
         "verbosity",
         "max_run_seconds",
@@ -49,6 +55,9 @@ test("migrate creates and versions a new database", () => {
     assert.ok(indexNames(sqlite).has("agent_turns_active_chat_unique"));
     assert.ok(indexNames(sqlite).has("agent_turns_queue_created_idx"));
     assert.ok(indexNames(sqlite).has("agent_turns_submission_sequence_unique"));
+    assert.ok(tableNames(sqlite).has("agent_turn_attempts"));
+    assert.ok(tableNames(sqlite).has("agent_tool_cache"));
+    assert.ok(tableNames(sqlite).has("agent_turn_tool_results"));
     assert.match(
       sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'agent_turns_active_chat_unique'").pluck().get() as string,
       /queued.*pending.*running/

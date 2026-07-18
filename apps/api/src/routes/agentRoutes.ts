@@ -10,8 +10,7 @@ const chatParams = z.object({ spaceId: id, chatId: id });
 const turnParams = z.object({ spaceId: id, chatId: id, turnId: id });
 const globalTurnParams = z.object({ turnId: id });
 const messageBody = z.object({
-  message: z.string().trim().min(1).max(16_000),
-  mode: z.enum(["quick", "standard", "deep"]).default("standard")
+  message: z.string().trim().min(1).max(16_000)
 });
 const modelSelectionBody = z.object({
   providerId: id,
@@ -95,8 +94,8 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/messages", async (request, reply) => {
     const { spaceId, chatId } = chatParams.parse(request.params);
-    const { message, mode } = messageBody.parse(request.body);
-    const result = await app.services.agent.sendMessage(spaceId, chatId, message, mode);
+    const { message } = messageBody.parse(request.body);
+    const result = await app.services.agent.sendMessage(spaceId, chatId, message);
     app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
     return reply.code(202).send(result);
   });
@@ -125,6 +124,13 @@ export async function agentRoutes(app: FastifyInstance) {
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/turns/:turnId/retry", async (request, reply) => {
     const { spaceId, chatId, turnId } = turnParams.parse(request.params);
     const result = await app.services.agent.retryTurn(spaceId, chatId, turnId);
+    app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
+    return reply.code(202).send(result);
+  });
+
+  app.post("/api/agent/spaces/:spaceId/chats/:chatId/turns/:turnId/resume", async (request, reply) => {
+    const { spaceId, chatId, turnId } = turnParams.parse(request.params);
+    const result = await app.services.agent.resumeTurn(spaceId, chatId, turnId);
     app.services.dashboardEvents.publish({ type: "agent", spaceId, chatId });
     return reply.code(202).send(result);
   });
@@ -189,7 +195,10 @@ export async function agentRoutes(app: FastifyInstance) {
         turnId,
         status: state.turn.status,
         error: state.turn.error,
-        metrics: state.turn.metrics
+        metrics: state.turn.metrics,
+        completionReason: state.turn.completionReason,
+        answerQuality: state.turn.answerQuality,
+        resumable: state.turn.resumable
       });
       close();
       reply.raw.end();

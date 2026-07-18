@@ -132,7 +132,10 @@ test("emits a successful lifecycle and forwards deltas and tool execution", asyn
       lengthStopCount: 0,
       toolCallCount: 1,
       usage: { input: 120, output: 42, reasoning: 18, cacheRead: 20, cacheWrite: 4, total: 204 }
-    }
+    },
+    completionReason: "natural",
+    answerQuality: "complete",
+    resumable: false
   });
   assert.deepEqual(
     events.values.map((event) => event.type),
@@ -178,7 +181,10 @@ test("retries a failed terminal consumer, observes the detached run, and release
       runId: "run-1",
       status: "failed",
       error: "Agent event handling failed",
-      metrics: emptyMetrics()
+      metrics: emptyMetrics(),
+      completionReason: "natural",
+      answerQuality: "complete",
+      resumable: false
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(
@@ -210,7 +216,10 @@ test("does not expose adapter error details through terminal events", async () =
     runId: "run-1",
     status: "failed",
     error: "Agent run failed",
-    metrics: emptyMetrics()
+    metrics: emptyMetrics(),
+    completionReason: "provider_failure",
+    answerQuality: "best_effort",
+    resumable: true
   });
   await runtime.close();
 });
@@ -267,12 +276,15 @@ test("interrupt aborts the adapter run and completes it as interrupted", async (
     runId: "run-1",
     status: "interrupted",
     error: null,
-    metrics: emptyMetrics()
+    metrics: emptyMetrics(),
+    completionReason: "cancelled",
+    answerQuality: "best_effort",
+    resumable: true
   });
   await runtime.close();
 });
 
-test("fails a run that exceeds its deadline and releases the session", async () => {
+test("preserves a run that exceeds its hard deadline as resumable", async () => {
   const events = collectEvents();
   const adapter = new FakeAdapter(async (input) => rejectWhenAborted(input.signal));
   const runtime = new AgentRuntime(adapter, { maxRunMs: 10 });
@@ -282,18 +294,21 @@ test("fails a run that exceeds its deadline and releases the session", async () 
   assert.deepEqual(await events.completed.promise, {
     type: "run.completed",
     runId: "run-1",
-    status: "failed",
-    error: "Agent run exceeded the configured 1-second limit (MR-AGENT-TIME-LIMIT)",
-    metrics: emptyMetrics()
+    status: "interrupted",
+    error: null,
+    metrics: emptyMetrics(),
+    completionReason: "budget",
+    answerQuality: "best_effort",
+    resumable: true
   });
 
   const next = collectEvents();
   runtime.startRun(makeRunInput({ runId: "run-2", sessionId: "session-1", onEvent: next.onEvent }));
-  assert.equal((await next.completed.promise).status, "failed");
+  assert.equal((await next.completed.promise).status, "interrupted");
   await runtime.close();
 });
 
-test("aborts after the configured tool-call budget", async () => {
+test("requests graceful finalization after the configured tool-call budget", async () => {
   const events = collectEvents();
   const toolResults: unknown[] = [];
   const adapter = new FakeAdapter(async (input) => {
@@ -312,14 +327,17 @@ test("aborts after the configured tool-call budget", async () => {
 
   runtime.startRun(makeRunInput({ onEvent: events.onEvent }));
 
-  assert.equal((await events.completed.promise).status, "failed");
+  const completed = await events.completed.promise;
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.completionReason, "budget");
+  assert.equal(completed.answerQuality, "best_effort");
   assert.deepEqual(toolResults, [
     { ok: true, value: null },
     {
       ok: false,
       error: {
-        code: "MR-AGENT-TOOL-LIMIT",
-        message: "Agent run exceeded the configured 1 tool-call limit",
+        code: "research_budget_reached",
+        message: "The research budget is complete. Answer with the evidence already collected.",
         retryable: false
       }
     }
@@ -350,8 +368,10 @@ test("applies stricter per-run tool and provider-round budgets", async () => {
     })
   );
 
-  assert.equal((await toolEvents.completed.promise).status, "failed");
-  assert.equal((toolResults[1] as { error?: { code?: string } }).error?.code, "MR-AGENT-TOOL-LIMIT");
+  const toolCompleted = await toolEvents.completed.promise;
+  assert.equal(toolCompleted.status, "completed");
+  assert.equal(toolCompleted.completionReason, "budget");
+  assert.equal((toolResults[1] as { error?: { code?: string } }).error?.code, "research_budget_reached");
   await toolRuntime.close();
 
   const roundEvents = collectEvents();
@@ -370,10 +390,61 @@ test("applies stricter per-run tool and provider-round budgets", async () => {
   );
 
   const roundCompleted = await roundEvents.completed.promise;
-  assert.equal(roundCompleted.status, "failed");
-  assert.match(roundCompleted.error ?? "", /MR-AGENT-ROUND-LIMIT/);
+  assert.equal(roundCompleted.status, "interrupted");
+  assert.equal(roundCompleted.error, null);
+  assert.equal(roundCompleted.completionReason, "budget");
   assert.equal(roundCompleted.metrics.providerRoundCount, 2);
   await roundRuntime.close();
+});
+
+test("requests best-effort synthesis when research stops making progress", async () => {
+  const repeatedEvents = collectEvents();
+  const repeatedAdapter = new FakeAdapter(async (input) => {
+    for (let index = 0; index < 3; index += 1) {
+      await input.requestTool(
+        {
+          runId: input.runId,
+          sessionId: input.sessionId,
+          requestId: `tool-${index}`,
+          name: "search_snapshot",
+          arguments: { query: "same evidence" }
+        },
+        input.signal
+      );
+    }
+    assert.equal(input.finalizationReason?.(), "no_progress");
+  });
+  const repeatedRuntime = new AgentRuntime(repeatedAdapter, {
+    maxToolCalls: 20,
+    finalizationReserveToolCalls: 1,
+    maxRepeatedToolCalls: 3
+  });
+  repeatedRuntime.startRun(makeRunInput({ onEvent: repeatedEvents.onEvent }));
+  const repeated = await repeatedEvents.completed.promise;
+  assert.equal(repeated.status, "completed");
+  assert.equal(repeated.completionReason, "no_progress");
+  assert.equal(repeated.answerQuality, "best_effort");
+  await repeatedRuntime.close();
+
+  const stalledEvents = collectEvents();
+  const stalledAdapter = new FakeAdapter(async (input) => {
+    const usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    for (let index = 0; index < 5; index += 1) {
+      await input.onProviderTurn({ stopReason: "toolUse", usage });
+    }
+    assert.equal(input.finalizationReason?.(), "no_progress");
+  });
+  const stalledRuntime = new AgentRuntime(stalledAdapter, {
+    maxProviderRounds: 20,
+    finalizationReserveProviderRounds: 1,
+    maxNoProgressRounds: 4
+  });
+  stalledRuntime.startRun(makeRunInput({ onEvent: stalledEvents.onEvent }));
+  const stalled = await stalledEvents.completed.promise;
+  assert.equal(stalled.status, "completed");
+  assert.equal(stalled.completionReason, "no_progress");
+  assert.equal(stalled.metrics.providerRoundCount, 5);
+  await stalledRuntime.close();
 });
 
 test("logout blocks new runs and login attempts until credential removal settles", async () => {
