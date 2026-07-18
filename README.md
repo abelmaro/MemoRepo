@@ -71,7 +71,7 @@ Each space includes an optional **Ask this Space** panel. `AgentService` coordin
 
 Before connection, the panel requires explicit consent to send questions, chat history, snapshot query results, and relevant code excerpts to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
 
-The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; `.env.example` starts with `openai-codex` and `gpt-5.4`. The dashboard lists the OAuth-capable providers and models exposed by the bundled Pi catalog and can switch the in-memory selection while no login or answer is active. A closed **Advanced** section exposes verbosity and reasoning effort only when the selected model advertises each capability. Those selections remain in memory until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Per-answer limits default to 600 seconds and 96 tool calls and can be changed with `MEMOREPO_AGENT_MAX_RUN_SECONDS` and `MEMOREPO_AGENT_MAX_TOOL_CALLS`.
+The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; `.env.example` starts with `openai-codex` and `gpt-5.4`. The dashboard lists the OAuth-capable providers and models exposed by the bundled Pi catalog and can switch the in-memory selection while no login or running answer is active. Each queued answer keeps the provider, model, mode, settings, and limits selected when it was submitted. A closed **Advanced** section exposes verbosity and reasoning effort only when the selected model advertises each capability. Those selections remain in memory until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not.
 
 - Chats are consultation-only and can query only the selected space through MemoRepo's read-only snapshot tools.
 - Each chat is pinned to the exact immutable snapshot that was active when it started.
@@ -81,6 +81,9 @@ The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGEN
 - A retained older snapshot remains available to its existing chats. If that snapshot is pruned, its transcript remains readable but cannot be continued.
 - When a newer snapshot becomes active, MemoRepo offers to start a new chat instead of silently changing an existing chat's context.
 - Runtime tool requests return directly to `AgentService`, which delegates them to `SnapshotQueryService` against the pinned snapshot.
+- Answers offer **Quick**, **Standard**, and **Deep** modes. Standard is the default; each mode applies a bounded investigation profile for runtime, tool calls, provider rounds, model effort, verbosity, and response guidance.
+- MemoRepo runs up to two answers concurrently by default and places additional answers in a durable FIFO queue. The panel shows capacity and queue position, and queued or running answers can be cancelled. Failed or interrupted answers can be retried.
+- Identical read-only tool calls within one turn share the same in-flight or completed result, while independent tool calls remain eligible for parallel execution.
 - Chats can be archived or deleted from the panel. Signing out disconnects the selected provider without affecting the rest of MemoRepo.
 
 Under Docker Compose, managed agent OAuth credentials are stored in the existing private `memorepo-secrets` volume alongside MemoRepo's other local secrets.

@@ -418,7 +418,7 @@ test("advertises and validates only model-supported effort and verbosity setting
   }
 });
 
-test("forwards selected Codex effort and verbosity to the provider stream", async () => {
+test("forwards persisted per-run Codex settings to the provider stream", async () => {
   const store = new MutableCredentialStore(oauthCredential("access-one", "refresh-one", { accountId: "account-one" }));
   const streamOptions: Array<Record<string, unknown>> = [];
   const adapter = createAdapter(
@@ -435,6 +435,9 @@ test("forwards selected Codex effort and verbosity to the provider stream", asyn
     await adapter.run({
       runId: "run-1",
       sessionId: "session-1",
+      providerId: "test-provider",
+      modelId: "test-model",
+      settings: { effort: "low", verbosity: "low" },
       systemPrompt: "Investigate the snapshot.",
       history: [{ role: "user", content: "Explain the flow", timestamp: 1 }],
       tools: [],
@@ -445,8 +448,8 @@ test("forwards selected Codex effort and verbosity to the provider stream", asyn
     });
 
     assert.equal(streamOptions.length, 1);
-    assert.equal(streamOptions[0]?.reasoningEffort, "high");
-    assert.equal(streamOptions[0]?.textVerbosity, "high");
+    assert.equal(streamOptions[0]?.reasoningEffort, "low");
+    assert.equal(streamOptions[0]?.textVerbosity, "low");
     assert.equal(streamOptions[0]?.sessionId, "session-1");
     assert.deepEqual(observations, [{
       stopReason: "stop",

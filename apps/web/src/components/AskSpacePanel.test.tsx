@@ -390,9 +390,17 @@ it("streams an answer into the persistent assistant message", async () => {
 
   renderPanel();
   fireEvent.click(await screen.findByRole("button", { name: /New chat/i }));
+  fireEvent.change(await screen.findByLabelText("Answer mode"), { target: { value: "deep" } });
   const textarea = await screen.findByLabelText("Message to agent");
   fireEvent.change(textarea, { target: { value: "Explain the flow" } });
   fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_1/messages",
+      { method: "POST", body: JSON.stringify({ message: "Explain the flow", mode: "deep" }) }
+    )
+  );
 
   await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
   const onEvent = (subscribeMock.mock.calls as unknown as Array<[string, (event: unknown) => void]>)[0]?.[1];
@@ -412,6 +420,57 @@ it("streams an answer into the persistent assistant message", async () => {
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: partial.length, delta: " here." });
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: 0, delta: partial });
   expect(await screen.findByText("The flow starts here.")).toBeTruthy();
+});
+
+it("shows queue capacity and lets a queued answer be cancelled", async () => {
+  const chat = { ...chatFixture("chat_queued", "Queued chat"), activeTurnId: "turn_queued", messageCount: 2 };
+  const createdAt = chat.createdAt;
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("example", "Example AI", "example-model", "Example Model"));
+    if (path === "/api/agent/status") {
+      return Promise.resolve({
+        ...connectedStatus(),
+        capacity: { active: 2, maxActive: 2, queued: 2, maxQueued: 20 }
+      });
+    }
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_queued" && !init) {
+      return Promise.resolve({
+        chat,
+        messages: [
+          {
+            id: "message_user", sequence: 1, role: "user", status: "completed", content: "Deep question",
+            sources: [], error: null, createdAt, completedAt: createdAt
+          },
+          {
+            id: "message_assistant", sequence: 2, role: "assistant", status: "pending", content: "",
+            sources: [], error: null, createdAt, completedAt: null
+          }
+        ],
+        turns: [{
+          id: "turn_queued", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+          status: "queued", error: null, providerId: "example", modelId: "example-model", mode: "deep",
+          queuePosition: 2, settings: {}, limits: { maxRunSeconds: 600, maxToolCalls: 96, maxProviderRounds: 12 },
+          metrics: null, createdAt, startedAt: null, finishedAt: null
+        }]
+      });
+    }
+    if (path.endsWith("/turns/turn_queued/interrupt") && init?.method === "POST") return Promise.resolve(undefined);
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Queued chat/i }));
+
+  expect(await screen.findByText("Queued · position 2 · 2/2 running")).toBeTruthy();
+  const cancel = screen.getByRole("button", { name: "Cancel queued answer" });
+  fireEvent.click(cancel);
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_queued/turns/turn_queued/interrupt",
+      { method: "POST", body: "{}" }
+    )
+  );
 });
 
 it("clears the draft when switching chats", async () => {

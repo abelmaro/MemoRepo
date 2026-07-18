@@ -408,7 +408,7 @@ export class SnapshotService {
          FROM agent_chats c
          JOIN agent_turns t ON t.chat_id = c.id
          WHERE c.snapshot_id IN (${placeholders})
-           AND t.status IN ('pending', 'running')
+           AND t.status IN ('queued', 'pending', 'running')
          LIMIT 1`
       )
       .get(...snapshotIds);

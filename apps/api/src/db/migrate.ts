@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 interface Migration {
   version: number;
@@ -16,6 +16,8 @@ const migrations: Migration[] = [
   { version: 6, up: addAgentChats },
   { version: 7, up: addAgentTurnMetrics },
   { version: 8, up: addSnapshotSizes },
+  { version: 9, up: addAgentQueueAndModes },
+  { version: 10, up: addAgentSubmissionSequence },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -318,6 +320,45 @@ function addSnapshotSizes(sqlite: Database.Database): void {
   if (!columns.some((column) => column.name === "size_bytes")) {
     sqlite.exec("ALTER TABLE space_snapshots ADD COLUMN size_bytes INTEGER;");
   }
+}
+
+function addAgentQueueAndModes(sqlite: Database.Database): void {
+  sqlite.exec(`
+    ALTER TABLE agent_turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard';
+    ALTER TABLE agent_turns ADD COLUMN max_run_seconds INTEGER NOT NULL DEFAULT 360;
+    ALTER TABLE agent_turns ADD COLUMN max_tool_calls INTEGER NOT NULL DEFAULT 32;
+    ALTER TABLE agent_turns ADD COLUMN max_provider_rounds INTEGER NOT NULL DEFAULT 6;
+
+    DROP INDEX IF EXISTS agent_turns_active_chat_unique;
+    CREATE UNIQUE INDEX agent_turns_active_chat_unique
+      ON agent_turns(chat_id)
+      WHERE status IN ('queued', 'pending', 'running');
+    CREATE INDEX agent_turns_queue_created_idx
+      ON agent_turns(status, created_at, id);
+  `);
+}
+
+function addAgentSubmissionSequence(sqlite: Database.Database): void {
+  const columns = sqlite.pragma("table_info(agent_turns)") as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "submission_sequence")) {
+    sqlite.exec(`
+      ALTER TABLE agent_turns ADD COLUMN submission_sequence INTEGER NOT NULL DEFAULT 0;
+      WITH ordered AS (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
+        FROM agent_turns
+      )
+      UPDATE agent_turns
+        SET submission_sequence = (SELECT sequence FROM ordered WHERE ordered.id = agent_turns.id);
+    `);
+  }
+
+  sqlite.exec(`
+    DROP INDEX IF EXISTS agent_turns_queue_created_idx;
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_turns_submission_sequence_unique
+      ON agent_turns(submission_sequence);
+    CREATE INDEX agent_turns_queue_created_idx
+      ON agent_turns(status, submission_sequence);
+  `);
 }
 
 function detectLegacySchemaVersion(sqlite: Database.Database): number {

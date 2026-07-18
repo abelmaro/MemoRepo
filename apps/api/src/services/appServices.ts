@@ -50,7 +50,8 @@ export function createServices() {
   });
   const agentRuntime = new AgentRuntime(agentAdapter, {
     maxRunMs: config.agentMaxRunSeconds * 1_000,
-    maxToolCalls: config.agentMaxToolCalls
+    maxToolCalls: config.agentMaxToolCalls,
+    maxProviderRounds: config.agentMaxProviderRounds
   });
   const agent = new AgentService(database, config, agentRuntime, snapshotQueries, snapshots, agentAdapter);
   const maintenance = new MaintenanceService(database, config);

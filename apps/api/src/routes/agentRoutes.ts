@@ -9,7 +9,10 @@ const spaceParams = z.object({ spaceId: id });
 const chatParams = z.object({ spaceId: id, chatId: id });
 const turnParams = z.object({ spaceId: id, chatId: id, turnId: id });
 const globalTurnParams = z.object({ turnId: id });
-const messageBody = z.object({ message: z.string().trim().min(1).max(16_000) });
+const messageBody = z.object({
+  message: z.string().trim().min(1).max(16_000),
+  mode: z.enum(["quick", "standard", "deep"]).default("standard")
+});
 const modelSelectionBody = z.object({
   providerId: id,
   modelId: id,
@@ -83,8 +86,8 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/messages", async (request, reply) => {
     const { spaceId, chatId } = chatParams.parse(request.params);
-    const { message } = messageBody.parse(request.body);
-    return reply.code(202).send(await app.services.agent.sendMessage(spaceId, chatId, message));
+    const { message, mode } = messageBody.parse(request.body);
+    return reply.code(202).send(await app.services.agent.sendMessage(spaceId, chatId, message, mode));
   });
 
   app.post("/api/agent/spaces/:spaceId/chats/:chatId/archive", async (request) => {
@@ -102,6 +105,11 @@ export async function agentRoutes(app: FastifyInstance) {
     const { spaceId, chatId, turnId } = turnParams.parse(request.params);
     await app.services.agent.interruptTurn(spaceId, chatId, turnId);
     return reply.code(204).send();
+  });
+
+  app.post("/api/agent/spaces/:spaceId/chats/:chatId/turns/:turnId/retry", async (request, reply) => {
+    const { spaceId, chatId, turnId } = turnParams.parse(request.params);
+    return reply.code(202).send(await app.services.agent.retryTurn(spaceId, chatId, turnId));
   });
 
   app.get("/api/agent/turns/:turnId/events", async (request, reply) => {
@@ -175,5 +183,5 @@ export async function agentRoutes(app: FastifyInstance) {
 }
 
 function isActive(status: string): boolean {
-  return status === "pending" || status === "running";
+  return status === "queued" || status === "pending" || status === "running";
 }

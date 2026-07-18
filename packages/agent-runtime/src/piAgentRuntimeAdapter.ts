@@ -261,14 +261,14 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
     const epoch = this.authenticationEpoch;
     this.activeRuns += 1;
     try {
-      const model = this.resolveModel();
+      const model = this.resolveModel(input.providerId, input.modelId);
       const auth = await this.models.getAuth(model);
-      const credential = await this.credentialStore.read(this.config.providerId);
+      const credential = await this.credentialStore.read(model.provider);
       if (epoch !== this.authenticationEpoch || this.lifecycle !== "open" || this.activeLogin) {
         throw conflict("Agent authentication is changing");
       }
       if (!auth) {
-        throw unavailable(`Connect ${this.models.getProvider(this.config.providerId)?.name ?? this.config.providerId} first`);
+        throw unavailable(`Connect ${this.models.getProvider(model.provider)?.name ?? model.provider} first`);
       }
       if (credential?.type !== "oauth") throw unavailable(SUPPORTED_AUTH_MESSAGE);
       if (input.history.length === 0 || input.history.at(-1)?.role !== "user") {
@@ -276,7 +276,9 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       }
 
       const tools = input.tools.map((tool) => this.toPiTool(input, tool));
-      const settings = this.settingsFor(model);
+      const settings = input.settings
+        ? validateSettings(model, input.settings, this.config.thinkingLevel)
+        : this.settingsFor(model);
       const agent = new Agent({
         initialState: {
           systemPrompt: input.systemPrompt,
@@ -448,9 +450,9 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
     return cloneAttempt(state.view);
   }
 
-  private resolveModel(): Model<Api> {
-    const model = this.models.getModel(this.config.providerId, this.config.modelId);
-    if (!model) throw unavailable(`Pi model ${this.config.providerId}/${this.config.modelId} is not available`);
+  private resolveModel(providerId = this.config.providerId, modelId = this.config.modelId): Model<Api> {
+    const model = this.models.getModel(providerId, modelId);
+    if (!model) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
     return model;
   }
 

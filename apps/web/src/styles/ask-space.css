@@ -549,6 +549,17 @@
   font-size: var(--font-size-caption);
 }
 
+.ask-space-queue-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-7);
+  padding: var(--space-8) var(--space-12);
+  border-bottom: var(--border-width-default) solid var(--color-status-info);
+  background: var(--color-status-info-surface);
+  color: var(--color-status-info);
+  font-size: var(--font-size-caption);
+}
+
 .ask-space-snapshot-notice > div {
   display: flex;
   align-items: center;
@@ -780,6 +791,20 @@
   font-size: var(--font-size-caption);
 }
 
+.ask-space-retry-answer {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-9);
+  border: var(--border-width-default) solid var(--color-control-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control-background);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+}
+
 .ask-space-sources {
   margin-top: var(--space-3);
   border: var(--border-width-default) solid var(--color-border-subtle);
@@ -834,11 +859,36 @@
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "message action" "meta meta";
+  grid-template-areas: "mode mode" "message action" "meta meta";
   gap: var(--space-8);
   padding: var(--space-10) var(--space-12) var(--space-12);
   border-top: var(--border-width-default) solid var(--color-border-subtle);
   background: var(--color-surface-primary);
+}
+
+.ask-space-mode-select {
+  grid-area: mode;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.ask-space-mode-select select {
+  min-width: 112px;
+  padding: var(--space-5) var(--space-8);
+  border: var(--border-width-default) solid var(--color-control-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control-background);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.ask-space-capacity {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-micro);
 }
 
 .ask-space-composer textarea {

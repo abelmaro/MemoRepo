@@ -254,6 +254,11 @@ export const agentTurns = sqliteTable(
     modelId: text("model_id"),
     effort: text("effort"),
     verbosity: text("verbosity"),
+    mode: text("mode").notNull().default("standard"),
+    maxRunSeconds: integer("max_run_seconds").notNull().default(360),
+    maxToolCalls: integer("max_tool_calls").notNull().default(32),
+    maxProviderRounds: integer("max_provider_rounds").notNull().default(6),
+    submissionSequence: integer("submission_sequence").notNull().default(0),
     stopReason: text("stop_reason"),
     providerRoundCount: integer("provider_round_count").notNull().default(0),
     lengthStopCount: integer("length_stop_count").notNull().default(0),
@@ -272,7 +277,9 @@ export const agentTurns = sqliteTable(
     index("agent_turns_chat_created_idx").on(table.chatId, table.createdAt),
     uniqueIndex("agent_turns_active_chat_unique")
       .on(table.chatId)
-      .where(sql`${table.status} IN ('pending', 'running')`)
+      .where(sql`${table.status} IN ('queued', 'pending', 'running')`),
+    uniqueIndex("agent_turns_submission_sequence_unique").on(table.submissionSequence),
+    index("agent_turns_queue_created_idx").on(table.status, table.submissionSequence)
   ]
 );
 
