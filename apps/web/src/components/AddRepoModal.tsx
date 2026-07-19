@@ -45,8 +45,7 @@ export function AddRepoModal({ space, onClose, onJob }: { space: Space; onClose:
   const syncJobQuery = useQuery({
     queryKey: ["job", syncJobId],
     queryFn: () => api<{ job: Job }>(`/api/jobs/${syncJobId}`),
-    enabled: Boolean(syncJobId),
-    refetchInterval: (query) => ["pending", "running"].includes(query.state.data?.job.status ?? "") ? 1_000 : false
+    enabled: Boolean(syncJobId)
   });
 
   useEffect(() => {

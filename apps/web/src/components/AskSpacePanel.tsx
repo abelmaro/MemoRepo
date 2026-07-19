@@ -6,8 +6,10 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  ChevronDown,
   Clipboard,
   Clock3,
+  Copy,
   Database,
   ExternalLink,
   History,
@@ -27,6 +29,7 @@ import {
   type AgentChat,
   type AgentLogin,
   type AgentModelCatalog,
+  type AgentRunSettings,
   type AgentMessage,
   type AgentSource,
   type AgentStatus,
@@ -45,6 +48,7 @@ interface AskSpacePanelProps {
 interface ChatDetail {
   chat: AgentChat;
   messages: AgentMessage[];
+  turns: AgentTurn[];
 }
 
 interface SendMessageResponse {
@@ -78,9 +82,11 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   const [copiedCode, setCopiedCode] = useState(false);
   const [toolActivity, setToolActivity] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [panelRect, setPanelRect] = useState<PanelRect | null>(null);
   const [compactViewport, setCompactViewport] = useState(compactViewportMatches);
   const messageListRef = useRef<HTMLDivElement>(null);
+  const followLatestMessageRef = useRef(true);
   currentSpaceIdRef.current = space?.id ?? null;
   selectedChatIdRef.current = selectedChatId;
 
@@ -95,6 +101,8 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
     setDraft("");
     setToolActivity(null);
     setStreamError(null);
+    setHasNewMessagesBelow(false);
+    followLatestMessageRef.current = true;
   }, [selectedChatId]);
 
   useEffect(() => {
@@ -129,8 +137,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   const statusQuery = useQuery({
     queryKey: ["agent", "status"],
     queryFn: () => api<AgentStatus>("/api/agent/status"),
-    enabled: open,
-    refetchInterval: (query) => (query.state.data?.connected ? 30_000 : 5_000)
+    enabled: open
   });
 
   const modelCatalogQuery = useQuery({
@@ -140,7 +147,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   });
 
   const selectModelMutation = useMutation({
-    mutationFn: (selection: { providerId: string; modelId: string }) =>
+    mutationFn: (selection: { providerId: string; modelId: string; settings?: AgentRunSettings }) =>
       api<AgentModelCatalog>("/api/agent/model", {
         method: "PUT",
         body: JSON.stringify(selection)
@@ -241,11 +248,38 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
         current
           ? {
               chat: { ...current.chat, activeTurnId: result.turn.id, updatedAt: result.turn.createdAt },
-              messages: [...current.messages, result.userMessage, result.assistantMessage]
+              messages: [...current.messages, result.userMessage, result.assistantMessage],
+              turns: [...(current.turns ?? []), result.turn]
             }
           : current
       );
       void queryClient.invalidateQueries({ queryKey: ["agent", "chats", request.spaceId] });
+    }
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (request: { spaceId: string; chatId: string; turnId: string }) =>
+      api<SendMessageResponse>(
+        `/api/agent/spaces/${encodeURIComponent(request.spaceId)}/chats/${encodeURIComponent(request.chatId)}/turns/${encodeURIComponent(request.turnId)}/resume`,
+        { method: "POST", body: "{}" }
+      ),
+    onSuccess: (result, request) => {
+      const key = ["agent", "chat", request.spaceId, request.chatId];
+      queryClient.setQueryData<ChatDetail>(key, (current) =>
+        current
+          ? {
+              chat: { ...current.chat, activeTurnId: result.turn.id, updatedAt: result.turn.createdAt },
+              messages: current.messages.map((message) => {
+                if (message.id === result.userMessage.id) return result.userMessage;
+                if (message.id === result.assistantMessage.id) return result.assistantMessage;
+                return message;
+              }),
+              turns: upsertTurn(current.turns ?? [], result.turn)
+            }
+          : current
+      );
+      void queryClient.invalidateQueries({ queryKey: ["agent", "chats", request.spaceId] });
+      void queryClient.invalidateQueries({ queryKey: ["agent", "status"] });
     }
   });
 
@@ -283,10 +317,14 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
         `/api/agent/spaces/${encodeURIComponent(request.spaceId)}/chats/${encodeURIComponent(request.chatId)}/turns/${encodeURIComponent(request.turnId)}/interrupt`,
         { method: "POST", body: "{}" }
       ),
-    onSuccess: (_result, request) => refreshChat(queryClient, request.spaceId, request.chatId)
+    onSuccess: (_result, request) => {
+      refreshChat(queryClient, request.spaceId, request.chatId);
+      void queryClient.invalidateQueries({ queryKey: ["agent", "status"] });
+    }
   });
 
   const activeTurnId = detailQuery.data?.chat.activeTurnId ?? null;
+  const activeTurn = detailQuery.data?.turns?.find((turn) => turn.id === activeTurnId) ?? null;
   useEffect(() => {
     if (!open || !activeTurnId || !space || !selectedChatId) return;
     const key = ["agent", "chat", space.id, selectedChatId];
@@ -303,7 +341,13 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
     if (!messageCount && !lastMessageContent) return;
     requestAnimationFrame(() => {
       const element = messageListRef.current;
-      if (element) element.scrollTop = element.scrollHeight;
+      if (!element) return;
+      if (followLatestMessageRef.current) {
+        element.scrollTop = element.scrollHeight;
+        setHasNewMessagesBelow(false);
+      } else {
+        setHasNewMessagesBelow(true);
+      }
     });
   }, [lastMessageContent, messageCount, toolActivity]);
 
@@ -334,8 +378,26 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   function submitMessage() {
     const message = draft.trim();
     if (message && canSend && space && selectedChatId) {
+      followLatestMessageRef.current = true;
+      setHasNewMessagesBelow(false);
       sendMessageMutation.mutate({ spaceId: space.id, chatId: selectedChatId, message });
     }
+  }
+
+  function handleMessageListScroll() {
+    const element = messageListRef.current;
+    if (!element) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    followLatestMessageRef.current = distanceFromBottom <= 48;
+    if (followLatestMessageRef.current) setHasNewMessagesBelow(false);
+  }
+
+  function scrollToLatestMessage() {
+    const element = messageListRef.current;
+    if (!element) return;
+    followLatestMessageRef.current = true;
+    setHasNewMessagesBelow(false);
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
   function confirmDelete() {
@@ -429,6 +491,7 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
           {selectedChatId ? (
             <ChatView
               detail={detailQuery.data}
+              activeTurn={activeTurn}
               loading={detailQuery.isPending}
               error={detailQuery.error}
               status={status}
@@ -441,6 +504,9 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
               toolActivity={toolActivity}
               streamError={streamError}
               messageListRef={messageListRef}
+              hasNewMessagesBelow={hasNewMessagesBelow}
+              onMessageListScroll={handleMessageListScroll}
+              onScrollToLatest={scrollToLatestMessage}
               onNewChat={() => createChatMutation.mutate(space.id)}
               creatingChat={createChatMutation.isPending}
               onArchive={() => archiveMutation.mutate({ spaceId: space.id, chatId: selectedChatId })}
@@ -449,9 +515,13 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
                 activeTurnId &&
                 interruptMutation.mutate({ spaceId: space.id, chatId: selectedChatId, turnId: activeTurnId })
               }
+              onRetry={(turnId) =>
+                resumeMutation.mutate({ spaceId: space.id, chatId: selectedChatId, turnId })
+              }
               archiving={archiveMutation.isPending}
               deleting={deleteMutation.isPending}
               interrupting={interruptMutation.isPending}
+              retrying={resumeMutation.isPending}
             />
           ) : (
             <HistoryView
@@ -497,6 +567,10 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
               onSelectModel={(modelId) => {
                 const providerId = modelCatalogQuery.data?.selected.providerId;
                 if (providerId) selectModelMutation.mutate({ providerId, modelId });
+              }}
+              onSelectSettings={(settings) => {
+                const selection = modelCatalogQuery.data?.selected;
+                if (selection) selectModelMutation.mutate({ ...selection, settings });
               }}
             />
           )}
@@ -549,6 +623,7 @@ function HistoryView(props: {
   modelSelectionPending: boolean;
   onSelectProvider: (providerId: string) => void;
   onSelectModel: (modelId: string) => void;
+  onSelectSettings: (settings: AgentRunSettings) => void;
 }) {
   return (
     <div className="ask-space-history">
@@ -602,6 +677,9 @@ function HistoryView(props: {
 function ModelSelector(props: Parameters<typeof HistoryView>[0]) {
   const catalog = props.modelCatalog;
   const selectedProvider = catalog?.providers.find((provider) => provider.id === catalog.selected.providerId);
+  const selectedModel = selectedProvider?.models.find((model) => model.id === catalog?.selected.modelId);
+  const capabilities = selectedModel?.capabilities;
+  const hasAdvancedSettings = Boolean(capabilities?.effort || capabilities?.verbosity);
   if (props.modelCatalogLoading) return <PanelLoading label="Loading agent models…" compact />;
   if (!catalog?.providers.length) {
     return props.modelSelectionError ? <PanelError error={props.modelSelectionError} /> : null;
@@ -629,9 +707,71 @@ function ModelSelector(props: Parameters<typeof HistoryView>[0]) {
           {selectedProvider?.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
         </select>
       </label>
+      {hasAdvancedSettings ? (
+        <details
+          className="ask-space-advanced-settings"
+          key={`${catalog.selected.providerId}:${catalog.selected.modelId}`}
+        >
+          <summary>Advanced</summary>
+          <div className="ask-space-advanced-settings-grid">
+            {capabilities?.verbosity ? (
+              <label>
+                <span>Verbosity</span>
+                <select
+                  aria-label="Verbosity"
+                  value={catalog.selected.settings.verbosity ?? capabilities.verbosity.default}
+                  onChange={(event) =>
+                    props.onSelectSettings({
+                      ...catalog.selected.settings,
+                      verbosity: event.target.value as NonNullable<AgentRunSettings["verbosity"]>
+                    })
+                  }
+                  disabled={props.modelSelectionPending}
+                >
+                  {capabilities.verbosity.options.map((option) => (
+                    <option key={option} value={option}>{settingLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {capabilities?.effort ? (
+              <label>
+                <span>Reasoning effort</span>
+                <select
+                  aria-label="Reasoning effort"
+                  value={catalog.selected.settings.effort ?? capabilities.effort.default}
+                  onChange={(event) =>
+                    props.onSelectSettings({
+                      ...catalog.selected.settings,
+                      effort: event.target.value as NonNullable<AgentRunSettings["effort"]>
+                    })
+                  }
+                  disabled={props.modelSelectionPending}
+                >
+                  {capabilities.effort.options.map((option) => (
+                    <option key={option} value={option}>{settingLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
       {props.modelSelectionError ? <PanelError error={props.modelSelectionError} /> : null}
     </section>
   );
+}
+
+function settingLabel(value: string): string {
+  return {
+    off: "Off",
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    xhigh: "Extra high",
+    max: "Maximum"
+  }[value] ?? value;
 }
 
 function AgentStatusCard(props: Parameters<typeof HistoryView>[0]) {
@@ -658,6 +798,11 @@ function AgentStatusCard(props: Parameters<typeof HistoryView>[0]) {
         <div>
           <strong>{providerName} connected</strong>
           <p>{status.modelName ?? status.modelId ?? status.message ?? "Ready to ask this Space"}</p>
+          {status.capacity ? (
+            <small className="ask-space-capacity">
+              {status.capacity.active}/{status.capacity.maxActive} running · {status.capacity.queued} queued
+            </small>
+          ) : null}
         </div>
         <button type="button" onClick={props.onLogout} disabled={props.loggingOut} aria-label={`Disconnect ${providerName}`}>
           {props.loggingOut ? <Loader2 className="spin" size={16} /> : <LogOut size={16} />}
@@ -751,6 +896,7 @@ function ChatGroup(props: {
 
 function ChatView(props: {
   detail: ChatDetail | undefined;
+  activeTurn: AgentTurn | null;
   loading: boolean;
   error: Error | null;
   status: AgentStatus | undefined;
@@ -763,18 +909,23 @@ function ChatView(props: {
   toolActivity: string | null;
   streamError: string | null;
   messageListRef: React.RefObject<HTMLDivElement | null>;
+  hasNewMessagesBelow: boolean;
+  onMessageListScroll: () => void;
+  onScrollToLatest: () => void;
   onNewChat: () => void;
   creatingChat: boolean;
   onArchive: () => void;
   onDelete: () => void;
   onInterrupt: () => void;
+  onRetry: (turnId: string) => void;
   archiving: boolean;
   deleting: boolean;
   interrupting: boolean;
+  retrying: boolean;
 }) {
   if (props.loading) return <PanelLoading label="Loading transcript…" />;
   if (props.error || !props.detail) return <PanelError error={props.error ?? new Error("Chat could not be loaded")} />;
-  const { chat, messages } = props.detail;
+  const { chat, messages, turns = [] } = props.detail;
   const running = Boolean(chat.activeTurnId);
   const newerSnapshot = !chat.usesLatestSnapshot && chat.activeSnapshot;
 
@@ -810,21 +961,46 @@ function ChatView(props: {
         </div>
       ) : null}
 
-      <div className="ask-space-messages" ref={props.messageListRef} aria-live="polite">
-        {messages.length === 0 ? (
-          <div className="ask-space-empty conversation-empty">
-            <Bot size={29} />
-            <strong>Ask about this snapshot</strong>
-            <p>Architecture, flows, symbols, dependencies, or where behavior is implemented.</p>
-          </div>
-        ) : (
-          messages.map((message) => <ChatMessage key={message.id} message={message} />)
-        )}
-        {props.toolActivity ? (
-          <div className="ask-space-tool-activity" role="status">
-            <Loader2 className="spin" size={15} />
-            <span>{props.toolActivity}</span>
-          </div>
+      {props.activeTurn?.status === "queued" ? (
+        <div className="ask-space-queue-notice" role="status">
+          <Clock3 size={16} />
+          <span>
+            Queued{props.activeTurn.queuePosition ? ` · position ${props.activeTurn.queuePosition}` : ""}
+            {props.status?.capacity ? ` · ${props.status.capacity.active}/${props.status.capacity.maxActive} running` : ""}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="ask-space-message-region">
+        <div className="ask-space-messages" ref={props.messageListRef} onScroll={props.onMessageListScroll} aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="ask-space-empty conversation-empty">
+              <Bot size={29} />
+              <strong>Ask about this snapshot</strong>
+              <p>Architecture, flows, symbols, dependencies, or where behavior is implemented.</p>
+            </div>
+          ) : (
+            messages.map((message) => (
+              <ChatMessage
+                key={message.id}
+                message={message}
+                turn={turns.find((turn) => turn.assistantMessageId === message.id) ?? null}
+                onRetry={props.onRetry}
+                retrying={props.retrying}
+              />
+            ))
+          )}
+          {props.toolActivity ? (
+            <div className="ask-space-tool-activity" role="status">
+              <Loader2 className="spin" size={15} />
+              <span>{props.toolActivity}</span>
+            </div>
+          ) : null}
+        </div>
+        {props.hasNewMessagesBelow ? (
+          <button className="ask-space-latest-message" type="button" onClick={props.onScrollToLatest}>
+            Latest answer
+          </button>
         ) : null}
       </div>
 
@@ -849,7 +1025,12 @@ function ChatView(props: {
             aria-label="Message to agent"
           />
           {running ? (
-            <button type="button" onClick={props.onInterrupt} disabled={props.interrupting} aria-label="Stop answer">
+            <button
+              type="button"
+              onClick={props.onInterrupt}
+              disabled={props.interrupting}
+              aria-label={props.activeTurn?.status === "queued" ? "Cancel queued answer" : "Stop answer"}
+            >
               {props.interrupting ? <Loader2 className="spin" size={17} /> : <Square size={16} fill="currentColor" />}
             </button>
           ) : (
@@ -857,7 +1038,7 @@ function ChatView(props: {
               {props.sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
             </button>
           )}
-          <small>Read-only · pinned to snapshot v{chat.snapshot.version}</small>
+          <small>Adaptive research · Read-only · snapshot v{chat.snapshot.version}</small>
         </div>
       ) : (
         <div className="ask-space-readonly-note">
@@ -875,7 +1056,34 @@ function ChatView(props: {
   );
 }
 
-function ChatMessage({ message }: { message: AgentMessage }) {
+function ChatMessage({
+  message,
+  turn,
+  onRetry,
+  retrying
+}: {
+  message: AgentMessage;
+  turn: AgentTurn | null;
+  onRetry: (turnId: string) => void;
+  retrying: boolean;
+}) {
+  const [copyState, setCopyState] = useState<"plain" | "markdown" | "error" | null>(null);
+
+  async function copyAnswer(format: "plain" | "markdown", button: HTMLButtonElement) {
+    const rendered = button.closest("article")?.querySelector<HTMLElement>(".ask-space-markdown");
+    const value = format === "markdown"
+      ? message.content
+      : (rendered?.innerText || markdownToPlainText(message.content)).trim();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyState(format);
+      if (format === "markdown") button.closest("details")?.removeAttribute("open");
+      window.setTimeout(() => setCopyState((current) => current === format ? null : current), 1_500);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
   return (
     <article className={`ask-space-message ${message.role}`}>
       <header>
@@ -887,9 +1095,53 @@ function ChatMessage({ message }: { message: AgentMessage }) {
           {message.role === "assistant" ? <AgentMarkdown content={message.content} /> : message.content}
         </div>
       ) : null}
+      {message.role === "assistant" && message.content ? (
+        <div className="ask-space-message-actions">
+          <button
+            type="button"
+            onClick={(event) => void copyAnswer("plain", event.currentTarget)}
+            aria-label="Copy answer as plain text"
+          >
+            {copyState === "plain" ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copyState === "plain" ? "Copied" : "Copy"}</span>
+          </button>
+          <details>
+            <summary aria-label="Copy options"><ChevronDown size={14} /></summary>
+            <button type="button" onClick={(event) => void copyAnswer("markdown", event.currentTarget)}>
+              Copy Markdown
+            </button>
+          </details>
+          {copyState === "error" ? <span role="alert">Could not copy the answer.</span> : null}
+        </div>
+      ) : null}
       {message.error ? <div className="ask-space-message-error">{message.error}</div> : null}
       {message.sources.length > 0 ? <SourceList sources={message.sources} /> : null}
       {message.status === "interrupted" ? <small>Answer stopped</small> : null}
+      {message.role === "assistant" && turn && ["failed", "interrupted"].includes(turn.status) ? (
+        <button
+          className="ask-space-retry-answer"
+          type="button"
+          onClick={() => onRetry(turn.id)}
+          disabled={retrying}
+        >
+          {retrying ? <Loader2 className="spin" size={13} /> : null}
+          Resume
+        </button>
+      ) : null}
+      {message.role === "assistant" && turn?.status === "completed" && turn.answerQuality === "best_effort" ? (
+        <>
+          <small>Answered with the evidence available before the research guardrail.</small>
+          <button
+            className="ask-space-retry-answer"
+            type="button"
+            onClick={() => onRetry(turn.id)}
+            disabled={retrying}
+          >
+            {retrying ? <Loader2 className="spin" size={13} /> : null}
+            Continue investigating
+          </button>
+        </>
+      ) : null}
     </article>
   );
 }
@@ -937,11 +1189,15 @@ function handleTurnEvent(
 ) {
   setStreamError(null);
   if (event.type === "state") {
+    if (isActiveTurn(event.turn)) {
+      setToolActivity(activityForPhase(event.turn.phase));
+    }
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
             ...current,
             chat: { ...current.chat, activeTurnId: isActiveTurn(event.turn) ? event.turn.id : null },
+            turns: upsertTurn(current.turns ?? [], event.turn),
             messages: current.messages.map((message) =>
               message.id === event.assistantMessage.id ? event.assistantMessage : message
             )
@@ -950,7 +1206,24 @@ function handleTurnEvent(
     );
     return;
   }
+  if (event.type === "turn.started") {
+    setToolActivity("Planning the investigation…");
+    queryClient.setQueryData<ChatDetail>(key, (current) =>
+      current
+        ? {
+            ...current,
+            chat: { ...current.chat, activeTurnId: event.turn.id },
+            turns: upsertTurn(current.turns ?? [], event.turn),
+            messages: current.messages.map((message) =>
+              message.id === event.turn.assistantMessageId ? { ...message, status: "running" } : message
+            )
+          }
+        : current
+    );
+    return;
+  }
   if (event.type === "assistant.delta") {
+    setToolActivity("Writing the answer…");
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
@@ -965,12 +1238,26 @@ function handleTurnEvent(
     );
     return;
   }
+  if (event.type === "turn.phase_changed") {
+    setToolActivity(activityForPhase(event.phase, event.attemptNumber, event.maxAttempts));
+    queryClient.setQueryData<ChatDetail>(key, (current) =>
+      current
+        ? {
+            ...current,
+            turns: (current.turns ?? []).map((turn) =>
+              turn.id === event.turnId ? { ...turn, phase: event.phase as AgentTurn["phase"] } : turn
+            )
+          }
+        : current
+    );
+    return;
+  }
   if (event.type === "tool.started") {
     setToolActivity(friendlyToolActivity(event.tool));
     return;
   }
   if (event.type === "tool.completed") {
-    setToolActivity(null);
+    setToolActivity(event.success ? friendlyToolCompleted(event.tool) : `Could not finish ${friendlyTool(event.tool)}; continuing…`);
     return;
   }
   setToolActivity(null);
@@ -988,7 +1275,13 @@ function applyAgentDelta(content: string, offset: number, delta: string): string
 }
 
 function isActiveTurn(turn: AgentTurn): boolean {
-  return turn.status === "pending" || turn.status === "running";
+  return turn.status === "queued" || turn.status === "pending" || turn.status === "running";
+}
+
+function upsertTurn(turns: AgentTurn[], incoming: AgentTurn): AgentTurn[] {
+  const index = turns.findIndex((turn) => turn.id === incoming.id);
+  if (index < 0) return [...turns, incoming];
+  return turns.map((turn) => turn.id === incoming.id ? incoming : turn);
 }
 
 function friendlyToolActivity(tool: string): string {
@@ -998,6 +1291,38 @@ function friendlyToolActivity(tool: string): string {
   if (tool.includes("call") || tool.includes("trace")) return "Following the call graph…";
   if (tool.includes("snippet") || tool.includes("code")) return "Reading indexed code…";
   return "Consulting the Space index…";
+}
+
+function friendlyToolCompleted(tool: string): string {
+  if (tool.includes("search")) return "Snapshot search completed; reviewing the results…";
+  if (tool.includes("architecture")) return "Architecture map reviewed…";
+  if (tool.includes("depend")) return "Dependency trace completed…";
+  if (tool.includes("call") || tool.includes("trace")) return "Call graph reviewed…";
+  if (tool.includes("snippet") || tool.includes("code")) return "Indexed code reviewed…";
+  return "Space index consulted…";
+}
+
+function activityForPhase(
+  phase: string | null | undefined,
+  attemptNumber?: number,
+  maxAttempts?: number
+): string {
+  if (phase === "finalizing") return "Preparing the answer…";
+  if (phase === "recovering" && attemptNumber && maxAttempts) {
+    return `Retrying provider response (attempt ${attemptNumber} of ${maxAttempts})…`;
+  }
+  if (phase === "recovering") return "Recovering previous work…";
+  return "Investigating the snapshot…";
+}
+
+function markdownToPlainText(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*\n([\s\S]*?)```/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
+    .replace(/[*_~`]/g, "")
+    .trim();
 }
 
 function friendlyTool(tool: string): string {

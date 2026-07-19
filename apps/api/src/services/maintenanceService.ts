@@ -24,6 +24,7 @@ export class MaintenanceService {
         oldRepoIndexRecords: this.oldRepoIndexRecordIds().length,
         removedRepositoryIndexes: this.removedRepositoryIndexTargets().length,
         orphanRepoIndexDirectories: this.orphanRepoIndexDirectories().length,
+        orphanRevisionSources: this.orphanRevisionSourceTargets().length,
         failedSnapshots: this.failedSnapshotRows().length,
         oldJobs: this.oldJobIds(jobRetentionDays).length,
         removedClones: this.removedCloneRows().length
@@ -43,6 +44,7 @@ export class MaintenanceService {
     const removedClones = this.cleanupRemovedClones();
     const removedRepositoryIndexes = this.deleteRemovedRepositoryIndexes();
     const orphanRepoIndexDirectories = this.deleteOrphanRepoIndexDirectories();
+    const orphanRevisionSources = this.deleteOrphanRevisionSources();
     const oldRepoIndexRecords = this.deleteOldRepoIndexRecords();
     const oldJobs = this.deleteOldJobs(jobRetentionDays);
 
@@ -52,6 +54,7 @@ export class MaintenanceService {
       oldRepoIndexRecords,
       removedRepositoryIndexes,
       orphanRepoIndexDirectories,
+      orphanRevisionSources,
       failedSnapshots,
       oldJobs,
       removedClones
@@ -126,6 +129,21 @@ export class MaintenanceService {
     const targets = this.orphanRepoIndexDirectories();
     const removed = removePaths(targets.map((target) => target.path), this.config.memorepoHome);
     return { count: targets.length, bytes: removed.bytes };
+  }
+
+  private deleteOrphanRevisionSources(): FileCleanupResult {
+    const targets = this.orphanRevisionSourceTargets();
+    const removed = removePaths(targets.map((target) => target.path), this.config.revisionSourcesDir);
+    for (const entry of fs.readdirSync(this.config.revisionSourcesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const repositoryPath = path.join(this.config.revisionSourcesDir, entry.name);
+      try {
+        fs.rmdirSync(repositoryPath);
+      } catch {
+        // Referenced commits or concurrent filesystem activity keep the repository directory alive.
+      }
+    }
+    return removed;
   }
 
   private deleteOldRepoIndexRecords(): CountCleanupResult {
@@ -265,6 +283,45 @@ export class MaintenanceService {
       .map((entry) => ({ path: path.join(this.config.repoIndexesDir, entry.name) }));
   }
 
+  private orphanRevisionSourceTargets(): PathTarget[] {
+    if (this.hasActiveSnapshotBuilds() || !fs.existsSync(this.config.revisionSourcesDir)) return [];
+    const revisionRoot = path.resolve(this.config.revisionSourcesDir);
+    const referenced = new Set<string>();
+    const manifests = this.database.sqlite
+      .prepare("SELECT manifest_json AS manifestJson FROM space_snapshots")
+      .all() as Array<{ manifestJson: string }>;
+    for (const row of manifests) {
+      try {
+        const manifest = JSON.parse(row.manifestJson) as { repositories?: Array<{ localPath?: unknown }> };
+        for (const repository of manifest.repositories ?? []) {
+          if (typeof repository.localPath !== "string") continue;
+          const sourcePath = path.resolve(repository.localPath);
+          if (!isStrictlyInside(revisionRoot, sourcePath)) continue;
+          const relative = path.relative(revisionRoot, sourcePath);
+          const [repositorySegment, commitSegment] = relative.split(path.sep);
+          if (!repositorySegment || !commitSegment) continue;
+          referenced.add(normalizePath(path.join(revisionRoot, repositorySegment, commitSegment)));
+        }
+      } catch {
+        // Invalid manifests are handled by the snapshot gateway; they cannot retain shared sources.
+      }
+    }
+
+    const targets: PathTarget[] = [];
+    for (const repositoryEntry of fs.readdirSync(revisionRoot, { withFileTypes: true })) {
+      const repositoryPath = path.join(revisionRoot, repositoryEntry.name);
+      if (!repositoryEntry.isDirectory()) {
+        targets.push({ path: repositoryPath });
+        continue;
+      }
+      for (const commitEntry of fs.readdirSync(repositoryPath, { withFileTypes: true })) {
+        const commitPath = path.join(repositoryPath, commitEntry.name);
+        if (!referenced.has(normalizePath(commitPath))) targets.push({ path: commitPath });
+      }
+    }
+    return targets;
+  }
+
   private removedCloneRows(): RemovedCloneRow[] {
     return this.database.sqlite
       .prepare(
@@ -311,6 +368,23 @@ export class MaintenanceService {
       .get(spaceRepositoryId) as { count: number };
     return row.count > 0;
   }
+
+  private hasActiveSnapshotBuilds(): boolean {
+    const row = this.database.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM space_snapshots WHERE status = 'building'")
+      .get() as { count: number };
+    return row.count > 0;
+  }
+}
+
+function normalizePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isStrictlyInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function removePaths(paths: string[], memorepoHome: string): FileCleanupResult {
@@ -372,6 +446,7 @@ export interface MaintenanceSummary {
     oldRepoIndexRecords: number;
     removedRepositoryIndexes: number;
     orphanRepoIndexDirectories: number;
+    orphanRevisionSources: number;
     failedSnapshots: number;
     oldJobs: number;
     removedClones: number;
@@ -390,6 +465,7 @@ export interface MaintenanceResult {
   oldRepoIndexRecords: CountCleanupResult;
   removedRepositoryIndexes: FileCleanupResult;
   orphanRepoIndexDirectories: FileCleanupResult;
+  orphanRevisionSources: FileCleanupResult;
   failedSnapshots: FileCleanupResult;
   oldJobs: CountCleanupResult;
   removedClones: FileCleanupResult & { skipped: number };

@@ -434,7 +434,7 @@ export class SpaceService {
         `SELECT 1
          FROM agent_turns t
          JOIN agent_chats c ON c.id = t.chat_id
-         WHERE c.space_id = ? AND t.status IN ('pending', 'running')
+         WHERE c.space_id = ? AND t.status IN ('queued', 'pending', 'running')
          LIMIT 1`
       )
       .get(spaceId);

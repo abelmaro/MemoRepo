@@ -2,6 +2,8 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
   Api,
+  AssistantMessage,
+  AssistantMessageDiagnostic,
   AuthEvent,
   AuthPrompt,
   AuthResult,
@@ -10,17 +12,30 @@ import type {
   Message,
   Model,
   Models,
+  ProviderResponse,
   TSchema,
   Usage
 } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, hasApi } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { AgentAdapterRunInput, AgentRuntimeAdapter } from "./agentRuntimeAdapter.js";
+import {
+  AgentProviderFailureError,
+  type AgentAdapterRunInput,
+  type AgentRuntimeAdapter
+} from "./agentRuntimeAdapter.js";
 import type {
   AgentHistoryMessage,
+  AgentEffort,
   AgentLoginAttempt,
   AgentModelCatalog,
   AgentProviderStatus,
+  AgentProviderTransport,
+  AgentRunFailureCategory,
+  AgentRunFailureDiagnostic,
+  AgentRunFailureStage,
+  AgentRunSettings,
   AgentToolDefinition,
+  AgentVerbosity,
   JsonValue
 } from "./contracts.js";
 
@@ -28,10 +43,21 @@ const RUNTIME_VERSION = "pi-0.80.8";
 const LOGIN_CHALLENGE_TIMEOUT_MS = 30_000;
 const LOGIN_RETENTION_MS = 20 * 60_000;
 const CONNECTION_ID_FIELD = "agentConnectionId";
+const DEFAULT_EFFORT = "medium" as const satisfies AgentEffort;
+const DEFAULT_VERBOSITY = "medium" as const satisfies AgentVerbosity;
+const CODEX_VERBOSITY_OPTIONS: AgentVerbosity[] = ["low", "medium", "high"];
 const SUPPORTED_AUTH_MESSAGE =
   "Ask this Space supports only device OAuth credentials stored by MemoRepo";
 const EXTERNAL_AUTH_LOGOUT_MESSAGE =
   "Agent sign-out is blocked by an external credential. Remove it before signing out";
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
+
+interface SafeProviderResponseMetadata {
+  httpStatus: number | null;
+  providerRequestId: string | null;
+  retryAfterMs: number | null;
+  transport: AgentProviderTransport;
+}
 
 export interface PiAgentRuntimeConfig {
   providerId: string;
@@ -58,6 +84,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
   private authenticationEpoch = 0;
   private lifecycle: "open" | "logging-out" | "closed" = "open";
   private logoutTask: Promise<void> | null = null;
+  private readonly modelSettings = new Map<string, AgentRunSettings>();
 
   constructor(private readonly config: PiAgentRuntimeConfig, models?: Models) {
     this.credentialStore = preserveConnectionIdentity(config.credentialStore);
@@ -65,6 +92,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   catalog(): AgentModelCatalog {
+    const selectedModel = this.models.getModel(this.config.providerId, this.config.modelId);
     return {
       providers: this.models
         .getProviders()
@@ -72,20 +100,36 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
         .map((provider) => ({
           id: provider.id,
           name: provider.name,
-          models: this.models.getModels(provider.id).map((model) => ({ id: model.id, name: model.name }))
+          models: this.models.getModels(provider.id).map((model) => ({
+            id: model.id,
+            name: model.name,
+            capabilities: modelCapabilities(model, this.config.thinkingLevel)
+          }))
         }))
         .filter((provider) => provider.models.length > 0),
-      selected: { providerId: this.config.providerId, modelId: this.config.modelId }
+      selected: {
+        providerId: this.config.providerId,
+        modelId: this.config.modelId,
+        settings: selectedModel ? this.settingsFor(selectedModel) : {}
+      }
     };
   }
 
-  selectModel(providerId: string, modelId: string): void {
+  selectModel(providerId: string, modelId: string, settings?: AgentRunSettings): void {
     if (this.lifecycle !== "open") throw conflict("Agent runtime is not ready for model changes");
     if (this.activeLogin) throw conflict("Wait for agent sign-in to finish before changing models");
     if (this.activeRuns > 0) throw conflict("Wait for active agent runs before changing models");
     const provider = this.models.getProvider(providerId);
     if (!provider?.auth.oauth) throw unavailable(`Pi provider ${providerId} is not available for device OAuth`);
-    if (!this.models.getModel(providerId, modelId)) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
+    const model = this.models.getModel(providerId, modelId);
+    if (!model) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
+    if (settings) {
+      const current = this.modelSettings.get(modelKey(providerId, modelId)) ?? defaultSettings(model, this.config.thinkingLevel);
+      this.modelSettings.set(
+        modelKey(providerId, modelId),
+        validateSettings(model, { ...current, ...settings }, this.config.thinkingLevel)
+      );
+    }
     this.config.providerId = providerId;
     this.config.modelId = modelId;
   }
@@ -236,14 +280,14 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
     const epoch = this.authenticationEpoch;
     this.activeRuns += 1;
     try {
-      const model = this.resolveModel();
+      const model = this.resolveModel(input.providerId, input.modelId);
       const auth = await this.models.getAuth(model);
-      const credential = await this.credentialStore.read(this.config.providerId);
+      const credential = await this.credentialStore.read(model.provider);
       if (epoch !== this.authenticationEpoch || this.lifecycle !== "open" || this.activeLogin) {
         throw conflict("Agent authentication is changing");
       }
       if (!auth) {
-        throw unavailable(`Connect ${this.models.getProvider(this.config.providerId)?.name ?? this.config.providerId} first`);
+        throw unavailable(`Connect ${this.models.getProvider(model.provider)?.name ?? model.provider} first`);
       }
       if (credential?.type !== "oauth") throw unavailable(SUPPORTED_AUTH_MESSAGE);
       if (input.history.length === 0 || input.history.at(-1)?.role !== "user") {
@@ -251,30 +295,132 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       }
 
       const tools = input.tools.map((tool) => this.toPiTool(input, tool));
+      const settings = input.settings
+        ? validateSettings(model, input.settings, this.config.thinkingLevel)
+        : this.settingsFor(model);
+      let finalizationApplied = false;
+      let latestResponse: SafeProviderResponseMetadata | null = null;
+      let latestAssistantMessage: AssistantMessage | null = null;
+      let configuredTransport: AgentProviderTransport | null = null;
+      const providerActivity = () => {
+        try {
+          input.onProviderActivity?.();
+        } catch {
+          // Diagnostic timing must never affect a provider run.
+        }
+      };
       const agent = new Agent({
         initialState: {
           systemPrompt: input.systemPrompt,
           model,
-          thinkingLevel: this.config.thinkingLevel ?? "medium",
+          thinkingLevel: settings.effort ?? "off",
           tools,
           messages: input.history.map((message) => toPiMessage(message, model))
         },
         sessionId: input.sessionId,
-        streamFn: (activeModel, context, options) => this.models.streamSimple(activeModel, context, options),
+        streamFn: (activeModel, context, options) => {
+          const upstreamOnResponse = options?.onResponse;
+          const codexTransport = hasApi(activeModel, "openai-codex-responses");
+          configuredTransport = piTransport(options?.transport);
+          if (codexTransport && configuredTransport === "unknown") configuredTransport = "websocket";
+          const captureResponse = async (response: ProviderResponse, responseModel: Model<Api>) => {
+            providerActivity();
+            latestResponse = safeProviderResponse(
+              response,
+              codexTransport ? "sse" : configuredTransport ?? "unknown"
+            );
+            await upstreamOnResponse?.(response, responseModel);
+          };
+          if (codexTransport) {
+            const { reasoning: _reasoning, ...baseOptions } = options ?? {};
+            const reasoningEffort = toProviderReasoningEffort(settings.effort);
+            return this.models.stream(activeModel, context, {
+              ...baseOptions,
+              reasoningEffort,
+              textVerbosity: settings.verbosity ?? DEFAULT_VERBOSITY,
+              onResponse: captureResponse
+            });
+          }
+          return this.models.streamSimple(activeModel, context, {
+            ...options,
+            onResponse: captureResponse
+          });
+        },
+        prepareNextTurnWithContext: async ({ context }) => {
+          if (finalizationApplied) return undefined;
+          const reason = input.finalizationReason?.() ?? null;
+          if (!reason) return undefined;
+          finalizationApplied = true;
+          await input.onEvent({
+            type: "run.phase_changed",
+            runId: input.runId,
+            phase: "finalizing",
+            reason
+          });
+          return {
+            context: {
+              ...context,
+              tools: [],
+              messages: [
+                ...context.messages,
+                {
+                  role: "user",
+                  content:
+                    "Research is complete. Do not call more tools. Produce the best supported final answer now, " +
+                    "clearly separating direct evidence from uncertainty and mentioning material gaps only when needed.",
+                  timestamp: Date.now()
+                }
+              ]
+            }
+          };
+        },
         toolExecution: "parallel"
       });
 
       const unsubscribe = agent.subscribe(async (event) => {
-        if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
-        await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: event.assistantMessageEvent.delta });
+        if (
+          (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
+          event.message.role === "assistant"
+        ) {
+          providerActivity();
+        }
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          latestAssistantMessage = event.message;
+          await input.onProviderTurn({
+            stopReason: event.message.stopReason,
+            usage: {
+              input: event.message.usage.input,
+              output: event.message.usage.output,
+              reasoning: event.message.usage.reasoning ?? 0,
+              cacheRead: event.message.usage.cacheRead,
+              cacheWrite: event.message.usage.cacheWrite,
+              total: event.message.usage.totalTokens
+            }
+          });
+          return;
+        }
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: event.assistantMessageEvent.delta });
+        }
       });
       const interrupt = () => agent.abort();
       input.signal.addEventListener("abort", interrupt, { once: true });
       try {
         if (input.signal.aborted) throw input.signal.reason ?? new Error("Agent run interrupted");
-        await agent.continue();
+        try {
+          await agent.continue();
+        } catch (error) {
+          if (input.signal.aborted) throw input.signal.reason ?? error;
+          throw new AgentProviderFailureError(
+            piFailureDiagnostic(latestAssistantMessage, latestResponse, configuredTransport, error)
+          );
+        }
         if (input.signal.aborted) throw input.signal.reason ?? new Error("Agent run interrupted");
-        if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+        if (agent.state.errorMessage) {
+          throw new AgentProviderFailureError(
+            piFailureDiagnostic(latestAssistantMessage, latestResponse, configuredTransport, agent.state.errorMessage)
+          );
+        }
       } finally {
         input.signal.removeEventListener("abort", interrupt);
         unsubscribe();
@@ -396,10 +542,19 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
     return cloneAttempt(state.view);
   }
 
-  private resolveModel(): Model<Api> {
-    const model = this.models.getModel(this.config.providerId, this.config.modelId);
-    if (!model) throw unavailable(`Pi model ${this.config.providerId}/${this.config.modelId} is not available`);
+  private resolveModel(providerId = this.config.providerId, modelId = this.config.modelId): Model<Api> {
+    const model = this.models.getModel(providerId, modelId);
+    if (!model) throw unavailable(`Pi model ${providerId}/${modelId} is not available`);
     return model;
+  }
+
+  private settingsFor(model: Model<Api>): AgentRunSettings {
+    const key = modelKey(model.provider, model.id);
+    const stored = this.modelSettings.get(key);
+    if (stored) return stored;
+    const defaults = defaultSettings(model, this.config.thinkingLevel);
+    this.modelSettings.set(key, defaults);
+    return defaults;
   }
 
   private toPiTool(input: AgentAdapterRunInput, definition: AgentToolDefinition): AgentTool<TSchema, never> {
@@ -461,6 +616,79 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
       }
     }
   }
+}
+
+function modelCapabilities(model: Model<Api>, configuredEffort?: ThinkingLevel) {
+  const effortOptions = getSupportedThinkingLevels(model) as AgentEffort[];
+  const effortDefault = preferredEffort(effortOptions, configuredEffort);
+  return {
+    ...(effortOptions.length > 1 && effortDefault
+      ? { effort: { options: [...effortOptions], default: effortDefault } }
+      : {}),
+    ...(hasApi(model, "openai-codex-responses")
+      ? { verbosity: { options: [...CODEX_VERBOSITY_OPTIONS], default: DEFAULT_VERBOSITY } }
+      : {})
+  };
+}
+
+function defaultSettings(model: Model<Api>, configuredEffort?: ThinkingLevel): AgentRunSettings {
+  const capabilities = modelCapabilities(model, configuredEffort);
+  return {
+    ...(capabilities.effort ? { effort: capabilities.effort.default } : {}),
+    ...(capabilities.verbosity ? { verbosity: capabilities.verbosity.default } : {})
+  };
+}
+
+function validateSettings(
+  model: Model<Api>,
+  settings: AgentRunSettings,
+  configuredEffort?: ThinkingLevel
+): AgentRunSettings {
+  const capabilities = modelCapabilities(model, configuredEffort);
+  if (settings.effort !== undefined && !capabilities.effort?.options.includes(settings.effort)) {
+    throw invalidSetting(`Effort ${settings.effort} is not supported by ${model.name}`);
+  }
+  if (settings.verbosity !== undefined && !capabilities.verbosity?.options.includes(settings.verbosity)) {
+    throw invalidSetting(`Verbosity ${settings.verbosity} is not supported by ${model.name}`);
+  }
+  return {
+    ...(settings.effort !== undefined ? { effort: settings.effort } : {}),
+    ...(settings.verbosity !== undefined ? { verbosity: settings.verbosity } : {})
+  };
+}
+
+function preferredEffort(options: AgentEffort[], configured?: ThinkingLevel): AgentEffort | undefined {
+  const preferred = (configured ?? DEFAULT_EFFORT) as AgentEffort;
+  if (options.includes(preferred)) return preferred;
+  if (options.includes(DEFAULT_EFFORT)) return DEFAULT_EFFORT;
+  return options.find((option) => option !== "off") ?? options[0];
+}
+
+function modelKey(providerId: string, modelId: string): string {
+  return `${providerId}\0${modelId}`;
+}
+
+function invalidSetting(message: string): Error {
+  return Object.assign(new Error(message), { statusCode: 400 });
+}
+
+function toProviderReasoningEffort(
+  effort: AgentEffort | undefined
+): "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none" {
+  if (effort === undefined) return DEFAULT_EFFORT;
+  const providerEffort: Record<
+    AgentEffort,
+    "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "none"
+  > = {
+    off: "none",
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max"
+  };
+  return providerEffort[effort];
 }
 
 async function loginPrompt(prompt: AuthPrompt): Promise<string> {
@@ -760,4 +988,242 @@ function sortedEntries(value: unknown): Array<[string, unknown]> {
 
 function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function safeProviderResponse(
+  response: ProviderResponse,
+  transport: AgentProviderTransport
+): SafeProviderResponseMetadata {
+  return {
+    httpStatus: validHttpStatus(response.status),
+    providerRequestId: safeProviderIdentifier(
+      allowedHeader(response.headers, [
+        "x-request-id",
+        "request-id",
+        "openai-request-id",
+        "x-amzn-requestid",
+        "x-goog-request-id"
+      ])
+    ),
+    retryAfterMs: retryAfterMs(allowedHeader(response.headers, ["retry-after"])),
+    transport
+  };
+}
+
+function piFailureDiagnostic(
+  message: AssistantMessage | null,
+  response: SafeProviderResponseMetadata | null,
+  configuredTransport: AgentProviderTransport | null,
+  thrown: unknown
+): AgentRunFailureDiagnostic {
+  const diagnostics = message?.diagnostics ?? [];
+  const diagnosticStatus = firstDiagnosticNumber(diagnostics, ["httpStatus", "status", "statusCode"]);
+  const httpStatus = response?.httpStatus ?? validHttpStatus(diagnosticStatus);
+  const providerCode = safeProviderCode(
+    [...diagnostics].reverse().find((diagnostic) => diagnostic.error?.code !== undefined)?.error?.code
+  );
+  const providerRequestId =
+    response?.providerRequestId ??
+    safeProviderIdentifier(firstDiagnosticValue(diagnostics, ["providerRequestId", "requestId"]));
+  const providerResponseId = safeProviderIdentifier(message?.responseId);
+  const searchable = failureSearchText(message, diagnostics, thrown);
+  const category = failureCategory(searchable, httpStatus);
+  const stage = failureStage(category, searchable, diagnostics, httpStatus, providerResponseId);
+  const transport = failureTransport(response?.transport ?? null, configuredTransport, diagnostics);
+  const retryable = failureRetryable(category, searchable);
+  return {
+    category,
+    stage,
+    providerCode,
+    httpStatus,
+    providerRequestId,
+    providerResponseId,
+    transport,
+    retryable,
+    retryAfterMs: response?.retryAfterMs ?? null,
+    summary: failureSummary(category, stage)
+  };
+}
+
+function failureCategory(searchable: string, httpStatus: number | null): AgentRunFailureCategory {
+  if (httpStatus === 401 || httpStatus === 403) return "authentication";
+  if (httpStatus === 429) return "rate_limit";
+  if (httpStatus === 408 || httpStatus === 504) return "timeout";
+  if (httpStatus !== null && httpStatus >= 500) return "provider_unavailable";
+  if (httpStatus === 404 && /\bmodel\b/.test(searchable)) return "model_unavailable";
+  if (httpStatus === 400 || httpStatus === 404 || httpStatus === 409 || httpStatus === 422) {
+    return "invalid_request";
+  }
+  if (/context.{0,20}(limit|length|window)|maximum context|too many (input )?tokens/.test(searchable)) {
+    return "context_limit";
+  }
+  if (/model.{0,24}(not found|not available|unavailable|unsupported|does not exist)/.test(searchable)) {
+    return "model_unavailable";
+  }
+  if (/unauthori[sz]ed|forbidden|authentication|invalid api key|expired (token|credential)/.test(searchable)) {
+    return "authentication";
+  }
+  if (/rate.?limit|too many requests|usage limit|quota exceeded|insufficient quota/.test(searchable)) {
+    return "rate_limit";
+  }
+  if (/tool.{0,20}(protocol|schema|argument|result)|protocol.{0,20}tool/.test(searchable)) {
+    return "tool_protocol";
+  }
+  if (/invalid request|bad request|unsupported parameter|unknown parameter|malformed request/.test(searchable)) {
+    return "invalid_request";
+  }
+  if (/timed?\s*out|timeout|deadline exceeded/.test(searchable)) return "timeout";
+  if (
+    /websocket|\bsse\b|network|socket|connection|econn|enotfound|fetch failed|stream (ended|closed|interrupted)/.test(
+      searchable
+    )
+  ) {
+    return "transport";
+  }
+  if (/overloaded|temporarily unavailable|service unavailable|provider unavailable/.test(searchable)) {
+    return "provider_unavailable";
+  }
+  return "unknown";
+}
+
+function failureStage(
+  category: AgentRunFailureCategory,
+  searchable: string,
+  diagnostics: AssistantMessageDiagnostic[],
+  httpStatus: number | null,
+  providerResponseId: string | null
+): AgentRunFailureStage {
+  if (category === "tool_protocol") return "tool_protocol";
+  if (httpStatus !== null && httpStatus >= 400) return "response_headers";
+  const transportDiagnostic = [...diagnostics]
+    .reverse()
+    .find((diagnostic) => diagnostic.type === "provider_transport_failure");
+  const transportPhase = nonEmptyString(transportDiagnostic?.details?.phase);
+  if (transportPhase === "after_message_stream_start") return "streaming";
+  if (transportPhase === "before_message_stream_start") return "connection";
+  if (category === "authentication" || category === "invalid_request" || category === "model_unavailable") {
+    return "request";
+  }
+  if (providerResponseId || /stream|response event|message event/.test(searchable)) return "streaming";
+  if (category === "transport" || category === "timeout") return "connection";
+  return "unknown";
+}
+
+function failureTransport(
+  responseTransport: AgentProviderTransport | null,
+  configuredTransport: AgentProviderTransport | null,
+  diagnostics: AssistantMessageDiagnostic[]
+): AgentProviderTransport | null {
+  if (responseTransport) return responseTransport;
+  const transportDiagnostic = [...diagnostics]
+    .reverse()
+    .find((diagnostic) => diagnostic.type === "provider_transport_failure");
+  const phase = nonEmptyString(transportDiagnostic?.details?.phase);
+  if (phase === "after_message_stream_start") return "websocket";
+  const fallback = piTransport(transportDiagnostic?.details?.fallbackTransport);
+  if (fallback !== "unknown") return fallback;
+  const diagnosticConfigured = piTransport(transportDiagnostic?.details?.configuredTransport);
+  if (diagnosticConfigured !== "unknown") return diagnosticConfigured;
+  return configuredTransport;
+}
+
+function failureRetryable(category: AgentRunFailureCategory, searchable: string): boolean {
+  if (category === "rate_limit" && /usage limit|quota|billing|insufficient/.test(searchable)) return false;
+  return (
+    category === "rate_limit" ||
+    category === "provider_unavailable" ||
+    category === "timeout" ||
+    category === "transport" ||
+    category === "unknown"
+  );
+}
+
+function failureSummary(category: AgentRunFailureCategory, stage: AgentRunFailureStage): string {
+  const subject: Record<AgentRunFailureCategory, string> = {
+    authentication: "Provider authentication was rejected.",
+    context_limit: "The provider rejected the request context size.",
+    invalid_request: "The provider rejected the request.",
+    model_unavailable: "The selected model was unavailable.",
+    provider_unavailable: "The provider was temporarily unavailable.",
+    rate_limit: "The provider rate limit was reached.",
+    timeout: "The provider request timed out.",
+    tool_protocol: "The provider rejected the tool protocol exchange.",
+    transport: "The provider transport failed.",
+    unknown: "The provider run failed for an unknown reason."
+  };
+  return stage === "unknown" ? subject[category] : `${subject[category].replace(/\.$/, "")} during ${stage.replace("_", " ")}.`;
+}
+
+function failureSearchText(
+  message: AssistantMessage | null,
+  diagnostics: AssistantMessageDiagnostic[],
+  thrown: unknown
+): string {
+  const thrownMessage = thrown instanceof Error ? thrown.message : typeof thrown === "string" ? thrown : "";
+  return [message?.errorMessage ?? "", thrownMessage, ...diagnostics.map((item) => item.error?.message ?? "")]
+    .join("\n")
+    .toLocaleLowerCase("en-US")
+    .slice(0, 16_384);
+}
+
+function firstDiagnosticNumber(diagnostics: AssistantMessageDiagnostic[], names: string[]): number | null {
+  const value = firstDiagnosticValue(diagnostics, names);
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d{3}$/.test(value.trim())) return Number(value);
+  return null;
+}
+
+function firstDiagnosticValue(diagnostics: AssistantMessageDiagnostic[], names: string[]): unknown {
+  for (const diagnostic of [...diagnostics].reverse()) {
+    for (const name of names) {
+      if (diagnostic.details && Object.hasOwn(diagnostic.details, name)) return diagnostic.details[name];
+    }
+  }
+  return null;
+}
+
+function safeProviderCode(value: unknown): string | null {
+  const code = typeof value === "number" ? String(value) : nonEmptyString(value);
+  if (!code || code.length > 64 || !/^[a-z0-9][a-z0-9._-]*$/i.test(code)) return null;
+  return code;
+}
+
+function safeProviderIdentifier(value: unknown): string | null {
+  const identifier = nonEmptyString(value);
+  if (!identifier || identifier.length > 160 || !/^[a-z0-9][a-z0-9._:-]*$/i.test(identifier)) return null;
+  if (/^eyj[a-z0-9_-]*\.[a-z0-9_-]+\.[a-z0-9_-]+$/i.test(identifier)) return null;
+  return identifier;
+}
+
+function allowedHeader(headers: Record<string, string>, names: string[]): string | null {
+  const allowed = new Set(names.map((name) => name.toLocaleLowerCase("en-US")));
+  for (const [name, value] of Object.entries(headers)) {
+    if (allowed.has(name.toLocaleLowerCase("en-US"))) return value;
+  }
+  return null;
+}
+
+function retryAfterMs(value: string | null): number | null {
+  if (!value) return null;
+  const normalized = value.trim();
+  let delay: number;
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    delay = Number(normalized) * 1_000;
+  } else {
+    const timestamp = Date.parse(normalized);
+    if (!Number.isFinite(timestamp)) return null;
+    delay = timestamp - Date.now();
+  }
+  if (!Number.isFinite(delay)) return null;
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, Math.round(delay)));
+}
+
+function validHttpStatus(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
+}
+
+function piTransport(value: unknown): AgentProviderTransport {
+  if (value === "sse") return "sse";
+  if (value === "websocket" || value === "websocket-cached") return "websocket";
+  return "unknown";
 }

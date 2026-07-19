@@ -1,4 +1,5 @@
 import type {
+  AssistantMessage,
   AuthEvent,
   AuthResult,
   Credential,
@@ -6,8 +7,10 @@ import type {
   CredentialStore,
   Models
 } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AgentProviderFailureError } from "../src/agentRuntimeAdapter.js";
 import { PiAgentRuntimeAdapter } from "../src/piAgentRuntimeAdapter.js";
 
 test("keeps the account key stable when OAuth tokens rotate for the same stored account", async () => {
@@ -380,13 +383,174 @@ test("lists selectable OAuth models and applies a valid selection", async () => 
   const adapter = createAdapter(store, () => undefined);
   try {
     assert.deepEqual(adapter.catalog(), {
-      providers: [{ id: "test-provider", name: "Test Provider", models: [{ id: "test-model", name: "Test Model" }] }],
-      selected: { providerId: "test-provider", modelId: "test-model" }
+      providers: [{
+        id: "test-provider",
+        name: "Test Provider",
+        models: [{ id: "test-model", name: "Test Model", capabilities: {} }]
+      }],
+      selected: { providerId: "test-provider", modelId: "test-model", settings: {} }
     });
     adapter.selectModel("test-provider", "test-model");
     await assert.rejects(
       async () => adapter.selectModel("missing-provider", "missing-model"),
       /not available for device OAuth/
+    );
+  } finally {
+    await adapter.close();
+  }
+});
+
+test("advertises and validates only model-supported effort and verbosity settings", async () => {
+  const store = new MutableCredentialStore(undefined);
+  const adapter = createAdapter(store, () => undefined, undefined, undefined, true);
+  try {
+    assert.deepEqual(adapter.catalog().providers[0]?.models[0]?.capabilities, {
+      effort: { options: ["off", "minimal", "low", "medium", "high"], default: "medium" },
+      verbosity: { options: ["low", "medium", "high"], default: "medium" }
+    });
+    adapter.selectModel("test-provider", "test-model", { effort: "high", verbosity: "high" });
+    assert.deepEqual(adapter.catalog().selected.settings, { effort: "high", verbosity: "high" });
+    assert.throws(
+      () => adapter.selectModel("test-provider", "test-model", { effort: "max" }),
+      /Effort max is not supported/
+    );
+  } finally {
+    await adapter.close();
+  }
+});
+
+test("forwards persisted per-run Codex settings to the provider stream", async () => {
+  const store = new MutableCredentialStore(oauthCredential("access-one", "refresh-one", { accountId: "account-one" }));
+  const streamOptions: Array<Record<string, unknown>> = [];
+  const adapter = createAdapter(
+    store,
+    () => oauthAuth(store),
+    undefined,
+    undefined,
+    true,
+    (options) => streamOptions.push(options)
+  );
+  const observations: unknown[] = [];
+  try {
+    adapter.selectModel("test-provider", "test-model", { effort: "high", verbosity: "high" });
+    await adapter.run({
+      runId: "run-1",
+      sessionId: "session-1",
+      providerId: "test-provider",
+      modelId: "test-model",
+      settings: { effort: "low", verbosity: "low" },
+      systemPrompt: "Investigate the snapshot.",
+      history: [{ role: "user", content: "Explain the flow", timestamp: 1 }],
+      tools: [],
+      requestTool: async () => ({ ok: true, value: null }),
+      signal: new AbortController().signal,
+      onEvent: async () => undefined,
+      onProviderTurn: (observation) => observations.push(observation)
+    });
+
+    assert.equal(streamOptions.length, 1);
+    assert.equal(streamOptions[0]?.reasoningEffort, "low");
+    assert.equal(streamOptions[0]?.textVerbosity, "low");
+    assert.equal(streamOptions[0]?.sessionId, "session-1");
+    assert.deepEqual(observations, [{
+      stopReason: "stop",
+      usage: { input: 12, output: 8, reasoning: 3, cacheRead: 2, cacheWrite: 0, total: 20 }
+    }]);
+  } finally {
+    await adapter.close();
+  }
+});
+
+test("classifies Pi provider failures from allowlisted response metadata without exposing secrets", async () => {
+  const store = new MutableCredentialStore(oauthCredential("access-one", "refresh-one"));
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "test-model",
+    responseId: "resp-safe-1",
+    diagnostics: [{
+      type: "provider_transport_failure",
+      timestamp: 2,
+      error: {
+        message: "Authorization: Bearer bearer-secret failed with refresh_token=refresh-secret",
+        code: "ECONNRESET"
+      },
+      details: {
+        configuredTransport: "auto",
+        fallbackTransport: "sse",
+        phase: "before_message_stream_start",
+        rawBody: "body-secret"
+      }
+    }],
+    usage: {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+    },
+    stopReason: "error",
+    errorMessage: "Rate limit reached for access_token=access-secret",
+    timestamp: 2
+  };
+  const adapter = createAdapter(
+    store,
+    () => oauthAuth(store),
+    undefined,
+    undefined,
+    true,
+    () => undefined,
+    {
+      message,
+      response: {
+        status: 429,
+        headers: {
+          "x-request-id": "req-safe-1",
+          "retry-after": "1.5",
+          authorization: "Bearer header-secret"
+        }
+      }
+    }
+  );
+
+  try {
+    let failure: unknown;
+    try {
+      await adapter.run({
+        runId: "run-failure",
+        sessionId: "session-failure",
+        systemPrompt: "Private prompt content",
+        history: [{ role: "user", content: "Private question", timestamp: 1 }],
+        tools: [],
+        requestTool: async () => ({ ok: true, value: null }),
+        signal: new AbortController().signal,
+        onEvent: async () => undefined,
+        onProviderTurn: async () => undefined
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.ok(failure instanceof AgentProviderFailureError);
+    assert.deepEqual(failure.diagnostic, {
+      category: "rate_limit",
+      stage: "response_headers",
+      providerCode: "ECONNRESET",
+      httpStatus: 429,
+      providerRequestId: "req-safe-1",
+      providerResponseId: "resp-safe-1",
+      transport: "sse",
+      retryable: true,
+      retryAfterMs: 1_500,
+      summary: "The provider rate limit was reached during response headers."
+    });
+    assert.doesNotMatch(
+      JSON.stringify(failure),
+      /bearer-secret|refresh-secret|body-secret|access-secret|header-secret|private prompt|private question/i
     );
   } finally {
     await adapter.close();
@@ -427,9 +591,21 @@ function createAdapter(
   store: CredentialStore,
   resolveAuth: () => AuthResult | undefined,
   login?: (options: FakeLoginOptions) => Promise<unknown>,
-  logout?: () => Promise<void>
+  logout?: () => Promise<void>,
+  capableModel = false,
+  observeStreamOptions?: (options: Record<string, unknown>) => void,
+  streamScenario?: {
+    message: AssistantMessage;
+    response?: { status: number; headers: Record<string, string> };
+  }
 ) {
-  const model = { id: "test-model", name: "Test Model", provider: "test-provider", api: "test-api" };
+  const model = {
+    id: "test-model",
+    name: "Test Model",
+    provider: "test-provider",
+    api: capableModel ? "openai-codex-responses" : "test-api",
+    reasoning: capableModel
+  };
   const provider = { id: "test-provider", name: "Test Provider", auth: { oauth: {} } };
   const models = {
     getProviders() {
@@ -454,6 +630,46 @@ function createAdapter(
     async logout() {
       if (logout) return logout();
       await store.delete(provider.id);
+    },
+    stream(_model: unknown, _context: unknown, options: Record<string, unknown>) {
+      if (!observeStreamOptions) throw new Error("Unexpected provider stream request");
+      observeStreamOptions(options);
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = streamScenario?.message ?? {
+        role: "assistant",
+        content: [{ type: "text", text: "A detailed answer." }],
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        model: "test-model",
+        usage: {
+          input: 12,
+          output: 8,
+          reasoning: 3,
+          cacheRead: 2,
+          cacheWrite: 0,
+          totalTokens: 20,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+        },
+        stopReason: "stop",
+        timestamp: 2
+      };
+      queueMicrotask(() => {
+        void (async () => {
+          if (streamScenario?.response) {
+            const onResponse = options.onResponse as
+              | ((response: { status: number; headers: Record<string, string> }, model: unknown) => void | Promise<void>)
+              | undefined;
+            await onResponse?.(streamScenario.response, model);
+          }
+          stream.push({ type: "start", partial: message });
+          if (message.stopReason === "error" || message.stopReason === "aborted") {
+            stream.push({ type: "error", reason: message.stopReason, error: message });
+          } else {
+            stream.push({ type: "done", reason: message.stopReason, message });
+          }
+        })();
+      });
+      return stream;
     }
   } as unknown as Models;
   return new PiAgentRuntimeAdapter(
@@ -461,7 +677,7 @@ function createAdapter(
       providerId: provider.id,
       modelId: model.id,
       credentialStore: store,
-      thinkingLevel: "off"
+      thinkingLevel: capableModel ? "medium" : "off"
     },
     models
   );

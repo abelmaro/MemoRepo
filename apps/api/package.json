@@ -1,6 +1,6 @@
 {
   "name": "@memorepo/api",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,6 +11,11 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "mcp": "node dist/cli/mcp.js",
+    "perf:baseline": "tsx src/cli/performanceBaseline.ts",
+    "perf:cbm": "tsx test/runCbmBenchmark.ts",
+    "perf:cbm:matrix": "tsx test/runCbmBenchmarkMatrix.ts",
+    "perf:ingestion": "tsx test/runIngestionBenchmark.ts",
+    "test:cbm-contract": "node --import tsx --test test/cbmRealContract.integration.test.ts",
     "build": "tsc -p tsconfig.json",
     "pretest": "pnpm --filter @memorepo/agent-runtime build",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",

@@ -13,6 +13,11 @@ export function managedPathSize(root: string, target: string): number {
   return pathSize(safePath);
 }
 
+export async function managedPathSizeAsync(root: string, target: string, signal?: AbortSignal): Promise<number> {
+  const safePath = assertDeletableManagedPath(root, target);
+  return pathSizeAsync(safePath, signal);
+}
+
 export function removeManagedPath(root: string, target: string): ManagedPathRemoval {
   const safePath = assertDeletableManagedPath(root, target);
   const existed = fs.existsSync(safePath);
@@ -50,4 +55,34 @@ function pathSize(target: string): number {
     total += pathSize(path.join(target, entry));
   }
   return total;
+}
+
+async function pathSizeAsync(target: string, signal?: AbortSignal): Promise<number> {
+  throwIfAborted(signal);
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.lstat(target);
+  } catch (error) {
+    if (isMissingPathError(error)) return 0;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return stat.size;
+
+  let total = stat.size;
+  const entries = await fs.promises.readdir(target);
+  for (const entry of entries) {
+    total += await pathSizeAsync(path.join(target, entry), signal);
+  }
+  return total;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = signal.reason instanceof Error ? new Error(signal.reason.message) : new Error("Operation cancelled");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT");
 }

@@ -42,9 +42,9 @@ Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork m
 
 Docker Compose includes the supported `codebase-memory-mcp` release. If you run the Node workspaces directly for development, install `codebase-memory-mcp` v0.9.0 on `PATH`. MemoRepo fails closed when the runtime cannot verify that `auto_index` and `auto_watch` are both disabled for immutable snapshot caches.
 
-For regular use, set `MEMOREPO_HOME` to a path outside this repository. The default works for a first run, but it keeps managed clones and indexes under `./.memorepo`.
+New Docker Compose installations use the `memorepo-data` named volume from `.env.example`. This avoids Docker Desktop bind-mount overhead during the many small reads and writes performed by Git and the indexer. For direct Node development, set `MEMOREPO_HOME` to a path outside this repository.
 
-On Linux, create the `MEMOREPO_HOME` directory yourself before the first `docker compose up`. The containers run as an unprivileged user, and a directory auto-created by Docker would be owned by root.
+Existing installations remain compatible: when `MEMOREPO_STORAGE` is absent, Compose continues mounting the existing `MEMOREPO_HOME` path. To opt into the faster named volume, stop MemoRepo, back up the current state directory, copy its complete contents into the volume named by `MEMOREPO_DATA_VOLUME_NAME` (default `memorepo-data`), set `MEMOREPO_STORAGE=memorepo-data`, and start MemoRepo again. Verify that spaces and chats are present before removing the backup. On Linux bind-mount installations, create the host directory yourself before first startup because the containers run as an unprivileged user.
 
 Keep `MEMOREPO_API_CONTAINER_NAME=memorepo-api` unless you also change `container_name` in `docker-compose.yml`.
 
@@ -130,13 +130,19 @@ After a space has an active snapshot, open **Ask this Space**, choose a provider
 
 The connection button remains disabled until you accept the data disclosure. Questions, chat history, snapshot query results, and relevant code excerpts are sent to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
 
-The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or answer is active. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
+The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or running answer is active. Open **Advanced** to change verbosity or reasoning effort when the selected model supports them; unsupported controls are omitted. MemoRepo stores the global provider, model, verbosity, and reasoning-effort selection in SQLite and restores it after API restarts. If a saved selection is no longer available in the current catalog, the configured initial selection is restored. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
 
-Each answer has configurable safety budgets. The supplied defaults are 600 seconds and 96 tool calls; set `MEMOREPO_AGENT_MAX_RUN_SECONDS` or `MEMOREPO_AGENT_MAX_TOOL_CALLS` in `.env` when a larger investigation needs a different bound. Limit failures include the stable codes `MR-AGENT-TIME-LIMIT` or `MR-AGENT-TOOL-LIMIT`.
+Ask the question directly; there is no research-mode selector. The agent chooses the investigation depth from the question and available evidence, stops naturally when the answer is supported, and reserves part of its budget to synthesize a response. `MEMOREPO_AGENT_MAX_RUN_SECONDS`, `MEMOREPO_AGENT_MAX_TOOL_CALLS`, and `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS` are high internal safety ceilings rather than user-facing quality modes. The defaults are 1,800 seconds, 200 tool calls, and 50 provider rounds.
+
+By default, two answers run at once and up to twenty more wait in a durable FIFO queue. The panel shows current capacity and queue position. You can cancel a queued or running answer. A transient or unclassified provider failure is retried automatically up to three total attempts, and the panel shows the active attempt; an explicitly non-retryable failure stops immediately. Provider retry delays are honored within a bounded wait. If recovery is exhausted, **Resume** continues the same logical turn. A best-effort answer offers **Continue investigating**. Both paths reuse successful tool results from the pinned snapshot and keep the original two transcript messages.
+
+Waiting and active answers survive an API restart. An answer that was running resumes from its recorded attempts and cached evidence once the matching provider is available.
 
 Chats are read-only, are pinned to the active immutable snapshot at creation time, and remain visible after signing out. If a pinned snapshot is pruned, its transcript remains readable but can no longer be continued.
 
-Each snapshot indexes an exact-commit source copy stored inside its own artifact. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot.
+Every turn records its completion reason, answer quality, attempt count, final provider stop reason, provider round count, tool-call count, and token totals. Each attempt also records total duration and time to the first provider event. Failed attempts additionally record bounded provider failure classification, safe request identifiers when available, transport, retryability, and retry delay. Failure diagnostics and logs do not retain additional prompt copies, raw provider errors or response bodies, arbitrary headers, or model reasoning. Successful bounded read-only tool results are cached separately by immutable snapshot for recovery and are deleted with that snapshot.
+
+Each snapshot indexes exact-commit trees stored in MemoRepo's content-addressed immutable source store. Later updates to the managed clone therefore do not change source-backed answers for a retained chat snapshot, while unchanged commits avoid another full source copy.
 
 Snapshot materialization intentionally rejects tracked symbolic links. Replace them with regular files or directories before adding or reindexing that repository.
 
@@ -147,10 +153,16 @@ For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 When using the MCP server from an agent:
 
 - start with `list_space_repositories` or `list_projects`;
+- inspect `snapshot_index_coverage` before making an exhaustive or negative claim;
+- use `list_snapshot_files` with an explicit project for file inventories or path and extension existence questions;
+- use `search_snapshot_text` for exact literals and files that CBM may not index, following every page until `has_more=false`;
+- use `read_snapshot_file` to verify the final source evidence;
 - use `get_graph_schema` before custom Cypher;
-- search with `search_graph`, `semantic_query`, or `search_code`;
+- search with `search_graph` or `search_code`;
 - use `trace_path` and `get_code_snippet` after graph or semantic search;
 - use `query_graph` only for bounded read-only Cypher; `max_rows` is optional and capped at 25.
+
+Do not interpret an empty CBM result as proof of absence when coverage is partial or unknown. A negative answer is exhaustive only when source integrity is valid, coverage reports `exhaustive=true`, the source search is complete and untruncated, and every result page was consumed.
 
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
@@ -170,10 +182,10 @@ If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key 
 
 Use the `Data lifecycle` panel inside a space to:
 
-- inspect snapshots and their approximate size;
+- inspect snapshots and their approximate index-artifact size; shared immutable revision trees are counted separately as garbage-collection candidates when no retained snapshot references them;
 - prune inactive snapshots while always keeping the active snapshot;
-- run garbage collection for failed snapshot artifacts, removed clones, stale repo index records, orphan repo index directories, and old terminal jobs;
-- delete a space together with MemoRepo-managed local data.
+- run garbage collection for failed snapshot artifacts, removed clones, stale repo index records, orphan repo index directories, unreferenced revision trees, and old terminal jobs;
+- delete a space together with its space-scoped MemoRepo data; revision trees still referenced by another retained snapshot remain shared, and newly unreferenced trees are removed by garbage collection.
 
 The defaults come from:
 
@@ -181,7 +193,16 @@ The defaults come from:
 MEMOREPO_SNAPSHOT_RETENTION=3
 MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
+MEMOREPO_CBM_INDEX_CONCURRENCY=1
+MEMOREPO_CBM_INTERACTIVE_CONCURRENCY=2
+MEMOREPO_CBM_INDEX_MODE=fast
+MEMOREPO_ENFORCE_SNAPSHOT_QUALITY=true
+MEMOREPO_COMPACT_CBM_RESPONSES=true
+MEMOREPO_BATCH_REPOSITORY_OPERATIONS=true
+MEMOREPO_SNAPSHOT_ONLY_INDEXING=true
 ```
+
+Keep quality enforcement and snapshot-only indexing enabled for normal Docker Compose use. Set `MEMOREPO_CBM_INDEX_MODE=full` and restart the API when semantic graph retrieval is worth the additional indexing time, memory, and storage; then rebuild each space snapshot because retained snapshots preserve their original mode. Accepted values are `fast`, `moderate`, and `full`, and invalid values prevent API startup. To diagnose or immediately roll back the indexing flow without removing stored artifacts, set `MEMOREPO_SNAPSHOT_ONLY_INDEXING=false` and restart the API. The snapshot list reports CBM engine versions, index modes, source coverage, skipped files, indexing duration, artifact size, and any degraded-quality reason so rollout regressions are visible without reading server logs.
 
 ## 13. Manage Jobs
 
@@ -193,7 +214,7 @@ MemoRepo supports:
 - cancelling pending jobs before they start or requesting cancellation of an active Git, indexing, or snapshot subprocess;
 - automatically marking abandoned running jobs as failed after an API restart;
 - returning the existing active job when the submitted job type, scope, dependency, and canonical payload match exactly;
-- configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`.
+- configuring global job concurrency with `MEMOREPO_JOB_CONCURRENCY`, heavyweight index concurrency with `MEMOREPO_CBM_INDEX_CONCURRENCY`, and independent query capacity with `MEMOREPO_CBM_INTERACTIVE_CONCURRENCY`.
 
 Active cancellation is cooperative: MemoRepo signals the current subprocess, escalates if it does not stop, and records the job as cancelled after the handler exits. A running row recovered without an active process cannot be cancelled safely and is marked failed during startup recovery instead.
 

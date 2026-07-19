@@ -40,13 +40,11 @@ export function StatusStrip({
 }: StatusStripProps) {
   const systemQuery = useQuery({
     queryKey: ["system"],
-    queryFn: () => api<SystemState>("/api/system"),
-    refetchInterval: 30000
+    queryFn: () => api<SystemState>("/api/system")
   });
   const connectionsQuery = useQuery({
     queryKey: ["mcp-connections", space.id],
-    queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`),
-    refetchInterval: 10000
+    queryFn: () => api<{ connections: McpConnection[] }>(`/api/spaces/${space.id}/mcp-connections`)
   });
   const snapshotJobId = snapshotSummary.latestSnapshotJob?.id;
 

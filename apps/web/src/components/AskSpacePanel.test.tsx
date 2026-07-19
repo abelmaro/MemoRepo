@@ -133,10 +133,10 @@ it("supports pending provider login without a URL, code, or instructions", async
 it("switches the provider and model through the runtime selection API", async () => {
   const firstCatalog = {
     providers: [
-      { id: "provider-a", name: "Provider A", models: [{ id: "model-a", name: "Model A" }] },
-      { id: "provider-b", name: "Provider B", models: [{ id: "model-b", name: "Model B" }] }
+      { id: "provider-a", name: "Provider A", models: [{ id: "model-a", name: "Model A", capabilities: {} }] },
+      { id: "provider-b", name: "Provider B", models: [{ id: "model-b", name: "Model B", capabilities: {} }] }
     ],
-    selected: { providerId: "provider-a", modelId: "model-a" }
+    selected: { providerId: "provider-a", modelId: "model-a", settings: {} }
   };
   apiMock.mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/api/agent/models" && !init) return Promise.resolve(firstCatalog);
@@ -169,6 +169,81 @@ it("switches the provider and model through the runtime selection API", async ()
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ providerId: "provider-b", modelId: "model-b" }) })
   ));
   expect(screen.getByRole("button", { name: "Resize Ask this Space" })).toBeTruthy();
+});
+
+it("keeps advanced settings closed and updates supported verbosity and effort", async () => {
+  const catalog = {
+    providers: [{
+      id: "provider-a",
+      name: "Provider A",
+      models: [{
+        id: "model-a",
+        name: "Model A",
+        capabilities: {
+          verbosity: { options: ["low", "medium", "high"], default: "medium" },
+          effort: { options: ["low", "medium", "high"], default: "medium" }
+        }
+      }]
+    }],
+    selected: { providerId: "provider-a", modelId: "model-a", settings: { verbosity: "medium", effort: "medium" } }
+  };
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models" && !init) return Promise.resolve(catalog);
+    if (path === "/api/agent/model" && init?.method === "PUT") {
+      return Promise.resolve({ ...catalog, selected: JSON.parse(String(init.body)) });
+    }
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [] });
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  const summary = await screen.findByText("Advanced");
+  const disclosure = summary.closest("details") as HTMLDetailsElement;
+  expect(disclosure.open).toBe(false);
+  fireEvent.click(summary);
+  expect(disclosure.open).toBe(true);
+  expect(screen.getByLabelText("Verbosity")).toBeTruthy();
+  expect(screen.getByLabelText("Reasoning effort")).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText("Verbosity"), { target: { value: "high" } });
+  await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+    "/api/agent/model",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({
+        providerId: "provider-a",
+        modelId: "model-a",
+        settings: { verbosity: "high", effort: "medium" }
+      })
+    })
+  ));
+});
+
+it("does not render unsupported advanced controls", async () => {
+  const catalog = {
+    providers: [{
+      id: "provider-a",
+      name: "Provider A",
+      models: [{
+        id: "model-a",
+        name: "Model A",
+        capabilities: { verbosity: { options: ["low", "high"], default: "low" } }
+      }]
+    }],
+    selected: { providerId: "provider-a", modelId: "model-a", settings: { verbosity: "low" } }
+  };
+  apiMock.mockImplementation((path: string) => {
+    if (path === "/api/agent/models") return Promise.resolve(catalog);
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [] });
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByText("Advanced"));
+  expect(screen.getByLabelText("Verbosity")).toBeTruthy();
+  expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
 });
 
 it("keeps a disconnected provider's pruned snapshot transcript readable and clearly non-continuable", async () => {
@@ -315,13 +390,47 @@ it("streams an answer into the persistent assistant message", async () => {
 
   renderPanel();
   fireEvent.click(await screen.findByRole("button", { name: /New chat/i }));
+  expect(screen.queryByLabelText("Answer mode")).toBeNull();
   const textarea = await screen.findByLabelText("Message to agent");
   fireEvent.change(textarea, { target: { value: "Explain the flow" } });
   fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_1/messages",
+      { method: "POST", body: JSON.stringify({ message: "Explain the flow" }) }
+    )
+  );
+
   await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
   const onEvent = (subscribeMock.mock.calls as unknown as Array<[string, (event: unknown) => void]>)[0]?.[1];
   if (!onEvent) throw new Error("Agent stream callback was not registered");
+  const messageList = document.querySelector<HTMLElement>(".ask-space-messages");
+  if (!messageList) throw new Error("Message list was not rendered");
+  Object.defineProperties(messageList, {
+    scrollHeight: { configurable: true, value: 1_000 },
+    clientHeight: { configurable: true, value: 200 }
+  });
+  messageList.scrollTop = 100;
+  fireEvent.scroll(messageList);
+  onEvent({ type: "turn.started", turnId: "turn_1", turn: {
+    id: "turn_1", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+    status: "running", error: null, createdAt: chat.createdAt, startedAt: chat.createdAt, finishedAt: null
+  } });
+  expect(await screen.findByText("Planning the investigation…")).toBeTruthy();
+  onEvent({ type: "tool.started", turnId: "turn_1", tool: "search_code" });
+  expect(await screen.findByText("Searching the snapshot…")).toBeTruthy();
+  onEvent({ type: "tool.completed", turnId: "turn_1", tool: "search_code", success: true, sources: [] });
+  expect(await screen.findByText("Snapshot search completed; reviewing the results…")).toBeTruthy();
+  onEvent({
+    type: "turn.phase_changed",
+    turnId: "turn_1",
+    phase: "recovering",
+    reason: "provider_failure",
+    attemptNumber: 2,
+    maxAttempts: 3
+  });
+  expect(await screen.findByText("Retrying provider response (attempt 2 of 3)…")).toBeTruthy();
   const partial = "The flow starts";
   onEvent({
     type: "state",
@@ -334,9 +443,144 @@ it("streams an answer into the persistent assistant message", async () => {
       sources: [], error: null, createdAt: chat.createdAt, completedAt: null
     }
   });
+  expect(await screen.findByRole("button", { name: "Latest answer" })).toBeTruthy();
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: partial.length, delta: " here." });
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: 0, delta: partial });
   expect(await screen.findByText("The flow starts here.")).toBeTruthy();
+  expect(screen.getByText("Writing the answer…")).toBeTruthy();
+});
+
+it("copies completed assistant answers as plain text or Markdown", async () => {
+  const chat = { ...chatFixture("chat_copy", "Copyable answer"), messageCount: 2 };
+  const markdown = "## Result\n\nUse **the snapshot** and `[source](https://example.com)`.";
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  apiMock.mockImplementation((path: string) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("provider-a", "Provider A", "model-a", "Model A"));
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_copy") {
+      return Promise.resolve({
+        chat,
+        messages: [
+          { id: "user", sequence: 1, role: "user", status: "completed", content: "Explain", sources: [], error: null, createdAt: chat.createdAt, completedAt: chat.createdAt },
+          { id: "assistant", sequence: 2, role: "assistant", status: "completed", content: markdown, sources: [], error: null, createdAt: chat.createdAt, completedAt: chat.createdAt }
+        ],
+        turns: []
+      });
+    }
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Copyable answer/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Copy answer as plain text" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("Result\n\nUse the snapshot and source."));
+
+  fireEvent.click(screen.getByLabelText("Copy options"));
+  fireEvent.click(screen.getByRole("button", { name: "Copy Markdown" }));
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(markdown));
+});
+
+it("shows queue capacity and lets a queued answer be cancelled", async () => {
+  const chat = { ...chatFixture("chat_queued", "Queued chat"), activeTurnId: "turn_queued", messageCount: 2 };
+  const createdAt = chat.createdAt;
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("example", "Example AI", "example-model", "Example Model"));
+    if (path === "/api/agent/status") {
+      return Promise.resolve({
+        ...connectedStatus(),
+        capacity: { active: 2, maxActive: 2, queued: 2, maxQueued: 20 }
+      });
+    }
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_queued" && !init) {
+      return Promise.resolve({
+        chat,
+        messages: [
+          {
+            id: "message_user", sequence: 1, role: "user", status: "completed", content: "Queued question",
+            sources: [], error: null, createdAt, completedAt: createdAt
+          },
+          {
+            id: "message_assistant", sequence: 2, role: "assistant", status: "pending", content: "",
+            sources: [], error: null, createdAt, completedAt: null
+          }
+        ],
+        turns: [{
+          id: "turn_queued", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+          status: "queued", error: null, providerId: "example", modelId: "example-model",
+          executionPolicy: "adaptive", phase: "queued", completionReason: null, answerQuality: null,
+          resumable: false, attemptCount: 0, queuePosition: 2, settings: {},
+          limits: { maxRunSeconds: 1800, maxToolCalls: 200, maxProviderRounds: 50 },
+          metrics: null, createdAt, startedAt: null, finishedAt: null
+        }]
+      });
+    }
+    if (path.endsWith("/turns/turn_queued/interrupt") && init?.method === "POST") return Promise.resolve(undefined);
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Queued chat/i }));
+
+  expect(await screen.findByText("Queued · position 2 · 2/2 running")).toBeTruthy();
+  const cancel = screen.getByRole("button", { name: "Cancel queued answer" });
+  fireEvent.click(cancel);
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_queued/turns/turn_queued/interrupt",
+      { method: "POST", body: "{}" }
+    )
+  );
+});
+
+it("continues a best-effort answer on the same turn", async () => {
+  const chat = { ...chatFixture("chat_best_effort", "Broad investigation"), messageCount: 2 };
+  const createdAt = chat.createdAt;
+  const turn = {
+    id: "turn_best_effort", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+    status: "completed", error: null, providerId: "example", modelId: "example-model",
+    executionPolicy: "adaptive", phase: "completed", completionReason: "budget", answerQuality: "best_effort",
+    resumable: false, attemptCount: 1, queuePosition: null, settings: {},
+    limits: { maxRunSeconds: 1800, maxToolCalls: 200, maxProviderRounds: 50 },
+    metrics: null, createdAt, startedAt: createdAt, finishedAt: createdAt
+  };
+  const userMessage = {
+    id: "message_user", sequence: 1, role: "user", status: "completed", content: "Investigate broadly",
+    sources: [], error: null, createdAt, completedAt: createdAt
+  };
+  const assistantMessage = {
+    id: "message_assistant", sequence: 2, role: "assistant", status: "completed", content: "Supported so far.",
+    sources: [], error: null, createdAt, completedAt: createdAt
+  };
+  apiMock.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("example", "Example AI", "example-model", "Example Model"));
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_best_effort" && !init) {
+      return Promise.resolve({ chat, messages: [userMessage, assistantMessage], turns: [turn] });
+    }
+    if (path.endsWith("/turns/turn_best_effort/resume") && init?.method === "POST") {
+      return Promise.resolve({
+        turn: { ...turn, status: "queued", phase: "recovering", completionReason: null, answerQuality: null, finishedAt: null },
+        userMessage,
+        assistantMessage: { ...assistantMessage, status: "pending", content: "", completedAt: null }
+      });
+    }
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Broad investigation/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "Continue investigating" }));
+
+  await waitFor(() =>
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/agent/spaces/space_1/chats/chat_best_effort/turns/turn_best_effort/resume",
+      { method: "POST", body: "{}" }
+    )
+  );
 });
 
 it("clears the draft when switching chats", async () => {
@@ -397,8 +641,23 @@ function chatFixture(id: string, title: string) {
 
 function modelCatalog(providerId: string, providerName: string, modelId: string, modelName: string) {
   return {
-    providers: [{ id: providerId, name: providerName, models: [{ id: modelId, name: modelName }] }],
-    selected: { providerId, modelId }
+    providers: [{ id: providerId, name: providerName, models: [{ id: modelId, name: modelName, capabilities: {} }] }],
+    selected: { providerId, modelId, settings: {} }
+  };
+}
+
+function connectedStatus() {
+  return {
+    configured: true,
+    available: true,
+    connected: true,
+    providerId: "provider-a",
+    providerName: "Provider A",
+    modelId: "model-a",
+    modelName: "Model A",
+    authSource: "stored",
+    version: "1.0.0",
+    message: null
   };
 }
 

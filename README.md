@@ -6,6 +6,8 @@ MemoRepo is a local-first dashboard for building isolated repository spaces, ind
 
 MemoRepo is meant to be run by one developer or one local workstation environment. It manages local clones, builds immutable code graph snapshots, and gives coding agents a narrow MCP interface over those snapshots.
 
+CBM accelerates structural discovery; the immutable snapshot source remains the authority for exact evidence, exhaustive searches, and negative conclusions.
+
 ![MemoRepo dashboard](docs/assets/dashboard.png)
 
 ## Requirements
@@ -49,9 +51,21 @@ http://127.0.0.1:5173
 
 Unlock the dashboard and open **System health**. If `GH_TOKEN` is empty, choose **Sign in with GitHub**; otherwise MemoRepo uses the token from `.env` and does not request OAuth login.
 
-Persistent local state lives under `MEMOREPO_HOME`, which defaults to `./.memorepo`.
+Persistent local state lives under `MEMOREPO_HOME`. Docker Compose uses the `memorepo-data` named volume for new installations to avoid host bind-mount overhead during indexing; existing `.env` files without `MEMOREPO_STORAGE` keep using their configured `MEMOREPO_HOME` bind mount.
 
-For day-to-day use, prefer setting `MEMOREPO_HOME` to a path outside this repository so managed clones, indexes, and SQLite state do not sit next to the source tree.
+For direct Node development, prefer setting `MEMOREPO_HOME` to a path outside this repository so managed clones, indexes, and SQLite state do not sit next to the source tree.
+
+### Performance baseline
+
+The baseline runner exercises the production API with two spaces, three sequential repository additions per space, an optional three-agent concurrency probe, and an idle dashboard event-stream sample. It records timings, job counts, usage totals, normal HTTP request aggregates, dashboard stream connections, events, heartbeats, bytes, and storage growth without retaining repository locators, event payloads, prompts, responses, tool payloads, or managed paths. Reports are written under the operating system temporary directory by default.
+
+Start MemoRepo with an empty `MEMOREPO_HOME`, then run:
+
+```bash
+pnpm perf:baseline -- --repositories owner/one,owner/two,owner/three --include-agents
+```
+
+Use `--idle-seconds 0` for a fast pipeline-only run or `--output <path>` to choose another report location. `MEMOREPO_PERF_REPOSITORIES` can provide the three comma-separated locators without adding them to shell history. The idle sample opens the same authenticated SSE stream as the dashboard and observes it for the configured duration. Stream lifetime and byte metrics are reported separately so the long-lived connection does not distort normal HTTP latency. The runner does not launch a browser and therefore does not include browser-generated CORS preflights.
 
 ## Ask this Space
 
@@ -59,16 +73,19 @@ Each space includes an optional **Ask this Space** panel. `AgentService` coordin
 
 Before connection, the panel requires explicit consent to send questions, chat history, snapshot query results, and relevant code excerpts to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
 
-The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; `.env.example` starts with `openai-codex` and `gpt-5.4`. The dashboard lists the OAuth-capable providers and models exposed by the bundled Pi catalog and can switch the in-memory selection while no login or answer is active. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Per-answer limits default to 600 seconds and 96 tool calls and can be changed with `MEMOREPO_AGENT_MAX_RUN_SECONDS` and `MEMOREPO_AGENT_MAX_TOOL_CALLS`.
+The initial selection comes from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; `.env.example` starts with `openai-codex` and `gpt-5.4`. The dashboard lists the OAuth-capable providers and models exposed by the bundled Pi catalog and can switch the global selection while no login or running answer is active. Each queued answer keeps the provider, model, settings, and safety ceilings selected when it was submitted. A closed **Advanced** section exposes verbosity and reasoning effort only when the selected model advertises each capability. The global provider, model, verbosity, and reasoning effort selection is stored in MemoRepo's SQLite database and restored after API restarts. If a saved selection is no longer present in the current catalog, MemoRepo safely returns to the configured initial selection. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not.
 
 - Chats are consultation-only and can query only the selected space through MemoRepo's read-only snapshot tools.
 - Each chat is pinned to the exact immutable snapshot that was active when it started.
-- Snapshot builds materialize every recorded repository commit inside the snapshot artifact and index that copy, so later managed-clone changes cannot alter a retained snapshot's source-backed answers.
+- Snapshot builds materialize each recorded repository commit once in a content-addressed immutable source store and index that exact tree. Later managed-clone changes cannot alter a retained snapshot's source-backed answers, and replacement snapshots reuse unchanged commit trees without copying them again.
 - Snapshot materialization intentionally rejects tracked symbolic links. Replace them with regular files or directories before indexing a repository.
-- MemoRepo's transcript database stores visible user and assistant messages plus source references. It does not copy raw reasoning or internal tool payloads into that transcript.
+- MemoRepo's database stores visible user and assistant messages, source references, selected model settings, per-attempt state, and diagnostic totals for stop reason, tokens, provider rounds, and tool calls. It does not persist raw model reasoning. Successful bounded read-only tool results are cached separately by immutable snapshot so interrupted work can resume without repeating the same queries.
 - A retained older snapshot remains available to its existing chats. If that snapshot is pruned, its transcript remains readable but cannot be continued.
 - When a newer snapshot becomes active, MemoRepo offers to start a new chat instead of silently changing an existing chat's context.
 - Runtime tool requests return directly to `AgentService`, which delegates them to `SnapshotQueryService` against the pinned snapshot.
+- Each answer uses one adaptive research policy. The model chooses the investigation depth and stops naturally when the evidence is sufficient; high safety ceilings reserve time and provider rounds for a final synthesis instead of exposing research modes to the user.
+- MemoRepo runs up to two answers concurrently by default and places additional answers in a durable FIFO queue. The panel shows capacity and queue position, and queued or running answers can be cancelled. Transient or unknown provider failures recover automatically up to a bounded attempt count, while explicitly non-retryable failures stop after the current attempt; failed or interrupted answers can then be resumed, and best-effort answers can continue investigating on the same logical turn.
+- Identical read-only tool calls share the same in-flight or snapshot-scoped durable result, while independent tool calls remain eligible for parallel execution.
 - Chats can be archived or deleted from the panel. Signing out disconnects the selected provider without affecting the rest of MemoRepo.
 
 Under Docker Compose, managed agent OAuth credentials are stored in the existing private `memorepo-secrets` volume alongside MemoRepo's other local secrets.
@@ -78,7 +95,9 @@ Under Docker Compose, managed agent OAuth credentials are stored in the existing
 - Creates isolated repository spaces for agent context.
 - Clones GitHub repositories into MemoRepo-managed local paths.
 - Checks out selected remote branches and records the selected commit.
-- Indexes managed clones with `codebase-memory-mcp`.
+- Indexes exact selected commits into immutable space snapshots with `codebase-memory-mcp`.
+- Searches and reads immutable snapshot text directly when a file is outside CBM coverage or an answer requires exact source verification.
+- Adds repositories in bounded batches with one primary snapshot index per repository and one coalesced rebuild.
 - Checks selected remote branch commits and updates only repositories whose commit or index state changed.
 - Builds immutable per-space snapshots from the selected repositories.
 - Exposes the active snapshot through read-only native `codebase-memory-mcp` tools under a space-scoped MCP gateway.
@@ -89,6 +108,7 @@ Under Docker Compose, managed agent OAuth credentials are stored in the existing
 - Lets you test a generated MCP token from the dashboard before pasting it into an agent.
 - Provides an optional persistent, snapshot-pinned agent chat inside each space.
 - Stores operational state in SQLite under `MEMOREPO_HOME`.
+- Keeps dashboard state synchronized through a single authenticated invalidation stream instead of periodic control-plane reads.
 
 ## What MemoRepo Does Not Do
 
@@ -121,7 +141,7 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 - Space: an isolated set of repositories exposed to agents as one context.
 - Managed repository: a GitHub repository cloned under `MEMOREPO_HOME` for one space.
 - Job: a background operation such as GitHub sync, clone, checkout, index, or snapshot rebuild.
-- Repository index: the per-repository `codebase-memory-mcp` cache for one selected branch and commit.
+- Repository index: a legacy mutable per-repository CBM cache retained for rollback and maintenance when snapshot-only indexing is disabled.
 - Snapshot: an immutable per-space artifact built from the selected repositories and commits.
 - Active snapshot: the snapshot currently served to MCP clients for a space.
 - Stale snapshot: an older active snapshot that remains usable after repository membership or checkout changes.
@@ -137,7 +157,8 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 - `AgentService` owns chat persistence and coordinates the in-process `agent-runtime`; runtime tool callbacks are resolved by `SnapshotQueryService` against the chat's pinned snapshot.
 - Git remotes stay clean HTTPS URLs; the active GitHub credential is supplied ephemerally through `GIT_ASKPASS`.
 - The MCP gateway is read-only and serves the active immutable snapshot for a single space.
-- Native CBM read tools such as `search_graph`, `semantic_query`, `trace_path`, `get_code_snippet`, `get_architecture`, `get_graph_schema`, `search_code`, and `query_graph` are exposed with MemoRepo scope and safety policy.
+- Native CBM read tools such as `search_graph`, `trace_path`, `get_code_snippet`, `get_architecture`, `get_graph_schema`, `search_code`, and `query_graph` are exposed with MemoRepo scope and safety policy. MemoRepo-owned `snapshot_index_coverage`, `list_snapshot_files`, `search_snapshot_text`, and `read_snapshot_file` tools report completeness and verify immutable source beyond CBM's indexed-file coverage. Set `MEMOREPO_CBM_INDEX_MODE=full` and rebuild snapshots to enable semantic graph retrieval; the backward-compatible default is `fast`.
+- Snapshot activation fails closed on incomplete index quality by default, and the dashboard reports engine version, mode, coverage, skips, duration, size, and quality reasons.
 - Multi-repository spaces are served from one CBM snapshot store so CBM can use cross-repo graph intelligence.
 - `query_graph` is available to agents with a maximum of 25 rows and a 10 second timeout.
 - Generated stdio MCP configs use `docker exec` against the stable `memorepo-api` container.

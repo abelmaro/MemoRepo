@@ -13,8 +13,7 @@ export function JobLog({ jobId, onJob }: JobLogProps) {
   const [events, setEvents] = useState<JobEvent[]>([]);
   const jobQuery = useQuery({
     queryKey: ["job", jobId],
-    queryFn: () => api<{ job: Job; dependency: Job | null; dependents: Job[]; events: JobEvent[] }>(`/api/jobs/${jobId}`),
-    refetchInterval: 2500
+    queryFn: () => api<{ job: Job; dependency: Job | null; dependents: Job[]; events: JobEvent[] }>(`/api/jobs/${jobId}`)
   });
   const retryMutation = useMutation({
     mutationFn: () => api<{ job: Job }>(`/api/jobs/${jobId}/retry`, { method: "POST", body: "{}" }),

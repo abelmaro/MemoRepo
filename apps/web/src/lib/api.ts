@@ -6,6 +6,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const DEFAULT_EVENT_STREAM_RETRY_MS = 1_000;
 const MIN_EVENT_STREAM_RETRY_MS = 1_000;
 const MAX_EVENT_STREAM_RETRY_MS = 60_000;
+const DASHBOARD_EVENT_STREAM_WATCHDOG_MS = 45_000;
 let inMemoryControlToken: string | null = null;
 
 export interface Space {
@@ -16,6 +17,18 @@ export interface Space {
   snapshot_status: string;
   repository_count?: number;
 }
+
+export interface DashboardResource {
+  type: string;
+  spaceId?: string;
+  jobId?: string;
+  chatId?: string;
+  [key: string]: unknown;
+}
+
+export type DashboardEvent =
+  | { type: "ready"; eventId: string; occurredAt: string; [key: string]: unknown }
+  | { type: "invalidate"; eventId: string; occurredAt: string; resources: DashboardResource[]; [key: string]: unknown };
 
 export interface GitHubRepository {
   id: string;
@@ -148,16 +161,28 @@ export interface McpConnection {
   revoked_at: string | null;
 }
 
+export type SnapshotQuality = "complete" | "partial" | "degraded" | "unknown";
+
 export interface SpaceSnapshot {
   id: string;
   version: number;
   status: string;
   active: boolean;
+  quality: SnapshotQuality;
   repositoryCount: number;
+  engineVersions: string[];
+  indexModes: string[];
+  sourceFileCount: number;
+  skippedCount: number;
+  excludedDirectoryCount: number;
+  coveragePercent: number | null;
+  skipReasons: Array<{ reason: string; count: number }>;
+  indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;
   activatedAt: string | null;
   error: string | null;
+  reason: string | null;
 }
 
 export interface SnapshotListResponse {
@@ -183,6 +208,7 @@ export interface MaintenanceSummary {
     oldRepoIndexRecords: number;
     removedRepositoryIndexes: number;
     orphanRepoIndexDirectories: number;
+    orphanRevisionSources: number;
     failedSnapshots: number;
     oldJobs: number;
     removedClones: number;
@@ -201,6 +227,7 @@ export interface MaintenanceResult {
   oldRepoIndexRecords: { count: number };
   removedRepositoryIndexes: { count: number; bytes: number };
   orphanRepoIndexDirectories: { count: number; bytes: number };
+  orphanRevisionSources: { count: number; bytes: number };
   failedSnapshots: { count: number; bytes: number };
   oldJobs: { count: number };
   removedClones: { count: number; bytes: number; skipped: number };
@@ -217,17 +244,54 @@ export interface AgentStatus {
   authSource: string | null;
   version: string | null;
   message: string | null;
+  capacity?: {
+    active: number;
+    maxActive: number;
+    queued: number;
+    maxQueued: number;
+  };
 }
 
 export interface AgentModelCatalog {
   providers: Array<{
     id: string;
     name: string;
-    models: Array<{ id: string; name: string }>;
+    models: Array<{
+      id: string;
+      name: string;
+      capabilities: {
+        effort?: { options: AgentEffort[]; default: AgentEffort };
+        verbosity?: { options: AgentVerbosity[]; default: AgentVerbosity };
+      };
+    }>;
   }>;
   selected: {
     providerId: string;
     modelId: string;
+    settings: AgentRunSettings;
+  };
+}
+
+export type AgentEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type AgentVerbosity = "low" | "medium" | "high";
+
+export interface AgentRunSettings {
+  effort?: AgentEffort;
+  verbosity?: AgentVerbosity;
+}
+
+export interface AgentRunMetrics {
+  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" | null;
+  providerRoundCount: number;
+  lengthStopCount: number;
+  toolCallCount: number;
+  usage: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
   };
 }
 
@@ -264,6 +328,7 @@ export interface AgentSource {
 export interface AgentSnapshotContext {
   id: string | null;
   version: number;
+  quality?: SnapshotQuality;
   createdAt?: string;
   activatedAt?: string | null;
   repositories?: Array<{
@@ -271,6 +336,7 @@ export interface AgentSnapshotContext {
     branch: string;
     commit: string;
     projectName: string;
+    quality?: SnapshotQuality;
   }>;
 }
 
@@ -308,8 +374,24 @@ export interface AgentTurn {
   chatId: string;
   userMessageId: string;
   assistantMessageId: string;
-  status: "pending" | "running" | "completed" | "interrupted" | "failed";
+  status: "queued" | "pending" | "running" | "completed" | "interrupted" | "failed";
   error: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  executionPolicy: "adaptive" | "legacy" | string;
+  phase: "queued" | "researching" | "finalizing" | "recovering" | "completed" | "interrupted" | "failed";
+  completionReason: "natural" | "budget" | "no_progress" | "cancelled" | "provider_failure" | null;
+  answerQuality: "complete" | "best_effort" | null;
+  resumable: boolean;
+  attemptCount: number;
+  queuePosition: number | null;
+  settings: AgentRunSettings;
+  limits: {
+    maxRunSeconds: number;
+    maxToolCalls: number;
+    maxProviderRounds: number;
+  };
+  metrics: AgentRunMetrics;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -317,6 +399,15 @@ export interface AgentTurn {
 
 export type AgentTurnEvent =
   | { type: "state"; turn: AgentTurn; assistantMessage: AgentMessage }
+  | { type: "turn.started"; turnId: string; turn: AgentTurn }
+  | {
+      type: "turn.phase_changed";
+      turnId: string;
+      phase: string;
+      reason: string | null;
+      attemptNumber?: number;
+      maxAttempts?: number;
+    }
   | { type: "assistant.delta"; turnId: string; messageId: string; offset: number; delta: string }
   | { type: "tool.started"; turnId: string; tool: string }
   | { type: "tool.completed"; turnId: string; tool: string; success: boolean; sources: AgentSource[] }
@@ -325,6 +416,10 @@ export type AgentTurnEvent =
       turnId: string;
       status: "completed" | "interrupted" | "failed";
       error: string | null;
+      metrics: AgentRunMetrics;
+      completionReason: string;
+      answerQuality: string;
+      resumable: boolean;
     };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -457,6 +552,15 @@ export function subscribeToAgentTurnEvents(
   return () => controller.abort();
 }
 
+export function subscribeToDashboardEvents(
+  onEvent: (event: DashboardEvent) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const controller = new AbortController();
+  void streamDashboardEvents(onEvent, onError, controller.signal);
+  return () => controller.abort();
+}
+
 export function fullName(repository: GitHubRepository): string {
   return repository.full_name ?? repository.fullName ?? `${repository.owner}/${repository.name}`;
 }
@@ -577,6 +681,60 @@ async function streamAgentTurnEvents(
   }
 }
 
+async function streamDashboardEvents(
+  onEvent: (event: DashboardEvent) => void,
+  onError: ((error: Error) => void) | undefined,
+  signal: AbortSignal
+): Promise<void> {
+  let retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+  while (!signal.aborted) {
+    const connectionController = new AbortController();
+    const abortConnection = () => connectionController.abort();
+    signal.addEventListener("abort", abortConnection, { once: true });
+    let watchdogId: number | undefined;
+    const touch = () => {
+      retryDelayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
+      if (watchdogId !== undefined) window.clearTimeout(watchdogId);
+      watchdogId = window.setTimeout(() => connectionController.abort(), DASHBOARD_EVENT_STREAM_WATCHDOG_MS);
+    };
+
+    try {
+      const controlToken = getControlToken();
+      if (!controlToken) {
+        notifyControlUnauthorized();
+        return;
+      }
+      const response = await fetch(`${API_URL}/api/dashboard/events`, {
+        headers: { accept: "text/event-stream", authorization: `Bearer ${controlToken}` },
+        signal: connectionController.signal
+      });
+      if (response.status === 401) {
+        clearControlToken();
+        notifyControlUnauthorized();
+        return;
+      }
+      if (response.status === 429) {
+        retryDelayMs = retryAfterDelayMs(response.headers.get("retry-after"));
+        throw new Error(`Dashboard event stream rate limited; retrying in ${Math.ceil(retryDelayMs / 1_000)} seconds`);
+      }
+      if (!response.ok || !response.body) throw new Error(`Dashboard event stream failed: ${response.status}`);
+      touch();
+      await consumeEventStream<DashboardEvent>(response.body, onEvent, connectionController.signal, touch);
+    } catch (error) {
+      if (!signal.aborted && !connectionController.signal.aborted) {
+        onError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    } finally {
+      signal.removeEventListener("abort", abortConnection);
+      if (watchdogId !== undefined) window.clearTimeout(watchdogId);
+    }
+
+    if (signal.aborted) return;
+    await waitForRetry(retryDelayMs, signal);
+    retryDelayMs = Math.min(MAX_EVENT_STREAM_RETRY_MS, retryDelayMs * 2);
+  }
+}
+
 function retryAfterDelayMs(value: string | null, nowMs = Date.now()): number {
   const retryAfter = value?.trim();
   let delayMs = DEFAULT_EVENT_STREAM_RETRY_MS;
@@ -617,7 +775,8 @@ function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
 async function consumeEventStream<T>(
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: T) => boolean | void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onActivity?: () => void
 ): Promise<boolean> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -629,6 +788,7 @@ async function consumeEventStream<T>(
       if (chunk.done) {
         return false;
       }
+      onActivity?.();
       buffer += decoder.decode(chunk.value, { stream: true });
 
       let separator = /\r?\n\r?\n/.exec(buffer);

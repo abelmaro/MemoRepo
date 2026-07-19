@@ -6,8 +6,7 @@ import { QueryErrorState } from "./QueryErrorState";
 export function JobsPanel({ onSelectJob }: { onSelectJob: (jobId: string) => void }) {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
-    queryFn: () => api<{ jobs: Job[] }>("/api/jobs"),
-    refetchInterval: 3000
+    queryFn: () => api<{ jobs: Job[] }>("/api/jobs")
   });
 
   return (

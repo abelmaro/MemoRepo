@@ -46,6 +46,22 @@ RUN pnpm --filter @memorepo/agent-runtime build \
   && pnpm --filter @memorepo/api build \
   && pnpm --filter @memorepo/api deploy --prod --legacy /opt/memorepo-api
 
+# Development-only target for contract and benchmark runs against the exact CBM
+# binary pinned above. It retains the workspace tests and development dependencies;
+# the production runtime remains unchanged.
+FROM build AS cbm-test
+
+COPY --from=cbm /codebase-memory-mcp /usr/local/bin/codebase-memory-mcp
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=test
+ENV MEMOREPO_HOME=/tmp/memorepo-test
+
+USER node
+
 FROM ${NODE_IMAGE} AS runtime
 
 RUN apt-get update \

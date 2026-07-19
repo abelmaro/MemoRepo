@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 interface Migration {
   version: number;
@@ -14,6 +14,15 @@ const migrations: Migration[] = [
   { version: 4, up: addGitHubOAuthCredentials },
   { version: 5, up: addAgentChats },
   { version: 6, up: addAgentChats },
+  { version: 7, up: addAgentTurnMetrics },
+  { version: 8, up: addSnapshotSizes },
+  { version: 9, up: addAgentQueueAndModes },
+  { version: 10, up: addAgentSubmissionSequence },
+  { version: 11, up: addAdaptiveAgentRuns },
+  { version: 12, up: addAgentModelPreferences },
+  { version: 13, up: addJobDependencies },
+  { version: 14, up: addOperationalMetrics },
+  { version: 15, up: addAgentAttemptDiagnostics },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -198,6 +207,127 @@ function addJobDeduplication(sqlite: Database.Database): void {
   `);
 }
 
+function addJobDependencies(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS job_dependencies (
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (job_id, dependency_job_id),
+      CHECK (job_id <> dependency_job_id)
+    );
+    CREATE INDEX IF NOT EXISTS job_dependencies_dependency_idx
+      ON job_dependencies(dependency_job_id, job_id);
+    INSERT OR IGNORE INTO job_dependencies (job_id, dependency_job_id, created_at)
+      SELECT id, depends_on_job_id, created_at
+      FROM jobs
+      WHERE depends_on_job_id IS NOT NULL;
+  `);
+}
+
+function addOperationalMetrics(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_tool_stats (
+      space_id TEXT NOT NULL REFERENCES spaces(id), tool_name TEXT NOT NULL,
+      call_count INTEGER NOT NULL DEFAULT 0, total_response_bytes INTEGER NOT NULL DEFAULT 0,
+      max_response_bytes INTEGER NOT NULL DEFAULT 0, total_duration_ms INTEGER NOT NULL DEFAULT 0,
+      max_duration_ms INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+      cache_hit_count INTEGER NOT NULL DEFAULT 0, truncated_count INTEGER NOT NULL DEFAULT 0,
+      last_called_at TEXT NOT NULL, PRIMARY KEY (space_id, tool_name)
+    );
+    CREATE TABLE IF NOT EXISTS cbm_operation_metrics (
+      id TEXT PRIMARY KEY,
+      operation TEXT NOT NULL,
+      space_id TEXT,
+      snapshot_id TEXT,
+      space_repository_id TEXT,
+      project_name TEXT,
+      engine_version TEXT,
+      index_mode TEXT,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      exit_code INTEGER,
+      termination_kind TEXT,
+      nodes INTEGER,
+      edges INTEGER,
+      skipped_count INTEGER,
+      artifact_bytes INTEGER,
+      response_bytes INTEGER,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      truncated INTEGER NOT NULL DEFAULT 0,
+      cgroup_peak_bytes INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cbm_operation_metrics_created_idx ON cbm_operation_metrics(created_at);
+    CREATE INDEX IF NOT EXISTS cbm_operation_metrics_space_created_idx ON cbm_operation_metrics(space_id, created_at);
+  `);
+  const columns = new Set((sqlite.pragma("table_info(mcp_tool_stats)") as Array<{ name: string }>).map((column) => column.name));
+  const additions = [
+    ["total_duration_ms", "INTEGER NOT NULL DEFAULT 0"], ["max_duration_ms", "INTEGER NOT NULL DEFAULT 0"],
+    ["error_count", "INTEGER NOT NULL DEFAULT 0"], ["cache_hit_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["truncated_count", "INTEGER NOT NULL DEFAULT 0"]
+  ] as const;
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) sqlite.exec(`ALTER TABLE mcp_tool_stats ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+function addAgentAttemptDiagnostics(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma("table_info(agent_turn_attempts)") as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  const additions = [
+    [
+      "failure_category",
+      "failure_category TEXT CHECK (failure_category IS NULL OR length(failure_category) <= 64)",
+    ],
+    [
+      "failure_stage",
+      "failure_stage TEXT CHECK (failure_stage IS NULL OR length(failure_stage) <= 64)",
+    ],
+    [
+      "provider_code",
+      "provider_code TEXT CHECK (provider_code IS NULL OR length(provider_code) <= 128)",
+    ],
+    [
+      "http_status",
+      "http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599)",
+    ],
+    [
+      "provider_request_id",
+      "provider_request_id TEXT CHECK (provider_request_id IS NULL OR length(provider_request_id) <= 256)",
+    ],
+    [
+      "provider_response_id",
+      "provider_response_id TEXT CHECK (provider_response_id IS NULL OR length(provider_response_id) <= 256)",
+    ],
+    ["transport", "transport TEXT CHECK (transport IS NULL OR length(transport) <= 32)"],
+    ["retryable", "retryable INTEGER CHECK (retryable IS NULL OR retryable IN (0, 1))"],
+    [
+      "retry_after_ms",
+      "retry_after_ms INTEGER CHECK (retry_after_ms IS NULL OR retry_after_ms BETWEEN 0 AND 86400000)",
+    ],
+    [
+      "diagnostic_summary",
+      "diagnostic_summary TEXT CHECK (diagnostic_summary IS NULL OR length(diagnostic_summary) <= 1024)",
+    ],
+    [
+      "time_to_first_provider_event_ms",
+      "time_to_first_provider_event_ms INTEGER CHECK (time_to_first_provider_event_ms IS NULL OR time_to_first_provider_event_ms >= 0)",
+    ],
+    [
+      "attempt_duration_ms",
+      "attempt_duration_ms INTEGER CHECK (attempt_duration_ms IS NULL OR attempt_duration_ms >= 0)",
+    ],
+  ] as const;
+
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) sqlite.exec(`ALTER TABLE agent_turn_attempts ADD COLUMN ${definition};`);
+  }
+}
+
 function normalizeSnapshotStatuses(sqlite: Database.Database): void {
   sqlite.exec(`
     UPDATE space_snapshots
@@ -289,6 +419,152 @@ function addAgentChats(sqlite: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS agent_turns_active_chat_unique
       ON agent_turns(chat_id)
       WHERE status IN ('pending', 'running');
+  `);
+}
+
+function addAgentTurnMetrics(sqlite: Database.Database): void {
+  sqlite.exec(`
+    ALTER TABLE agent_turns ADD COLUMN provider_id TEXT;
+    ALTER TABLE agent_turns ADD COLUMN model_id TEXT;
+    ALTER TABLE agent_turns ADD COLUMN effort TEXT;
+    ALTER TABLE agent_turns ADD COLUMN verbosity TEXT;
+    ALTER TABLE agent_turns ADD COLUMN stop_reason TEXT;
+    ALTER TABLE agent_turns ADD COLUMN provider_round_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN length_stop_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN tool_call_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agent_turns ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;
+  `);
+}
+
+function addSnapshotSizes(sqlite: Database.Database): void {
+  const columns = sqlite.pragma("table_info(space_snapshots)") as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "size_bytes")) {
+    sqlite.exec("ALTER TABLE space_snapshots ADD COLUMN size_bytes INTEGER;");
+  }
+}
+
+function addAgentQueueAndModes(sqlite: Database.Database): void {
+  sqlite.exec(`
+    ALTER TABLE agent_turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard';
+    ALTER TABLE agent_turns ADD COLUMN max_run_seconds INTEGER NOT NULL DEFAULT 360;
+    ALTER TABLE agent_turns ADD COLUMN max_tool_calls INTEGER NOT NULL DEFAULT 32;
+    ALTER TABLE agent_turns ADD COLUMN max_provider_rounds INTEGER NOT NULL DEFAULT 6;
+
+    DROP INDEX IF EXISTS agent_turns_active_chat_unique;
+    CREATE UNIQUE INDEX agent_turns_active_chat_unique
+      ON agent_turns(chat_id)
+      WHERE status IN ('queued', 'pending', 'running');
+    CREATE INDEX agent_turns_queue_created_idx
+      ON agent_turns(status, created_at, id);
+  `);
+}
+
+function addAgentSubmissionSequence(sqlite: Database.Database): void {
+  const columns = sqlite.pragma("table_info(agent_turns)") as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "submission_sequence")) {
+    sqlite.exec(`
+      ALTER TABLE agent_turns ADD COLUMN submission_sequence INTEGER NOT NULL DEFAULT 0;
+      WITH ordered AS (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS sequence
+        FROM agent_turns
+      )
+      UPDATE agent_turns
+        SET submission_sequence = (SELECT sequence FROM ordered WHERE ordered.id = agent_turns.id);
+    `);
+  }
+
+  sqlite.exec(`
+    DROP INDEX IF EXISTS agent_turns_queue_created_idx;
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_turns_submission_sequence_unique
+      ON agent_turns(submission_sequence);
+    CREATE INDEX agent_turns_queue_created_idx
+      ON agent_turns(status, submission_sequence);
+  `);
+}
+
+function addAdaptiveAgentRuns(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma("table_info(agent_turns)") as Array<{ name: string }>).map((column) => column.name)
+  );
+  const addColumn = (name: string, definition: string) => {
+    if (!columns.has(name)) sqlite.exec(`ALTER TABLE agent_turns ADD COLUMN ${definition};`);
+  };
+  addColumn("execution_policy", "execution_policy TEXT NOT NULL DEFAULT 'legacy'");
+  addColumn("phase", "phase TEXT NOT NULL DEFAULT 'queued'");
+  addColumn("completion_reason", "completion_reason TEXT");
+  addColumn("answer_quality", "answer_quality TEXT");
+  addColumn("resumable", "resumable INTEGER NOT NULL DEFAULT 0");
+  addColumn("attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0");
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS agent_turn_attempts (
+      id TEXT PRIMARY KEY,
+      turn_id TEXT NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+      attempt_number INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      assistant_content TEXT NOT NULL DEFAULT '',
+      sources_json TEXT NOT NULL DEFAULT '[]',
+      stop_reason TEXT,
+      provider_round_count INTEGER NOT NULL DEFAULT 0,
+      length_stop_count INTEGER NOT NULL DEFAULT 0,
+      tool_call_count INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      UNIQUE(turn_id, attempt_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_turn_attempts_turn_idx
+      ON agent_turn_attempts(turn_id, attempt_number DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_tool_cache (
+      cache_key TEXT PRIMARY KEY,
+      snapshot_id TEXT NOT NULL REFERENCES space_snapshots(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      arguments_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      sources_json TEXT NOT NULL DEFAULT '[]',
+      result_bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_tool_cache_snapshot_lru_idx
+      ON agent_tool_cache(snapshot_id, last_used_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_turn_tool_results (
+      turn_id TEXT NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+      cache_key TEXT NOT NULL REFERENCES agent_tool_cache(cache_key) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      PRIMARY KEY(turn_id, cache_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS agent_turn_tool_results_turn_sequence_idx
+      ON agent_turn_tool_results(turn_id, sequence);
+  `);
+}
+
+function addAgentModelPreferences(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS agent_model_preferences (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      provider_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      effort TEXT,
+      verbosity TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 

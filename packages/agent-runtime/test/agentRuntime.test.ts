@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AgentProviderFailureError,
   AgentRuntime,
   AgentRuntimeConflictError,
   AgentRuntimeUnavailableError,
@@ -102,6 +103,10 @@ test("emits a successful lifecycle and forwards deltas and tool execution", asyn
       success: result.ok
     });
     await input.onEvent({ type: "assistant.delta", runId: input.runId, delta: "one match." });
+    await input.onProviderTurn({
+      stopReason: "stop",
+      usage: { input: 120, output: 42, reasoning: 18, cacheRead: 20, cacheWrite: 4, total: 204 }
+    });
   });
   const runtime = new AgentRuntime(adapter);
 
@@ -117,11 +122,24 @@ test("emits a successful lifecycle and forwards deltas and tool execution", asyn
   );
 
   const completed = await events.completed.promise;
-  assert.deepEqual(completed, {
+  assert.deepEqual(normalizedCompleted(completed), {
     type: "run.completed",
     runId: "run-1",
     status: "completed",
-    error: null
+    error: null,
+    failureDiagnostic: null,
+    metrics: {
+      stopReason: "stop",
+      providerRoundCount: 1,
+      lengthStopCount: 0,
+      toolCallCount: 1,
+      attemptDurationMs: 0,
+      timeToFirstProviderEventMs: 0,
+      usage: { input: 120, output: 42, reasoning: 18, cacheRead: 20, cacheWrite: 4, total: 204 }
+    },
+    completionReason: "natural",
+    answerQuality: "complete",
+    resumable: false
   });
   assert.deepEqual(
     events.values.map((event) => event.type),
@@ -162,11 +180,16 @@ test("retries a failed terminal consumer, observes the detached run, and release
       })
     );
 
-    assert.deepEqual(await retried.promise, {
+    assert.deepEqual(normalizedCompleted(await retried.promise), {
       type: "run.completed",
       runId: "run-1",
       status: "failed",
-      error: "Agent event handling failed"
+      error: "Agent event handling failed",
+      failureDiagnostic: null,
+      metrics: emptyMetrics(),
+      completionReason: "natural",
+      answerQuality: "complete",
+      resumable: false
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(
@@ -193,12 +216,58 @@ test("does not expose adapter error details through terminal events", async () =
 
   runtime.startRun(makeRunInput({ onEvent: events.onEvent }));
 
-  assert.deepEqual(await events.completed.promise, {
+  assert.deepEqual(normalizedCompleted(await events.completed.promise), {
     type: "run.completed",
     runId: "run-1",
     status: "failed",
-    error: "Agent run failed"
+    error: "Agent run failed",
+    failureDiagnostic: {
+      category: "unknown",
+      stage: "unknown",
+      providerCode: null,
+      httpStatus: null,
+      providerRequestId: null,
+      providerResponseId: null,
+      transport: null,
+      retryable: true,
+      retryAfterMs: null,
+      summary: "The provider run failed for an unknown reason."
+    },
+    metrics: emptyMetrics(),
+    completionReason: "provider_failure",
+    answerQuality: "best_effort",
+    resumable: true
   });
+  await runtime.close();
+});
+
+test("propagates a typed provider diagnostic and records first provider activity", async () => {
+  const events = collectEvents();
+  const diagnostic = {
+    category: "timeout",
+    stage: "connection",
+    providerCode: "ETIMEDOUT",
+    httpStatus: null,
+    providerRequestId: "req-safe-1",
+    providerResponseId: null,
+    transport: "websocket",
+    retryable: true,
+    retryAfterMs: 2_000,
+    summary: "The provider request timed out during connection."
+  } as const;
+  const adapter = new FakeAdapter(async (input) => {
+    input.onProviderActivity?.();
+    throw new AgentProviderFailureError(diagnostic);
+  });
+  const runtime = new AgentRuntime(adapter);
+
+  runtime.startRun(makeRunInput({ onEvent: events.onEvent }));
+
+  const completed = await events.completed.promise;
+  assert.equal(completed.error, "Agent run failed");
+  assert.deepEqual(completed.failureDiagnostic, diagnostic);
+  assert.notEqual(completed.metrics.timeToFirstProviderEventMs, null);
+  assert.ok((completed.metrics.timeToFirstProviderEventMs ?? -1) <= completed.metrics.attemptDurationMs);
   await runtime.close();
 });
 
@@ -249,36 +318,46 @@ test("interrupt aborts the adapter run and completes it as interrupted", async (
   await runtime.interrupt("run-1");
 
   assert.equal(adapterSignal?.aborted, true);
-  assert.deepEqual(await events.completed.promise, {
+  assert.deepEqual(normalizedCompleted(await events.completed.promise), {
     type: "run.completed",
     runId: "run-1",
     status: "interrupted",
-    error: null
+    error: null,
+    failureDiagnostic: null,
+    metrics: emptyMetrics(),
+    completionReason: "cancelled",
+    answerQuality: "best_effort",
+    resumable: true
   });
   await runtime.close();
 });
 
-test("fails a run that exceeds its deadline and releases the session", async () => {
+test("preserves a run that exceeds its hard deadline as resumable", async () => {
   const events = collectEvents();
   const adapter = new FakeAdapter(async (input) => rejectWhenAborted(input.signal));
   const runtime = new AgentRuntime(adapter, { maxRunMs: 10 });
 
   runtime.startRun(makeRunInput({ onEvent: events.onEvent }));
 
-  assert.deepEqual(await events.completed.promise, {
+  assert.deepEqual(normalizedCompleted(await events.completed.promise), {
     type: "run.completed",
     runId: "run-1",
-    status: "failed",
-    error: "Agent run exceeded the configured 1-second limit (MR-AGENT-TIME-LIMIT)"
+    status: "interrupted",
+    error: null,
+    failureDiagnostic: null,
+    metrics: emptyMetrics(),
+    completionReason: "budget",
+    answerQuality: "best_effort",
+    resumable: true
   });
 
   const next = collectEvents();
   runtime.startRun(makeRunInput({ runId: "run-2", sessionId: "session-1", onEvent: next.onEvent }));
-  assert.equal((await next.completed.promise).status, "failed");
+  assert.equal((await next.completed.promise).status, "interrupted");
   await runtime.close();
 });
 
-test("aborts after the configured tool-call budget", async () => {
+test("requests graceful finalization after the configured tool-call budget", async () => {
   const events = collectEvents();
   const toolResults: unknown[] = [];
   const adapter = new FakeAdapter(async (input) => {
@@ -297,19 +376,124 @@ test("aborts after the configured tool-call budget", async () => {
 
   runtime.startRun(makeRunInput({ onEvent: events.onEvent }));
 
-  assert.equal((await events.completed.promise).status, "failed");
+  const completed = await events.completed.promise;
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.completionReason, "budget");
+  assert.equal(completed.answerQuality, "best_effort");
   assert.deepEqual(toolResults, [
     { ok: true, value: null },
     {
       ok: false,
       error: {
-        code: "MR-AGENT-TOOL-LIMIT",
-        message: "Agent run exceeded the configured 1 tool-call limit",
+        code: "research_budget_reached",
+        message: "The research budget is complete. Answer with the evidence already collected.",
         retryable: false
       }
     }
   ]);
   await runtime.close();
+});
+
+test("applies stricter per-run tool and provider-round budgets", async () => {
+  const toolEvents = collectEvents();
+  const toolResults: unknown[] = [];
+  const toolAdapter = new FakeAdapter(async (input) => {
+    const request = (requestId: string): AgentToolRequest => ({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      requestId,
+      name: "search_snapshot",
+      arguments: {}
+    });
+    toolResults.push(await input.requestTool(request("tool-1"), input.signal));
+    toolResults.push(await input.requestTool(request("tool-2"), input.signal));
+    if (input.signal.aborted) throw input.signal.reason;
+  });
+  const toolRuntime = new AgentRuntime(toolAdapter, { maxToolCalls: 10 });
+  toolRuntime.startRun(
+    makeRunInput({
+      limits: { maxRunMs: 60_000, maxToolCalls: 1, maxProviderRounds: 8 },
+      onEvent: toolEvents.onEvent
+    })
+  );
+
+  const toolCompleted = await toolEvents.completed.promise;
+  assert.equal(toolCompleted.status, "completed");
+  assert.equal(toolCompleted.completionReason, "budget");
+  assert.equal((toolResults[1] as { error?: { code?: string } }).error?.code, "research_budget_reached");
+  await toolRuntime.close();
+
+  const roundEvents = collectEvents();
+  const roundAdapter = new FakeAdapter(async (input) => {
+    const usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    await input.onProviderTurn({ stopReason: "toolUse", usage });
+    await input.onProviderTurn({ stopReason: "toolUse", usage });
+    if (input.signal.aborted) throw input.signal.reason;
+  });
+  const roundRuntime = new AgentRuntime(roundAdapter, { maxProviderRounds: 10 });
+  roundRuntime.startRun(
+    makeRunInput({
+      limits: { maxRunMs: 60_000, maxToolCalls: 10, maxProviderRounds: 2 },
+      onEvent: roundEvents.onEvent
+    })
+  );
+
+  const roundCompleted = await roundEvents.completed.promise;
+  assert.equal(roundCompleted.status, "interrupted");
+  assert.equal(roundCompleted.error, null);
+  assert.equal(roundCompleted.completionReason, "budget");
+  assert.equal(roundCompleted.metrics.providerRoundCount, 2);
+  await roundRuntime.close();
+});
+
+test("requests best-effort synthesis when research stops making progress", async () => {
+  const repeatedEvents = collectEvents();
+  const repeatedAdapter = new FakeAdapter(async (input) => {
+    for (let index = 0; index < 3; index += 1) {
+      await input.requestTool(
+        {
+          runId: input.runId,
+          sessionId: input.sessionId,
+          requestId: `tool-${index}`,
+          name: "search_snapshot",
+          arguments: { query: "same evidence" }
+        },
+        input.signal
+      );
+    }
+    assert.equal(input.finalizationReason?.(), "no_progress");
+  });
+  const repeatedRuntime = new AgentRuntime(repeatedAdapter, {
+    maxToolCalls: 20,
+    finalizationReserveToolCalls: 1,
+    maxRepeatedToolCalls: 3
+  });
+  repeatedRuntime.startRun(makeRunInput({ onEvent: repeatedEvents.onEvent }));
+  const repeated = await repeatedEvents.completed.promise;
+  assert.equal(repeated.status, "completed");
+  assert.equal(repeated.completionReason, "no_progress");
+  assert.equal(repeated.answerQuality, "best_effort");
+  await repeatedRuntime.close();
+
+  const stalledEvents = collectEvents();
+  const stalledAdapter = new FakeAdapter(async (input) => {
+    const usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    for (let index = 0; index < 5; index += 1) {
+      await input.onProviderTurn({ stopReason: "toolUse", usage });
+    }
+    assert.equal(input.finalizationReason?.(), "no_progress");
+  });
+  const stalledRuntime = new AgentRuntime(stalledAdapter, {
+    maxProviderRounds: 20,
+    finalizationReserveProviderRounds: 1,
+    maxNoProgressRounds: 4
+  });
+  stalledRuntime.startRun(makeRunInput({ onEvent: stalledEvents.onEvent }));
+  const stalled = await stalledEvents.completed.promise;
+  assert.equal(stalled.status, "completed");
+  assert.equal(stalled.completionReason, "no_progress");
+  assert.equal(stalled.metrics.providerRoundCount, 5);
+  await stalledRuntime.close();
 });
 
 test("logout blocks new runs and login attempts until credential removal settles", async () => {
@@ -450,6 +634,36 @@ function collectEvents() {
     onEvent(event: AgentRuntimeEvent) {
       values.push(event);
       if (event.type === "run.completed") completed.resolve(event);
+    }
+  };
+}
+
+function emptyMetrics() {
+  return {
+    stopReason: null,
+    providerRoundCount: 0,
+    lengthStopCount: 0,
+    toolCallCount: 0,
+    attemptDurationMs: 0,
+    timeToFirstProviderEventMs: null,
+    usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  } as const;
+}
+
+function normalizedCompleted(event: Extract<AgentRuntimeEvent, { type: "run.completed" }>) {
+  assert.ok(Number.isInteger(event.metrics.attemptDurationMs));
+  assert.ok(event.metrics.attemptDurationMs >= 0);
+  if (event.metrics.timeToFirstProviderEventMs !== null) {
+    assert.ok(Number.isInteger(event.metrics.timeToFirstProviderEventMs));
+    assert.ok(event.metrics.timeToFirstProviderEventMs >= 0);
+    assert.ok(event.metrics.timeToFirstProviderEventMs <= event.metrics.attemptDurationMs);
+  }
+  return {
+    ...event,
+    metrics: {
+      ...event.metrics,
+      attemptDurationMs: 0,
+      timeToFirstProviderEventMs: event.metrics.timeToFirstProviderEventMs === null ? null : 0
     }
   };
 }

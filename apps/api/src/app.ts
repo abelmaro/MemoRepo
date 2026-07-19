@@ -19,6 +19,7 @@ import { jobRoutes } from "./routes/jobRoutes.js";
 import { mcpRoutes } from "./routes/mcpRoutes.js";
 import { spaceRoutes } from "./routes/spaceRoutes.js";
 import { systemRoutes } from "./routes/systemRoutes.js";
+import { dashboardRoutes } from "./routes/dashboardRoutes.js";
 
 export async function createApp(services: AppServices, securityConfig: HttpSecurityConfig = loadHttpSecurityConfig()) {
   const app = Fastify({
@@ -26,6 +27,9 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
     logger: {
       redact: ["req.headers.authorization", "req.headers.x-memorepo-csrf"]
     }
+  });
+  services.agent.setDiagnosticLogger({
+    warn: (record, message) => app.log.warn(record, message)
   });
   app.setErrorHandler((error: unknown, request, reply) => {
     const { statusCode, message, code } = mapRouteError(error, services.config.memorepoHome);
@@ -44,6 +48,7 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
   app.addHook("onClose", async () => {
     await services.agent.close();
     await services.cbm.close();
+    services.dashboardEvents.close();
   });
 
   await app.register(cors, {
@@ -58,6 +63,7 @@ export async function createApp(services: AppServices, securityConfig: HttpSecur
   registerHttpContentBoundary(app);
 
   await app.register(systemRoutes);
+  await app.register(dashboardRoutes);
   await app.register(githubRoutes);
   await app.register(agentRoutes);
   await app.register(spaceRoutes);

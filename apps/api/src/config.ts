@@ -20,6 +20,7 @@ export interface AppConfig {
   indexesDir: string;
   repoIndexesDir: string;
   snapshotIndexesDir: string;
+  revisionSourcesDir: string;
   logsDir: string;
   tmpDir: string;
   binDir: string;
@@ -30,9 +31,19 @@ export interface AppConfig {
   agentCredentialPath: string;
   agentMaxRunSeconds: number;
   agentMaxToolCalls: number;
+  agentMaxProviderRounds: number;
+  agentMaxActiveTurns: number;
+  agentMaxQueuedTurns: number;
   snapshotRetentionDefault: number;
   jobRetentionDaysDefault: number;
   jobConcurrency: number;
+  cbmIndexConcurrency: number;
+  cbmInteractiveConcurrency: number;
+  cbmIndexMode: "fast" | "moderate" | "full";
+  enforceSnapshotQuality: boolean;
+  compactCbmResponses: boolean;
+  batchRepositoryOperations: boolean;
+  snapshotOnlyIndexing: boolean;
 }
 
 function absolutePath(input: string): string {
@@ -51,6 +62,21 @@ function positiveIntEnv(name: string, fallback: number): number {
   return value;
 }
 
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+}
+
+function cbmIndexModeEnv(): "fast" | "moderate" | "full" {
+  const value = process.env.MEMOREPO_CBM_INDEX_MODE?.trim().toLowerCase();
+  if (!value) return "fast";
+  if (value === "fast" || value === "moderate" || value === "full") return value;
+  throw new Error("MEMOREPO_CBM_INDEX_MODE must be fast, moderate, or full");
+}
+
 export function corsOrigins(config: AppConfig): string[] {
   return Array.from(new Set([config.frontendOrigin, "http://127.0.0.1:5173", "http://localhost:5173"]));
 }
@@ -64,6 +90,7 @@ export function loadConfig(): AppConfig {
   const indexesDir = path.join(memorepoHome, "indexes");
   const repoIndexesDir = path.join(indexesDir, "r");
   const snapshotIndexesDir = path.join(indexesDir, "s");
+  const revisionSourcesDir = path.join(indexesDir, "c");
   const logsDir = path.join(memorepoHome, "logs");
   const tmpDir = path.join(memorepoHome, "tmp");
   const binDir = path.join(memorepoHome, "bin");
@@ -76,6 +103,7 @@ export function loadConfig(): AppConfig {
     indexesDir,
     repoIndexesDir,
     snapshotIndexesDir,
+    revisionSourcesDir,
     logsDir,
     tmpDir,
     binDir
@@ -100,6 +128,7 @@ export function loadConfig(): AppConfig {
     indexesDir,
     repoIndexesDir,
     snapshotIndexesDir,
+    revisionSourcesDir,
     logsDir,
     tmpDir,
     binDir,
@@ -110,10 +139,20 @@ export function loadConfig(): AppConfig {
     agentCredentialPath: absolutePath(
       process.env.MEMOREPO_AGENT_CREDENTIAL_FILE ?? path.join(secretsDir, "agent-credentials.json")
     ),
-    agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 600),
-    agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 96),
+    agentMaxRunSeconds: positiveIntEnv("MEMOREPO_AGENT_MAX_RUN_SECONDS", 1_800),
+    agentMaxToolCalls: positiveIntEnv("MEMOREPO_AGENT_MAX_TOOL_CALLS", 200),
+    agentMaxProviderRounds: positiveIntEnv("MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS", 50),
+    agentMaxActiveTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_ACTIVE_TURNS", 2),
+    agentMaxQueuedTurns: positiveIntEnv("MEMOREPO_AGENT_MAX_QUEUED_TURNS", 20),
     snapshotRetentionDefault: positiveIntEnv("MEMOREPO_SNAPSHOT_RETENTION", 3),
     jobRetentionDaysDefault: positiveIntEnv("MEMOREPO_JOB_RETENTION_DAYS", 30),
-    jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2)
+    jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2),
+    cbmIndexConcurrency: positiveIntEnv("MEMOREPO_CBM_INDEX_CONCURRENCY", 1),
+    cbmInteractiveConcurrency: positiveIntEnv("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", 2),
+    cbmIndexMode: cbmIndexModeEnv(),
+    enforceSnapshotQuality: booleanEnv("MEMOREPO_ENFORCE_SNAPSHOT_QUALITY", true),
+    compactCbmResponses: booleanEnv("MEMOREPO_COMPACT_CBM_RESPONSES", true),
+    batchRepositoryOperations: booleanEnv("MEMOREPO_BATCH_REPOSITORY_OPERATIONS", true),
+    snapshotOnlyIndexing: booleanEnv("MEMOREPO_SNAPSHOT_ONLY_INDEXING", false)
   };
 }

@@ -7,6 +7,7 @@ import { insertRecord, updateRecord } from "../src/db/sql.js";
 import { createId, sha256 } from "../src/domain/ids.js";
 import { nowIso } from "../src/domain/time.js";
 import { createServices } from "../src/services/appServices.js";
+import { inspectCbmV090Capabilities } from "../src/services/cbmV090Capabilities.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const testsRoot = path.join(repoRoot, ".tmp-memorepo-tests");
@@ -18,12 +19,12 @@ test("managed deletion gates new work, waits for MCP readers, and revalidates jo
   try {
     const fixture = createSnapshotFixture(services, "Delete Gate Space");
     const listEntered = deferred<void>();
-    const releaseList = deferred<string[]>();
+    const releaseList = deferred<ReturnType<typeof testCapabilities>>();
     const closeEntered = deferred<void>();
     const releaseClose = deferred<void>();
     let closeCalls = 0;
 
-    services.cbm.listTools = async () => {
+    services.cbm.capabilities = async () => {
       listEntered.resolve();
       return releaseList.promise;
     };
@@ -52,7 +53,7 @@ test("managed deletion gates new work, waits for MCP readers, and revalidates jo
       (error: unknown) => (error as { statusCode?: number }).statusCode === 409
     );
 
-    releaseList.resolve(["list_projects", "query_graph"]);
+    releaseList.resolve(testCapabilities());
     await activeReader;
     await closeEntered.promise;
 
@@ -108,6 +109,13 @@ test("managed deletion gates new work, waits for MCP readers, and revalidates jo
     cleanupTestRoot(testRoot);
   }
 });
+
+function testCapabilities() {
+  return inspectCbmV090Capabilities("codebase-memory-mcp 0.9.0", [
+    "list_projects", "index_status", "get_architecture", "get_graph_schema", "search_graph",
+    "search_code", "trace_path", "get_code_snippet", "query_graph"
+  ].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })));
+}
 
 test("startup retries a committed deletion tombstone for clone, repository index, and snapshot paths", () => {
   const testRoot = createTestRoot("space-delete-recovery-");

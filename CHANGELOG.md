@@ -7,6 +7,72 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-19
+
+### Added
+
+- Add `MEMOREPO_CBM_INDEX_MODE` to select `fast`, `moderate`, or `full` CBM indexing consistently for immutable snapshots and legacy repository indexes.
+- Add immutable snapshot coverage, literal text search, and bounded source-reading tools so agents can verify CBM discoveries and make exhaustive claims safely.
+- Add per-file SHA-256 manifests, deterministic source digests, Git tree identity, atomic manifest writes, and integrity verification before immutable source reuse.
+- Add snapshot quality states, skipped-file and exclusion summaries, per-project coverage, and activation gates for incomplete indexes.
+- Add multi-dependency jobs, batch repository ingestion, snapshot fingerprints, and rebuild coalescing for linear snapshot indexing.
+- Add rollout controls for snapshot quality enforcement, compact CBM responses, batch repository operations, and snapshot-only indexing.
+- Add privacy-safe CBM and MCP metrics for duration, errors, cache use, truncation, response size, artifact size, and container memory pressure.
+- Add reproducible CBM contract, quality, semantic, stress, and ingestion benchmarks with pinned-runtime CI and nightly coverage.
+- Add automatic SQLite backups before schema upgrades and document the compatible rollback procedure.
+- Show snapshot engine versions, index modes, source coverage, skips, duration, artifact size, and quality reasons in the lifecycle dashboard and API.
+- Add snapshot-scoped file inventory with path-prefix and glob filtering so agents can answer file and extension existence questions from the immutable source tree.
+- Add plain-text and Markdown copy actions for assistant responses.
+- Add capability-aware advanced Ask this Space controls for model verbosity and reasoning effort.
+- Persist per-turn provider stop reasons, token usage, provider round counts, and tool-call counts for answer diagnostics.
+- Add an authenticated dashboard event stream for reactive state invalidation and automatic reconciliation after reconnecting.
+- Add durable per-attempt recovery and a size-bounded, snapshot-scoped cache for successful read-only tool results.
+- Record bounded per-attempt provider failure categories, stages, safe request identifiers, transport, retry hints, total duration, and time to first provider event.
+- Show the active automatic retry number in Ask this Space while a provider response is recovering.
+
+### Changed
+
+- Discover the complete paginated CBM v0.9.0 tool catalog, preserve native schemas, and fail closed when mandatory capabilities or the pinned runtime version are incompatible.
+- Use immutable snapshot-only indexing by default in productive Docker Compose setups, while retaining an immediate feature-flag rollback to legacy mutable repository indexes.
+- Treat CBM as a structural discovery accelerator and immutable source as the final authority for exact, exhaustive, and negative answers.
+- Label graph relationships as verified or inferred, remove source-contradicted edges, and exclude client references and test fixtures from default server-route inventories.
+- Default CBM-backed tools to compact evidence responses while retaining an explicit full diagnostic profile.
+- Advertise semantic graph input only for compatible moderate or full indexes; keep fast lexical indexing as the product default.
+- Separate background indexing capacity from interactive query sessions and report timeout, cancellation, signal, and possible out-of-memory failures distinctly.
+- Persist the global Ask this Space provider, model, verbosity, and reasoning-effort selection in SQLite across API restarts.
+- Strengthen Ask this Space investigations with the snapshot gateway workflow, evidence verification, pagination, and truncation guidance.
+- Materialize exact Git commits directly into reusable immutable revision trees instead of creating and copying temporary worktrees for every snapshot.
+- Use a Docker-managed data volume for new installations while preserving existing bind-mount configurations.
+- Separate heavyweight indexing capacity from interactive snapshot queries and reuse one CBM session across each agent turn.
+- Batch job-log and streamed assistant-content persistence to reduce SQLite contention without delaying live events.
+- Replace idle dashboard polling with selective event-driven refetches while retaining polling for active external authorization flows.
+- Measure the real dashboard event stream separately from normal HTTP latency in performance baseline reports.
+- Replace Quick, Standard, and Deep answer modes with one adaptive investigation policy that chooses depth from the question and evidence.
+- Raise the default internal safety ceilings to 1,800 seconds, 200 tool calls, and 50 provider rounds while reserving capacity for final synthesis.
+- Retry only provider failures classified as transient or unknown, while stopping immediately for explicitly non-retryable failures and honoring bounded provider retry delays.
+
+### Fixed
+
+- Prevent partial, degraded, unknown, or post-link unhealthy CBM indexes from silently replacing the active snapshot.
+- Detect immutable source corruption even when file size and modification time are unchanged, and preserve the previous source after a cancelled rebuild.
+- Prevent duplicate mutable indexing and intermediate rebuild storms when several repositories are added or updated together.
+- Reject unsupported CBM arguments before native execution and stop advertising the nonexistent standalone semantic tool.
+- Keep cancelled snapshot queries from persisting late source results while still recording a zero-byte failed tool metric.
+- Keep Ask this Space conversations and panel state isolated when switching between spaces.
+- Respect manual scrolling while an answer streams, provide a latest-answer shortcut, contain long source references, and keep activity timestamps on one line.
+- Use stable agent activity messages while answers are queued, investigated, and finalized.
+- Avoid synchronous recursive size scans on repeated snapshot-list requests by persisting snapshot artifact sizes and backfilling legacy rows asynchronously.
+- Skip redundant clean Git checkouts and repairs when a managed clone already matches its selected remote commit.
+- Reclaim content-addressed revision trees after their last retained snapshot reference is removed and garbage collection runs.
+- Preserve collected evidence across provider failures and API restarts, automatically retry transient failures, and resume exhausted or interrupted answers on the same logical turn.
+- Finalize with the best supported answer when research reaches a soft budget or stops making progress instead of exposing a terminal limit error.
+
+### Security
+
+- Reject symbolic links, traversal, absolute paths, drive paths, UNC paths, NUL bytes, binary files, and oversized source reads at the immutable snapshot boundary.
+- Keep operational telemetry free of queries, source content, tool arguments, responses, credentials, and managed filesystem paths.
+- Keep failure diagnostics and logs limited to allowlisted provider metadata and locally generated summaries; omit additional prompt copies, raw provider response bodies, arbitrary headers, credentials, and raw provider errors.
+
 ## [0.3.0] - 2026-07-16
 
 ### Added
@@ -205,7 +271,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/abelmaro/MemoRepo/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abelmaro/MemoRepo/compare/v0.1.9...v0.2.0

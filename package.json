@@ -1,12 +1,13 @@
 {
   "name": "memorepo",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "pnpm --filter @memorepo/api dev",
     "dev:api": "pnpm --filter @memorepo/api dev",
     "dev:web": "pnpm --filter @memorepo/web dev",
+    "perf:baseline": "pnpm --filter @memorepo/api perf:baseline",
     "build": "pnpm --filter @memorepo/agent-runtime build && pnpm --filter @memorepo/api build && pnpm --filter @memorepo/web build",
     "test": "pnpm --filter @memorepo/agent-runtime test && pnpm --filter @memorepo/api test && pnpm --filter @memorepo/web test",
     "typecheck": "pnpm --filter @memorepo/agent-runtime typecheck && pnpm --filter @memorepo/api typecheck && pnpm --filter @memorepo/web typecheck"

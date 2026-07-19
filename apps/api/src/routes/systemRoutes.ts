@@ -91,15 +91,21 @@ export async function systemRoutes(app: FastifyInstance) {
     }
 
     const codebaseMemory = await app.services.cbm
-      .version()
-      .then((version) => {
+      .capabilities(app.services.config.memorepoHome)
+      .then((capabilities) => {
         checks.push({
           id: "codebase-memory-mcp",
           label: "codebase-memory-mcp",
           status: "pass",
-          message: version
+          message: capabilities.reportedVersion,
+          detail: capabilities.summary
         });
-        return { installed: true, version };
+        return {
+          installed: true,
+          version: capabilities.reportedVersion,
+          adapterVersion: capabilities.adapterVersion,
+          optionalTools: capabilities.optionalTools
+        };
       })
       .catch((error: unknown) => {
         const message = publicError(app, error);
@@ -130,7 +136,9 @@ export async function systemRoutes(app: FastifyInstance) {
 
   app.post("/api/maintenance/gc", async (request) => {
     const body = z.object({ jobRetentionDays: z.number().int().min(1).max(3650).optional() }).parse(request.body ?? {});
-    return app.services.maintenance.runGarbageCollection(body.jobRetentionDays);
+    const result = app.services.maintenance.runGarbageCollection(body.jobRetentionDays);
+    app.services.dashboardEvents.publish({ type: "maintenance" }, { type: "jobs" }, { type: "snapshots" });
+    return result;
   });
 }
 
