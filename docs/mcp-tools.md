@@ -30,12 +30,17 @@ When the connection token is valid, `initialize` returns `instructions` with the
 ## Recommended Agent Workflow
 
 1. Start with `list_space_repositories` or `list_projects`.
-2. Use `list_snapshot_files` for file inventories or questions about whether a path or extension exists.
-3. Use `get_graph_schema` before custom Cypher.
-4. Use `get_architecture` for a high-level map of the active space snapshot.
-5. Use `search_graph`, `semantic_query`, or `search_code` for discovery.
-6. Use `trace_path` and `get_code_snippet` with names returned by CBM search tools.
-7. Use `query_graph` for bounded read-only Cypher only when the higher-level tools are not enough.
+2. Use `list_snapshot_files` for file inventories or path/extension questions.
+3. Use `search_snapshot_text` for exact or exhaustive literals, including files CBM may not index.
+4. Use `read_snapshot_file` to verify final source evidence.
+5. Use `get_graph_schema` before custom Cypher and `get_architecture` for a high-level map.
+6. Use `search_graph` or `search_code` for structural discovery. `fast` snapshots never advertise the native `search_graph.semantic_query` field. A `moderate` or `full` snapshot advertises that field only when the paginated CBM `tools/list` descriptor actually supports it; otherwise capability preflight fails closed with an incompatibility error.
+7. Use `trace_path` and `get_code_snippet` with names returned by CBM search tools.
+8. Use `query_graph` for bounded read-only Cypher only when the higher-level tools are not enough.
+
+Follow every `has_more` page. Do not claim absence if `complete=false`, `truncated=true`, coverage is partial/unknown, or pagination remains.
+
+CBM-backed architecture, graph search, code search, and trace tools default to `detail: "compact"`, which removes engine fingerprints and profiling metadata while preserving evidence. Pass `detail: "full"` only when those diagnostics are needed. Trace results separate `verified_edges` backed by exact indexed source from `inferred_edges` that remain static-analysis hypotheses. Route inventories exclude client references and test fixtures by default and label retained registrations with `route_kind`, `confidence`, `evidence`, and `source_kind`.
 
 For multi-repository spaces, omit `project` to have MemoRepo run the tool against every repository in the immutable snapshot. Pass `project` only when you intentionally want to narrow a call to one indexed project.
 
@@ -90,6 +95,14 @@ Arguments:
 
 Responses include `files`, `total`, `offset`, `effective_limit`, `returned`, and `has_more`; when another page exists, `next_offset` identifies its starting point. Absolute paths, parent-directory traversal, empty path segments, symbolic links, and entries that escape the immutable snapshot root are rejected.
 
+### `read_snapshot_file`
+
+Reads bounded numbered UTF-8 lines from one regular file in the immutable source tree. It requires `project` and relative `path`; optional `start_line`, `end_line`, and `max_bytes` bound the result. Responses include a SHA-256 digest and explicit truncation metadata. Absolute, drive-letter, UNC, parent, NUL, symbolic-link/reparse, directory, binary, and escaping paths are rejected.
+
+### `search_snapshot_text`
+
+Searches a literal string across one project or the complete immutable snapshot. Optional arguments are `project`, `case_sensitive`, `path_prefix`, `glob`, `extensions`, `limit`, and `offset`. Responses report completeness, searched files, binary/oversize skips, scanned bytes, truncation, pagination, and compact path/line context. A negative answer is conclusive only when `complete=true`, `truncated=false`, and `has_more=false`.
+
 ### `list_projects`
 
 Runs native CBM `list_projects` against the active space snapshot store.
@@ -111,9 +124,10 @@ Runs native CBM `get_architecture`.
 Arguments:
 
 - `project` optional string.
+- `path` optional relative directory prefix.
 - `aspects` optional string array.
 
-Supported aspects are `languages`, `packages`, `entry_points`, `routes`, `hotspots`, `boundaries`, `layers`, `clusters`, and `adr`. Unknown aspects are rejected with an actionable tool error.
+Supported aspects are `all`, `overview`, `structure`, `dependencies`, `routes`, `languages`, `packages`, `entry_points`, `hotspots`, `boundaries`, `layers`, `file_tree`, and `clusters`. Unknown aspects are rejected with an actionable tool error.
 
 When `aspects` is provided, source-backed route discovery runs only when `routes` is requested. Native route data is omitted from unrelated aspect responses.
 
@@ -150,30 +164,24 @@ Arguments:
 - `project` optional string.
 - `query` optional string.
 - `name_pattern` optional string.
+- `qn_pattern` optional string.
 - `label` optional string.
 - `file_pattern` optional string.
+- `relationship` optional string.
 - `min_degree` optional number.
 - `max_degree` optional number.
+- `exclude_entry_points` optional boolean.
+- `include_connected` optional boolean.
 - `limit` optional integer, max `25`.
 - `offset` optional non-negative integer.
 
-`name_pattern` and `file_pattern` are regular expressions. Invalid expressions fail before native execution with an actionable tool error.
+`name_pattern`, `qn_pattern`, and `file_pattern` are regular expressions. Invalid expressions fail before native execution with an actionable tool error.
 
 When `label` is `Route` and a project is supplied, results come from the same normalized route inventory used by `get_architecture`.
 
 Each synthesized Route result includes `navigable`. When false, `navigation_notice` explains that no exact snippet target exists and directs clients to source-search evidence instead.
 
 For projectless searches with an exact combined `total`, `candidate_count` uses that stable total rather than the size of the internally prefetched page window.
-
-### `semantic_query`
-
-Runs native CBM semantic search.
-
-Arguments:
-
-- `project` optional string.
-- `query` required string.
-- `limit` optional integer, max `25`.
 
 ### `search_code`
 
@@ -183,6 +191,10 @@ Arguments:
 
 - `project` optional string.
 - `pattern` required string.
+- `file_pattern` optional include glob.
+- `path_filter` optional regular expression.
+- `mode` optional string: `compact`, `full`, or `files`.
+- `context` optional integer from `0` to `100`.
 - `regex` optional boolean, default `false`.
 - `limit` optional integer, max `25`.
 - `offset` optional non-negative integer. When `project` is set, the native per-project result window limits it to `0` through `249`.
@@ -201,8 +213,13 @@ Arguments:
 - `function_name` required string.
 - `direction` optional string: `inbound`, `outbound`, or `both`.
 - `depth` optional integer from `1` to `5`.
+- `mode` optional string: `calls`, `data_flow`, or `cross_service`.
+- `parameter_name` optional string for data-flow traces.
+- `edge_types` optional array of edge names.
+- `risk_labels` optional boolean.
+- `include_tests` optional boolean.
 
-Use names returned by `search_graph` or `semantic_query`.
+Use names returned by `search_graph`.
 
 `qualified_name` accepts the exact project-prefixed value returned by discovery tools; MemoRepo also resolves the engine's internal project-relative form when necessary. When both identifiers are supplied, `function_name` must match the symbol resolved by `qualified_name`; contradictory identifiers are rejected.
 

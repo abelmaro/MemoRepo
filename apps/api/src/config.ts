@@ -39,6 +39,10 @@ export interface AppConfig {
   jobConcurrency: number;
   cbmIndexConcurrency: number;
   cbmInteractiveConcurrency: number;
+  enforceSnapshotQuality: boolean;
+  compactCbmResponses: boolean;
+  batchRepositoryOperations: boolean;
+  snapshotOnlyIndexing: boolean;
 }
 
 function absolutePath(input: string): string {
@@ -55,6 +59,14 @@ function positiveIntEnv(name: string, fallback: number): number {
     return fallback;
   }
   return value;
+}
+
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
 }
 
 export function corsOrigins(config: AppConfig): string[] {
@@ -128,6 +140,10 @@ export function loadConfig(): AppConfig {
     jobRetentionDaysDefault: positiveIntEnv("MEMOREPO_JOB_RETENTION_DAYS", 30),
     jobConcurrency: positiveIntEnv("MEMOREPO_JOB_CONCURRENCY", 2),
     cbmIndexConcurrency: positiveIntEnv("MEMOREPO_CBM_INDEX_CONCURRENCY", 1),
-    cbmInteractiveConcurrency: positiveIntEnv("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", 2)
+    cbmInteractiveConcurrency: positiveIntEnv("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", 2),
+    enforceSnapshotQuality: booleanEnv("MEMOREPO_ENFORCE_SNAPSHOT_QUALITY", true),
+    compactCbmResponses: booleanEnv("MEMOREPO_COMPACT_CBM_RESPONSES", true),
+    batchRepositoryOperations: booleanEnv("MEMOREPO_BATCH_REPOSITORY_OPERATIONS", true),
+    snapshotOnlyIndexing: booleanEnv("MEMOREPO_SNAPSHOT_ONLY_INDEXING", false)
   };
 }

@@ -16,6 +16,12 @@ export interface EnqueueJobInput {
   spaceId?: string | null;
   spaceRepositoryId?: string | null;
   dependsOnJobId?: string | null;
+  dependsOnJobIds?: string[];
+}
+
+export interface EnqueueCoalescedJobInput extends EnqueueJobInput {
+  spaceId: string;
+  fingerprint: string;
 }
 
 export interface JobContext {
@@ -83,13 +89,14 @@ export class JobRunner {
   enqueue(input: EnqueueJobInput) {
     const timestamp = nowIso();
     const payloadJson = stableJsonStringify(input.payload ?? {});
+    const dependencyJobIds = normalizeDependencyJobIds(input);
     const record: JobRecord = {
       id: createId("job"),
       type: input.type,
       status: "pending",
       spaceId: input.spaceId ?? null,
       spaceRepositoryId: input.spaceRepositoryId ?? null,
-      dependsOnJobId: input.dependsOnJobId ?? null,
+      dependsOnJobId: dependencyJobIds[0] ?? null,
       payloadJson,
       error: null,
       createdAt: timestamp,
@@ -97,14 +104,18 @@ export class JobRunner {
       finishedAt: null
     };
 
-    const deduplicationKey = createJobDeduplicationKey(record);
+    const deduplicationKey = createJobDeduplicationKey(record, dependencyJobIds);
     const enqueueTransaction = this.database.sqlite.transaction(() => {
-      const existing = this.findActiveDuplicate(record);
+      const existing = this.findActiveDuplicate(deduplicationKey);
       if (existing) {
         return { created: false, job: toEnqueuedJob(existing) };
       }
 
       insertRecord(this.database, "jobs", { ...record, deduplicationKey });
+      const dependencyInsert = this.database.sqlite.prepare(
+        "INSERT INTO job_dependencies (job_id, dependency_job_id, created_at) VALUES (?, ?, ?)"
+      );
+      for (const dependencyJobId of dependencyJobIds) dependencyInsert.run(record.id, dependencyJobId, timestamp);
       return { created: true, job: record };
     });
     const result = enqueueTransaction.immediate();
@@ -116,23 +127,88 @@ export class JobRunner {
     return result.job;
   }
 
-  private findActiveDuplicate(record: JobRecord): JobRow | null {
-    const candidates = this.database.sqlite
+  /** Keep one active execution and at most one durable pending follow-up per space/type. */
+  enqueueCoalesced(input: EnqueueCoalescedJobInput) {
+    if (!input.fingerprint.trim()) throw new Error("Coalesced job fingerprint must not be empty");
+    const dependencyJobIds = normalizeDependencyJobIds(input);
+    const timestamp = nowIso();
+    const payloadJson = stableJsonStringify({ ...(input.payload ?? {}), inputFingerprint: input.fingerprint });
+    const record: JobRecord = {
+      id: createId("job"), type: input.type, status: "pending", spaceId: input.spaceId,
+      spaceRepositoryId: input.spaceRepositoryId ?? null, dependsOnJobId: dependencyJobIds[0] ?? null,
+      payloadJson, error: null, createdAt: timestamp, startedAt: null, finishedAt: null
+    };
+    const deduplicationKey = createJobDeduplicationKey(record, dependencyJobIds);
+    const transaction = this.database.sqlite.transaction(() => {
+      const active = this.database.sqlite.prepare(
+        `SELECT * FROM jobs
+         WHERE type = ? AND space_id = ? AND status IN ('pending', 'running')
+         ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at ASC, id ASC`
+      ).all(input.type, input.spaceId) as JobRow[];
+      for (const candidate of active) {
+        if (candidate.payload_json === payloadJson && sameStringSet(this.dependencyIds(candidate.id), dependencyJobIds)) {
+          const obsoletePending = candidate.status === "running"
+            ? active.find((job) => job.status === "pending" && job.id !== candidate.id)
+            : undefined;
+          if (obsoletePending) {
+            this.database.sqlite.prepare(
+              "UPDATE jobs SET status = 'cancelled', error = ?, finished_at = ? WHERE id = ?"
+            ).run("Superseded because the active job already matches the latest requested inputs", timestamp, obsoletePending.id);
+          }
+          return { created: false, updated: false, supersededId: obsoletePending?.id ?? null, job: toEnqueuedJob(candidate) };
+        }
+      }
+      const pending = active.find((candidate) => candidate.status === "pending");
+      if (pending) {
+        this.database.sqlite.prepare(
+          "UPDATE jobs SET payload_json = ?, depends_on_job_id = ?, deduplication_key = ?, error = NULL WHERE id = ?"
+        ).run(payloadJson, dependencyJobIds[0] ?? null, deduplicationKey, pending.id);
+        this.replaceDependencies(pending.id, dependencyJobIds, timestamp);
+        return { created: false, updated: true, supersededId: null, job: { ...record, id: pending.id, createdAt: pending.created_at } };
+      }
+      insertRecord(this.database, "jobs", { ...record, deduplicationKey });
+      this.insertDependencies(record.id, dependencyJobIds, timestamp);
+      return { created: true, updated: false, supersededId: null, job: record };
+    });
+    const result = transaction.immediate();
+    if (result.created) this.writeEvent(result.job.id, "status", "pending");
+    else if (result.updated) this.writeEvent(result.job.id, "coalesced", "Pending job updated to the latest requested inputs");
+    if (result.supersededId) this.writeEvent(result.supersededId, "status", "cancelled");
+    void this.tick();
+    return result.job;
+  }
+
+  private dependencyIds(jobId: string): string[] {
+    return (this.database.sqlite.prepare(
+      "SELECT dependency_job_id AS id FROM job_dependencies WHERE job_id = ? ORDER BY dependency_job_id"
+    ).all(jobId) as Array<{ id: string }>).map((row) => row.id);
+  }
+
+  private insertDependencies(jobId: string, dependencyJobIds: string[], timestamp: string): void {
+    const insert = this.database.sqlite.prepare(
+      "INSERT INTO job_dependencies (job_id, dependency_job_id, created_at) VALUES (?, ?, ?)"
+    );
+    for (const dependencyJobId of dependencyJobIds) insert.run(jobId, dependencyJobId, timestamp);
+  }
+
+  private replaceDependencies(jobId: string, dependencyJobIds: string[], timestamp: string): void {
+    this.database.sqlite.prepare("DELETE FROM job_dependencies WHERE job_id = ?").run(jobId);
+    this.insertDependencies(jobId, dependencyJobIds, timestamp);
+  }
+
+  private findActiveDuplicate(deduplicationKey: string): JobRow | null {
+    return (this.database.sqlite
       .prepare(
         `
         SELECT *
         FROM jobs
         WHERE status IN ('pending', 'running')
-          AND type = @type
-          AND space_id IS @spaceId
-          AND space_repository_id IS @spaceRepositoryId
-          AND depends_on_job_id IS @dependsOnJobId
+          AND deduplication_key = ?
         ORDER BY created_at ASC, id ASC
+        LIMIT 1
       `
       )
-      .all(record) as JobRow[];
-
-    return candidates.find((candidate) => payloadsMatch(candidate.payload_json, record.payloadJson)) ?? null;
+      .get(deduplicationKey) as JobRow | undefined) ?? null;
   }
 
   getJob(jobId: string) {
@@ -149,17 +225,22 @@ export class JobRunner {
   }
 
   getJobDependency(jobId: string) {
+    return this.getJobDependencies(jobId)[0];
+  }
+
+  getJobDependencies(jobId: string) {
     return this.database.sqlite
       .prepare(
         `
         SELECT
           ${publicJobSelectColumns("d")}
-        FROM jobs j
-        JOIN jobs d ON d.id = j.depends_on_job_id
-        WHERE j.id = ?
+        FROM job_dependencies jd
+        JOIN jobs d ON d.id = jd.dependency_job_id
+        WHERE jd.job_id = ?
+        ORDER BY d.created_at ASC, d.id ASC
       `
       )
-      .get(jobId);
+      .all(jobId);
   }
 
   getJobDependents(jobId: string) {
@@ -167,10 +248,11 @@ export class JobRunner {
       .prepare(
         `
         SELECT
-          ${publicJobSelectColumns()}
-        FROM jobs
-        WHERE depends_on_job_id = ?
-        ORDER BY created_at ASC
+          ${publicJobSelectColumns("j")}
+        FROM job_dependencies jd
+        JOIN jobs j ON j.id = jd.job_id
+        WHERE jd.dependency_job_id = ?
+        ORDER BY j.created_at ASC
       `
       )
       .all(jobId);
@@ -267,9 +349,13 @@ export class JobRunner {
         `
         SELECT j.*
         FROM jobs j
-        LEFT JOIN jobs d ON d.id = j.depends_on_job_id
         WHERE j.status = 'pending'
-          AND (j.depends_on_job_id IS NULL OR d.status = 'succeeded')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_dependencies jd
+            JOIN jobs d ON d.id = jd.dependency_job_id
+            WHERE jd.job_id = j.id AND d.status <> 'succeeded'
+          )
         ORDER BY j.created_at ASC
         LIMIT 20
       `
@@ -370,9 +456,10 @@ export class JobRunner {
     const blocked = this.database.sqlite
       .prepare(
         `
-        SELECT j.id
+        SELECT DISTINCT j.id
         FROM jobs j
-        JOIN jobs d ON d.id = j.depends_on_job_id
+        JOIN job_dependencies jd ON jd.job_id = j.id
+        JOIN jobs d ON d.id = jd.dependency_job_id
         WHERE j.status = 'pending'
           AND d.status IN ('failed', 'skipped', 'cancelled')
       `
@@ -565,10 +652,22 @@ interface JobEventRecord extends Record<string, SqlValue> {
   createdAt: string;
 }
 
-function createJobDeduplicationKey(job: JobRecord): string {
+function createJobDeduplicationKey(job: JobRecord, dependencyJobIds: string[]): string {
   return createHash("sha256")
-    .update(JSON.stringify([job.type, job.spaceId, job.spaceRepositoryId, job.dependsOnJobId, job.payloadJson]))
+    .update(JSON.stringify([job.type, job.spaceId, job.spaceRepositoryId, dependencyJobIds, job.payloadJson]))
     .digest("hex");
+}
+
+function normalizeDependencyJobIds(input: EnqueueJobInput): string[] {
+  const values = [...(input.dependsOnJobIds ?? []), ...(input.dependsOnJobId ? [input.dependsOnJobId] : [])];
+  if (values.some((value) => typeof value !== "string" || value.length === 0)) {
+    throw new Error("Job dependency IDs must be non-empty strings");
+  }
+  return [...new Set(values)].sort();
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function payloadsMatch(storedPayloadJson: string, canonicalPayloadJson: string): boolean {

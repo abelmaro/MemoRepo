@@ -137,6 +137,19 @@ export const jobs = sqliteTable(
   ]
 );
 
+export const jobDependencies = sqliteTable(
+  "job_dependencies",
+  {
+    jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    dependencyJobId: text("dependency_job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [
+    primaryKey({ columns: [table.jobId, table.dependencyJobId] }),
+    index("job_dependencies_dependency_idx").on(table.dependencyJobId, table.jobId)
+  ]
+);
+
 export const jobEvents = sqliteTable(
   "job_events",
   {
@@ -181,9 +194,42 @@ export const mcpToolStats = sqliteTable(
     callCount: integer("call_count").notNull().default(0),
     totalResponseBytes: integer("total_response_bytes").notNull().default(0),
     maxResponseBytes: integer("max_response_bytes").notNull().default(0),
+    totalDurationMs: integer("total_duration_ms").notNull().default(0),
+    maxDurationMs: integer("max_duration_ms").notNull().default(0),
+    errorCount: integer("error_count").notNull().default(0),
+    cacheHitCount: integer("cache_hit_count").notNull().default(0),
+    truncatedCount: integer("truncated_count").notNull().default(0),
     lastCalledAt: text("last_called_at").notNull()
   },
   (table) => [primaryKey({ columns: [table.spaceId, table.toolName] })]
+);
+
+export const cbmOperationMetrics = sqliteTable(
+  "cbm_operation_metrics",
+  {
+    id: text("id").primaryKey(),
+    operation: text("operation").notNull(),
+    spaceId: text("space_id"),
+    snapshotId: text("snapshot_id"),
+    spaceRepositoryId: text("space_repository_id"),
+    projectName: text("project_name"),
+    engineVersion: text("engine_version"),
+    indexMode: text("index_mode"),
+    status: text("status").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    exitCode: integer("exit_code"),
+    terminationKind: text("termination_kind"),
+    nodes: integer("nodes"),
+    edges: integer("edges"),
+    skippedCount: integer("skipped_count"),
+    artifactBytes: integer("artifact_bytes"),
+    responseBytes: integer("response_bytes"),
+    cacheHit: integer("cache_hit").notNull().default(0),
+    truncated: integer("truncated").notNull().default(0),
+    cgroupPeakBytes: integer("cgroup_peak_bytes"),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [index("cbm_operation_metrics_created_idx").on(table.createdAt), index("cbm_operation_metrics_space_created_idx").on(table.spaceId, table.createdAt)]
 );
 
 export const agentAccountSessions = sqliteTable("agent_account_sessions", {
@@ -375,6 +421,7 @@ export const databaseTables = {
   job_events: jobEvents,
   mcp_connections: mcpConnections,
   mcp_tool_stats: mcpToolStats,
+  cbm_operation_metrics: cbmOperationMetrics,
   agent_account_sessions: agentAccountSessions,
   agent_model_preferences: agentModelPreferences,
   agent_chats: agentChats,
@@ -396,6 +443,7 @@ export const schema = {
   jobEvents,
   mcpConnections,
   mcpToolStats,
+  cbmOperationMetrics,
   agentAccountSessions,
   agentModelPreferences,
   agentChats,

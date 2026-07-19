@@ -161,16 +161,28 @@ export interface McpConnection {
   revoked_at: string | null;
 }
 
+export type SnapshotQuality = "complete" | "partial" | "degraded" | "unknown";
+
 export interface SpaceSnapshot {
   id: string;
   version: number;
   status: string;
   active: boolean;
+  quality: SnapshotQuality;
   repositoryCount: number;
+  engineVersions: string[];
+  indexModes: string[];
+  sourceFileCount: number;
+  skippedCount: number;
+  excludedDirectoryCount: number;
+  coveragePercent: number | null;
+  skipReasons: Array<{ reason: string; count: number }>;
+  indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;
   activatedAt: string | null;
   error: string | null;
+  reason: string | null;
 }
 
 export interface SnapshotListResponse {
@@ -316,6 +328,7 @@ export interface AgentSource {
 export interface AgentSnapshotContext {
   id: string | null;
   version: number;
+  quality?: SnapshotQuality;
   createdAt?: string;
   activatedAt?: string | null;
   repositories?: Array<{
@@ -323,6 +336,7 @@ export interface AgentSnapshotContext {
     branch: string;
     commit: string;
     projectName: string;
+    quality?: SnapshotQuality;
   }>;
 }
 

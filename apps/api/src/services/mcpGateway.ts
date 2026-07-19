@@ -9,6 +9,14 @@ import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { createId, createSecretToken, sha256 } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
+import type { CbmV090Capabilities } from "./cbmV090Capabilities.js";
+import {
+  annotateTraceEdge,
+  classifyRouteEvidence,
+  compactCbmValue,
+  partitionTraceEdges,
+  type CbmResponseDetail
+} from "./cbmEvidence.js";
 import type { SnapshotManifest, SnapshotManifestRepository } from "./snapshotService.js";
 import {
   buildSnapshotInstructions,
@@ -18,6 +26,9 @@ import {
 } from "./snapshotAgentInstructions.js";
 import type { SpaceService } from "./spaceService.js";
 import type { DashboardEventBus } from "./dashboardEventBus.js";
+import { readSnapshotFile, searchSnapshotText } from "./snapshotSourceTools.js";
+import { recordMcpToolMetric } from "./mcpToolStats.js";
+import { snapshotIndexCoverage, snapshotIndexCoverageMcpView } from "./snapshotIndexCoverage.js";
 
 const QUERY_GRAPH_MAX_ROWS = SNAPSHOT_QUERY_GRAPH_MAX_ROWS;
 const ENGINE_RESULT_WINDOW = 250;
@@ -35,7 +46,21 @@ const CBM_RESPONSE_CACHE_MAX_ENTRIES = 256;
 const CBM_RESPONSE_CACHE_MAX_ITEM_BYTES = 200_000;
 const PROJECT_FANOUT_CONCURRENCY = 4;
 const GLOBAL_SEARCH_MAX_PAGES = 50;
-const ARCHITECTURE_ASPECTS = ["languages", "packages", "entry_points", "routes", "hotspots", "boundaries", "layers", "clusters", "adr"] as const;
+const ARCHITECTURE_ASPECTS = [
+  "all",
+  "overview",
+  "structure",
+  "dependencies",
+  "routes",
+  "languages",
+  "packages",
+  "entry_points",
+  "hotspots",
+  "boundaries",
+  "layers",
+  "file_tree",
+  "clusters"
+] as const;
 
 const DIRECT_CBM_READ_TOOLS = new Set([
   "list_projects",
@@ -43,13 +68,19 @@ const DIRECT_CBM_READ_TOOLS = new Set([
   "get_architecture",
   "get_graph_schema",
   "search_graph",
-  "semantic_query",
   "search_code",
   "trace_path",
   "get_code_snippet",
   "detect_changes"
 ]);
 const MUTABLE_SNAPSHOT_TOOLS = new Set(["detect_changes"]);
+const MEMOREPO_SOURCE_TOOLS = new Set([
+  "list_space_repositories",
+  "snapshot_index_coverage",
+  "list_snapshot_files",
+  "read_snapshot_file",
+  "search_snapshot_text"
+]);
 
 const FORBIDDEN_CBM_INPUT_KEYS = new Set([
   "absolute_path",
@@ -71,6 +102,7 @@ const FORBIDDEN_CBM_INPUT_KEYS = new Set([
 export class McpGateway {
   private readonly manifestCache = new Map<string, SnapshotManifest>();
   private readonly cbmResponseCache = new Map<string, unknown>();
+  private readonly sourceResponseCache = new Map<string, unknown>();
   private readonly snapshotToolContext = new AsyncLocalStorage<SnapshotToolContext>();
 
   constructor(
@@ -200,14 +232,25 @@ export class McpGateway {
 
   async callTool(spaceSlug: string, token: string, toolName: string, args: Record<string, unknown>) {
     return this.spacesService.withSpaceReaderBySlug(spaceSlug, async () => {
-      this.validateToolArgs(toolName, args);
+      const metricContext: SnapshotToolContext = { cacheHits: 0 };
+      return this.snapshotToolContext.run(metricContext, async () => {
       if (MUTABLE_SNAPSHOT_TOOLS.has(toolName)) {
         throw new Error(`${toolName} is not available for immutable snapshot queries`);
       }
       const { space, snapshot, manifest } = await this.snapshotContext(spaceSlug, token);
-      const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
-      this.recordToolStats(space.id, toolName, responseBytes(response));
-      return response;
+      const startedAt = Date.now();
+      try {
+        const definitions = MEMOREPO_SOURCE_TOOLS.has(toolName) ? this.tools() : await this.capabilityAwareTools(snapshot, manifest);
+        this.validateToolArgs(toolName, args, definitions);
+        const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
+        this.recordToolStats(space.id, toolName, responseBytes(response), Date.now() - startedAt, false,
+          (metricContext.cacheHits ?? 0) > 0, responseIsTruncated(response));
+        return response;
+      } catch (error) {
+        this.recordToolStats(space.id, toolName, 0, Date.now() - startedAt, true, (metricContext.cacheHits ?? 0) > 0);
+        throw error;
+      }
+      });
     });
   }
 
@@ -239,24 +282,33 @@ export class McpGateway {
     signal?: AbortSignal,
     turnSessionId?: string
   ) {
+    const metricContext: SnapshotToolContext = {
+      ...(signal ? { signal } : {}),
+      ...(turnSessionId ? { turnSessionId } : {}),
+      cacheHits: 0
+    };
     const execute = async () => {
       throwIfAborted(signal);
       if (MUTABLE_SNAPSHOT_TOOLS.has(toolName)) {
         throw new Error(`${toolName} is not available for immutable snapshot queries`);
       }
-      this.validateToolArgs(toolName, args);
       const { space, snapshot, manifest } = this.snapshotContextById(spaceId, snapshotId);
-      const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
-      throwIfAborted(signal);
-      this.recordToolStats(space.id, toolName, responseBytes(response));
-      return response;
+      const startedAt = Date.now();
+      try {
+        const definitions = MEMOREPO_SOURCE_TOOLS.has(toolName) ? this.tools() : await this.capabilityAwareTools(snapshot, manifest);
+        this.validateToolArgs(toolName, args, definitions);
+        const response = limitMcpResponse(await this.toolResult(space, snapshot, manifest, toolName, args));
+        throwIfAborted(signal);
+        this.recordToolStats(space.id, toolName, responseBytes(response), Date.now() - startedAt, false,
+          (metricContext.cacheHits ?? 0) > 0, responseIsTruncated(response));
+        return response;
+      } catch (error) {
+        this.recordToolStats(space.id, toolName, 0, Date.now() - startedAt, true, (metricContext.cacheHits ?? 0) > 0);
+        throw error;
+      }
     };
     return this.spacesService.withSpaceReader(spaceId, () => {
-      const context: SnapshotToolContext = {
-        ...(signal ? { signal } : {}),
-        ...(turnSessionId ? { turnSessionId } : {})
-      };
-      return signal || turnSessionId ? this.snapshotToolContext.run(context, execute) : execute();
+      return this.snapshotToolContext.run(metricContext, execute);
     });
   }
 
@@ -273,6 +325,11 @@ export class McpGateway {
           call_count AS callCount,
           total_response_bytes AS totalResponseBytes,
           max_response_bytes AS maxResponseBytes,
+          total_duration_ms AS totalDurationMs,
+          max_duration_ms AS maxDurationMs,
+          error_count AS errorCount,
+          cache_hit_count AS cacheHitCount,
+          truncated_count AS truncatedCount,
           last_called_at AS lastCalledAt
         FROM mcp_tool_stats
         WHERE space_id = ?
@@ -311,8 +368,14 @@ export class McpGateway {
           }),
           space: { name: space.name, slug: space.slug, snapshotStatus: space.snapshotStatus }
         };
+      case "snapshot_index_coverage":
+        return this.snapshotIndexCoverageResult(space, snapshot, manifest, args);
       case "list_snapshot_files":
         return this.listSnapshotFiles(space, snapshot, manifest, args);
+      case "read_snapshot_file":
+        return this.readSnapshotSourceFile(space, snapshot, manifest, args);
+      case "search_snapshot_text":
+        return this.searchSnapshotSourceText(space, snapshot, manifest, args);
       case "query_graph":
         return this.queryGraph(space, snapshot, manifest, args);
       default:
@@ -323,20 +386,9 @@ export class McpGateway {
     }
   }
 
-  private recordToolStats(spaceId: string, toolName: string, bytes: number): void {
-    this.database.sqlite
-      .prepare(
-        `
-        INSERT INTO mcp_tool_stats (space_id, tool_name, call_count, total_response_bytes, max_response_bytes, last_called_at)
-        VALUES (?, ?, 1, ?, ?, ?)
-        ON CONFLICT(space_id, tool_name) DO UPDATE SET
-          call_count = call_count + 1,
-          total_response_bytes = total_response_bytes + excluded.total_response_bytes,
-          max_response_bytes = MAX(max_response_bytes, excluded.max_response_bytes),
-          last_called_at = excluded.last_called_at
-      `
-      )
-      .run(spaceId, toolName, bytes, bytes, nowIso());
+  private recordToolStats(spaceId: string, toolName: string, bytes: number, durationMs = 0, error = false,
+    cacheHit = false, truncated = false): void {
+    recordMcpToolMetric(this.database, { spaceId, toolName, responseBytes: bytes, durationMs, error, cacheHit, truncated });
   }
 
   private async buildInstructions(spaceSlug: string, token: string): Promise<string> {
@@ -514,8 +566,11 @@ export class McpGateway {
     const context = this.snapshotToolContext.getStore();
     const signal = context?.signal;
     throwIfAborted(signal);
-    const key = `${snapshot.id}\n${toolName}\n${stableStringify(input)}`;
+    const nativeInput = { ...input };
+    delete nativeInput.detail;
+    const key = `${snapshot.id}\n${toolName}\n${stableStringify(nativeInput)}`;
     if (this.cbmResponseCache.has(key)) {
+      if (context) context.cacheHits = (context.cacheHits ?? 0) + 1;
       const cached = this.cbmResponseCache.get(key);
       this.cbmResponseCache.delete(key);
       this.cbmResponseCache.set(key, cached);
@@ -523,7 +578,7 @@ export class McpGateway {
       return cached;
     }
 
-    const response = await this.cbm.tool(toolName, input, snapshot.artifactPath, timeoutMs, signal, context?.turnSessionId);
+    const response = await this.cbm.tool(toolName, nativeInput, snapshot.artifactPath, timeoutMs, signal, context?.turnSessionId);
     throwIfAborted(signal);
     if (responseBytes(response) <= CBM_RESPONSE_CACHE_MAX_ITEM_BYTES) {
       evictOldest(this.cbmResponseCache, CBM_RESPONSE_CACHE_MAX_ENTRIES);
@@ -554,6 +609,12 @@ export class McpGateway {
     if (hasUnlabeledNodePropertyMap(queryStructure)) {
       throw new Error(
         "query_graph requires an explicit node label when matching inline properties; add a label such as :Function or :Method instead of relying on unsupported unlabeled property-map semantics"
+      );
+    }
+    const unlabeledRelationshipNodes = relationshipNodesWithoutLabels(queryStructure);
+    if (unlabeledRelationshipNodes.length > 0) {
+      throw new Error(
+        `query_graph requires explicit labels on relationship nodes (${unlabeledRelationshipNodes.join(", ")}); query :Function and :Method variants separately and inspect get_graph_schema before treating an empty traversal as evidence`
       );
     }
     const mutationStructure = maskCypherPropertyNames(queryStructure);
@@ -727,7 +788,7 @@ export class McpGateway {
     args: Record<string, unknown>
   ) {
     const input = this.scopedCbmArgs(manifest, args, toolName);
-    if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
+    if (toolName === "search_graph" || toolName === "search_code") {
       input.limit = boundedLimit(args.limit, 10, SEARCH_RESULT_MAX_LIMIT);
     }
     if (toolName === "trace_path") {
@@ -751,7 +812,7 @@ export class McpGateway {
         : toolName === "search_code"
           ? await this.searchCodeAcrossProjects(snapshot, manifest, input, GLOBAL_SEARCH_CODE_CANDIDATE_TARGET)
           : await this.callForProjects(snapshot, manifest, toolName, input);
-      if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
+      if (toolName === "search_graph" || toolName === "search_code") {
         return this.withSnapshotMeta(
           space,
           snapshot,
@@ -889,7 +950,7 @@ export class McpGateway {
     return mapWithConcurrency(projects, PROJECT_FANOUT_CONCURRENCY, async (project) => {
       try {
         const projectInput: Record<string, unknown> = { ...input, project };
-        if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
+        if (toolName === "search_graph" || toolName === "search_code") {
           projectInput.limit = SEARCH_RESULT_MAX_LIMIT;
           delete projectInput.offset;
         }
@@ -931,6 +992,12 @@ export class McpGateway {
       ? await this.enrichArchitectureRoutes(snapshot, input, response)
       : response;
     const prepared = sanitizeToolGuidance(toolName, enriched, input);
+    if (toolName === "get_architecture" && isRecord(prepared)) {
+      prepared.analysis_kind = "static_analysis";
+      prepared.evidence_status = "mixed";
+      prepared.confidence_notice = "Architecture combines indexed facts and static-analysis inference; verify consequential claims against exact snapshot source.";
+    }
+    const finish = (value: unknown) => compactCbmValue(value, responseDetail(input, this.config.compactCbmResponses));
     if (toolName === "get_graph_schema" && optionalString(input.project) && isRecord(prepared)) {
       try {
         const routeCount = (await this.routeInventory(snapshot, String(input.project))).length;
@@ -942,21 +1009,21 @@ export class McpGateway {
       }
     }
     if (toolName !== "search_graph" || !optionalString(input.label) || searchItems(prepared).length > 0) {
-      return prepared;
+      return finish(prepared);
     }
 
     const project = optionalString(input.project);
     if (!project) {
-      return removeStaticLabelHint(prepared);
+      return finish(removeStaticLabelHint(prepared));
     }
     try {
       const schema = await this.cachedCbmTool(snapshot, "get_graph_schema", { project }, QUERY_GRAPH_TIMEOUT_MS);
       const labels = graphSchemaLabels(schema);
-      return labels.length > 0
+      return finish(labels.length > 0
         ? replaceLabelHint(prepared, `Available labels for ${project}: ${labels.join(", ")}`)
-        : removeStaticLabelHint(prepared);
+        : removeStaticLabelHint(prepared));
     } catch {
-      return removeStaticLabelHint(prepared);
+      return finish(removeStaticLabelHint(prepared));
     }
   }
 
@@ -1012,10 +1079,22 @@ export class McpGateway {
       }
       const routePath = normalizeHttpRoutePath(optionalString(route.path) ?? optionalString(route.name) ?? "");
       const method = optionalString(route.method)?.toUpperCase();
+      const filePath = optionalString(route.file_path) ?? optionalString(route.filePath);
+      const receiver = optionalString(route.receiver);
+      const routeKind = optionalString(route.route_kind)
+        ?? (method && !filePath ? "server_route" : classifyRouteEvidence(filePath, receiver));
       if (!routePath) {
         continue;
       }
-      merged.set(`${method ?? "ANY"} ${routePath}`, { ...route, path: routePath, ...(method ? { method } : {}) });
+      if (routeKind !== "server_route") continue;
+      merged.set(`${method ?? "ANY"} ${routePath}`, {
+        ...route,
+        path: routePath,
+        route_kind: routeKind,
+        confidence: route.evidence === "indexed_source" ? "verified" : "inferred",
+        source_kind: route.evidence === "indexed_source" ? "exact_source" : "static_analysis",
+        ...(method ? { method } : {})
+      });
     }
     const mergedRoutes = [...merged.values()].filter((route) => {
       if (!isRecord(route) || optionalString(route.method)) {
@@ -1047,21 +1126,39 @@ export class McpGateway {
     })))];
     const snippets = await mapWithConcurrency(qualifiedNames, PROJECT_FANOUT_CONCURRENCY, async (qualifiedName) => {
       try {
-        return await this.cachedCbmTool(snapshot, "get_code_snippet", { project, qualified_name: qualifiedName }, QUERY_GRAPH_TIMEOUT_MS);
+        return {
+          qualifiedName,
+          value: await this.cachedCbmTool(snapshot, "get_code_snippet", { project, qualified_name: qualifiedName }, QUERY_GRAPH_TIMEOUT_MS)
+        };
       } catch {
         return undefined;
       }
     });
-    return snippets.flatMap((snippet) => extractHttpRoutes(snippetSource(snippet)).map(({ method, path: routePath }) => ({
+    return snippets.flatMap((snippet) => {
+      const filePath = snippet && isRecord(snippet.value)
+        ? optionalString(snippet.value.file_path) ?? optionalString(snippet.value.filePath)
+        : undefined;
+      const baseLine = snippet && isRecord(snippet.value)
+        ? directNumericField(snippet.value, "start_line") ?? directNumericField(snippet.value, "startLine") ?? 1
+        : 1;
+      return extractHttpRoutes(snippetSource(snippet?.value)).map(({ method, path: routePath, receiver, line }) => ({
       label: "Route",
       name: routePath,
       path: routePath,
       method,
+      receiver,
+      route_kind: classifyRouteEvidence(filePath, receiver),
       qualified_name: `__route__${method}__${routePath}`,
       synthetic: true,
       source_available: true,
-      method_source: "indexed_code"
-    })));
+      method_source: "indexed_code",
+      evidence: "indexed_source",
+      source_kind: "exact_source",
+      confidence: "verified",
+      ...(filePath ? { file_path: filePath } : {}),
+      start_line: baseLine + line - 1
+      }));
+    });
   }
 
   private async routeInventory(snapshot: SnapshotRow, project: string): Promise<Array<Record<string, unknown>>> {
@@ -1132,13 +1229,113 @@ export class McpGateway {
   }
 
   private async filterAvailableTools(snapshot: SnapshotRow | null) {
-    const declared = this.tools().filter((candidate) => !MUTABLE_SNAPSHOT_TOOLS.has(candidate.name));
-    const native = new Set(await this.cbm.listTools(snapshot?.artifactPath ?? this.config.memorepoHome));
+    const manifest = snapshot ? this.manifestFor(snapshot) : null;
+    const capabilities = await this.cbm.capabilities(snapshot?.artifactPath ?? this.config.memorepoHome);
+    const declared = (await this.capabilityAwareTools(snapshot, manifest, capabilities))
+      .filter((candidate) => !MUTABLE_SNAPSHOT_TOOLS.has(candidate.name));
+    const native = new Set<string>([
+      ...capabilities.requiredTools.available,
+      ...capabilities.optionalTools.available
+    ]);
     return declared.filter((candidate) =>
       candidate.name === "list_space_repositories"
+      || candidate.name === "snapshot_index_coverage"
       || candidate.name === "list_snapshot_files"
+      || candidate.name === "read_snapshot_file"
+      || candidate.name === "search_snapshot_text"
       || (candidate.name === "query_graph" ? native.has("query_graph") : native.has(candidate.name))
     );
+  }
+
+  private async readSnapshotSourceFile(
+    space: SpaceRow,
+    snapshot: SnapshotRow,
+    manifest: SnapshotManifest,
+    args: Record<string, unknown>
+  ) {
+    const repository = requiredSnapshotRepository(manifest, requiredNonEmptyString(args.project, "read_snapshot_file project"), "read_snapshot_file");
+    const result = await this.cachedSourceResponse(snapshot, "read_snapshot_file", args, () => readSnapshotFile(repository, {
+      path: requiredNonEmptyString(args.path, "read_snapshot_file path"),
+      ...(args.start_line === undefined ? {} : { startLine: optionalBoundedInteger(args.start_line, "read_snapshot_file start_line", 1)! }),
+      ...(args.end_line === undefined ? {} : { endLine: optionalBoundedInteger(args.end_line, "read_snapshot_file end_line", 1)! }),
+      ...(args.max_bytes === undefined ? {} : { maxBytes: optionalBoundedInteger(args.max_bytes, "read_snapshot_file max_bytes", 1, 128 * 1024)! })
+    }, this.snapshotToolContext.getStore()?.signal));
+    return this.withSnapshotMeta(space, snapshot, manifest, result);
+  }
+
+  private async snapshotIndexCoverageResult(
+    space: SpaceRow,
+    snapshot: SnapshotRow,
+    manifest: SnapshotManifest,
+    args: Record<string, unknown>
+  ) {
+    const project = optionalString(args.project);
+    const result = await this.cachedSourceResponse(snapshot, "snapshot_index_coverage", args, () =>
+      snapshotIndexCoverage(manifest, {
+        ...(project ? { project } : {}),
+        ...(this.snapshotToolContext.getStore()?.signal
+          ? { signal: this.snapshotToolContext.getStore()!.signal }
+          : {})
+      }));
+    return this.withSnapshotMeta(space, snapshot, manifest, snapshotIndexCoverageMcpView(result));
+  }
+
+  private async searchSnapshotSourceText(
+    space: SpaceRow,
+    snapshot: SnapshotRow,
+    manifest: SnapshotManifest,
+    args: Record<string, unknown>
+  ) {
+    const requestedProject = optionalString(args.project);
+    const repositories = requestedProject
+      ? [requiredSnapshotRepository(manifest, requestedProject, "search_snapshot_text")]
+      : manifest.repositories;
+    const extensions = args.extensions === undefined
+      ? undefined
+      : (Array.isArray(args.extensions) ? args.extensions.map((value) => requiredNonEmptyString(value, "search_snapshot_text extension")) : (() => { throw new Error("search_snapshot_text extensions must be an array"); })());
+    const result = await this.cachedSourceResponse(snapshot, "search_snapshot_text", args, () => searchSnapshotText(repositories, {
+      query: requiredNonEmptyString(args.query, "search_snapshot_text query"),
+      ...(args.case_sensitive === undefined ? {} : { caseSensitive: optionalBoolean(args.case_sensitive, "search_snapshot_text case_sensitive")! }),
+      ...(args.path_prefix === undefined ? {} : { pathPrefix: requiredNonEmptyString(args.path_prefix, "search_snapshot_text path_prefix") }),
+      ...(args.glob === undefined ? {} : { glob: requiredNonEmptyString(args.glob, "search_snapshot_text glob") }),
+      ...(extensions === undefined ? {} : { extensions }),
+      ...(args.limit === undefined ? {} : { limit: optionalBoundedInteger(args.limit, "search_snapshot_text limit", 1, 100)! }),
+      ...(args.offset === undefined ? {} : { offset: optionalBoundedInteger(args.offset, "search_snapshot_text offset", 0)! })
+    }, this.snapshotToolContext.getStore()?.signal));
+    return this.withSnapshotMeta(space, snapshot, manifest, {
+      ...result,
+      coverage: manifest.quality ?? "unknown",
+      negative_result_safe: result.complete && !result.truncated && !result.has_more
+    });
+  }
+
+  private async cachedSourceResponse<T>(snapshot: SnapshotRow, toolName: string, args: Record<string, unknown>, load: () => Promise<T>): Promise<T> {
+    const key = `${snapshot.id}\n${toolName}\n${stableStringify(args)}`;
+    if (this.sourceResponseCache.has(key)) return this.sourceResponseCache.get(key) as T;
+    const result = await load();
+    if (responseBytes(result) <= CBM_RESPONSE_CACHE_MAX_ITEM_BYTES) {
+      evictOldest(this.sourceResponseCache, CBM_RESPONSE_CACHE_MAX_ENTRIES);
+      this.sourceResponseCache.set(key, result);
+    }
+    return result;
+  }
+
+  private async capabilityAwareTools(
+    snapshot: SnapshotRow | null,
+    manifest: SnapshotManifest | null,
+    knownCapabilities?: CbmV090Capabilities
+  ) {
+    const capabilities = knownCapabilities
+      ?? await this.cbm.capabilities(snapshot?.artifactPath ?? this.config.memorepoHome);
+    const semanticIndex = manifest?.repositories.some((repository) =>
+      repository.cbmIndex?.mode === "moderate" || repository.cbmIndex?.mode === "full"
+    ) ?? false;
+    if (semanticIndex && !capabilities.semanticSearch) {
+      throw new Error(
+        "This snapshot uses moderate/full CBM indexing, but the runtime search_graph schema does not expose semantic_query"
+      );
+    }
+    return this.tools(capabilities, semanticIndex);
   }
 
   private listSnapshotFiles(
@@ -1298,9 +1495,9 @@ export class McpGateway {
       query: `MATCH (source)-[r:USAGE]->(target) WHERE target.qualified_name = '${escapeCypherString(selectedQualifiedName)}' RETURN source.name AS name, source.qualified_name AS qualified_name, source.file_path AS file_path, r.callee AS callee LIMIT 25`,
       max_rows: 25
     }, QUERY_GRAPH_TIMEOUT_MS);
-    const references = graphRows(referencesResponse).map((row) => ({
+    const references = graphRows(referencesResponse).map((row) => annotateTraceEdge({
       name: row[0], qualified_name: row[1], file_path: row[2], callee: row[3], relation: "USAGE"
-    }));
+    }, undefined, "USAGE"));
     const data = isRecord(response) ? response : { result: response };
     const normalizedTrace = isRecord(preparedIdentityProbe)
       && preparedIdentityProbe.self_recursive === false
@@ -1315,10 +1512,17 @@ export class McpGateway {
       snippetSource(preparedIdentityProbe),
       optionalString(input.direction) ?? "both"
     );
-    return this.withCbmResponse(space, snapshot, manifest, {
+    const evidence = partitionTraceEdges([
+      ...(Array.isArray(identityFilteredTrace.value.callers) ? identityFilteredTrace.value.callers : []),
+      ...(Array.isArray(identityFilteredTrace.value.callees) ? identityFilteredTrace.value.callees : []),
+      ...references
+    ]);
+    const traceResult = {
       ...identityFilteredTrace.value,
       resolved_symbol: { project: selected.project, name: selected.row[0], qualified_name: selected.row[1], file_path: selected.row[2] },
       references,
+      verified_edges: evidence.verifiedEdges,
+      inferred_edges: evidence.inferredEdges,
       ...(normalizedTrace.removed > 0 ? {
         filtered_contradictory_self_hops: normalizedTrace.removed,
         analysis_warnings: [
@@ -1336,8 +1540,14 @@ export class McpGateway {
           "Removed trace hops contradicted by the exact qualified symbol and indexed source evidence."
         ]
       } : {}),
-      confidence_notice: "CALLS edges are static-analysis results. USAGE references include callbacks and functions passed as values."
-    });
+      confidence_notice: "Verified edges have exact indexed-source support. Inferred edges are uncontradicted static-analysis results and require source verification."
+    };
+    return this.withCbmResponse(
+      space,
+      snapshot,
+      manifest,
+      compactCbmValue(traceResult, responseDetail(input, this.config.compactCbmResponses)) as Record<string, unknown>
+    );
   }
 
   private async filterTraceAgainstIdentity(
@@ -1361,7 +1571,9 @@ export class McpGateway {
           )
           : undefined
       }));
-      value.callees = decisions.filter(({ compatible }) => compatible !== false).map(({ item }) => item);
+      value.callees = decisions
+        .filter(({ compatible }) => compatible !== false)
+        .map(({ item, compatible }) => annotateTraceEdge(item, compatible));
       removed += decisions.filter(({ compatible }) => compatible === false).length;
       const discoveredRoutes = extractHttpRoutes(source).map(({ method, path: routePath }) => ({
         name: normalizeHttpRoutePath(routePath),
@@ -1369,7 +1581,9 @@ export class McpGateway {
         method,
         path: normalizeHttpRoutePath(routePath),
         relation: "CALLS",
-        evidence: "indexed_source"
+        confidence: "verified",
+        evidence: "indexed_source",
+        source_kind: "exact_source"
       }));
       const existing = new Set((value.callees as unknown[]).flatMap((item) => isRecord(item)
         ? [optionalString(item.qualified_name) ?? optionalString(item.qualifiedName) ?? ""]
@@ -1392,7 +1606,9 @@ export class McpGateway {
           return { item, compatible: undefined };
         }
       });
-      value.callers = decisions.filter(({ compatible }) => compatible !== false).map(({ item }) => item);
+      value.callers = decisions
+        .filter(({ compatible }) => compatible !== false)
+        .map(({ item, compatible }) => annotateTraceEdge(item, compatible));
       removed += decisions.filter(({ compatible }) => compatible === false).length;
     }
     return { value, removed };
@@ -1413,8 +1629,12 @@ export class McpGateway {
     throw lastError instanceof Error ? lastError : new Error(`snippet not found for ${qualifiedName}`);
   }
 
-  private validateToolArgs(toolName: string, args: Record<string, unknown>): void {
-    const definition = this.tools().find((candidate) => candidate.name === toolName);
+  private validateToolArgs(
+    toolName: string,
+    args: Record<string, unknown>,
+    definitions: ReturnType<McpGateway["tools"]>
+  ): void {
+    const definition = definitions.find((candidate) => candidate.name === toolName);
     if (!definition) {
       throw new Error(`Unknown MCP tool: ${toolName}`);
     }
@@ -1430,7 +1650,10 @@ export class McpGateway {
     if (args.project !== undefined) {
       requiredNonEmptyString(args.project, `${toolName} project`);
     }
-    if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
+    if (args.detail !== undefined && !["compact", "full"].includes(requiredNonEmptyString(args.detail, `${toolName} detail`))) {
+      throw new Error(`${toolName} detail must be compact or full`);
+    }
+    if (toolName === "search_graph" || toolName === "search_code") {
       optionalBoundedInteger(args.limit, `${toolName} limit`, 1);
     }
     if (toolName === "list_snapshot_files") {
@@ -1453,17 +1676,21 @@ export class McpGateway {
         optionalString(args.project) ? SEARCH_CODE_SCOPED_MAX_OFFSET : undefined
       );
     }
-    if (toolName === "semantic_query") {
-      validateSearchText(requiredNonEmptyString(args.query, "semantic_query query"), "semantic_query query");
-    }
     if (toolName === "get_code_snippet") {
       requiredNonEmptyString(args.qualified_name, "get_code_snippet qualified_name");
     }
     if (toolName === "search_graph") {
-      for (const field of ["query", "name_pattern", "file_pattern"] as const) {
+      if (args.semantic_query !== undefined) {
+        if (!Array.isArray(args.semantic_query) || args.semantic_query.length === 0
+          || args.semantic_query.length > 20
+          || args.semantic_query.some((query) => typeof query !== "string" || !query.trim())) {
+          throw new Error("search_graph semantic_query must be an array of 1 to 20 non-empty strings");
+        }
+      }
+      for (const field of ["query", "name_pattern", "qn_pattern", "file_pattern", "relationship"] as const) {
         if (args[field] !== undefined) {
           const value = validateSearchText(requiredNonEmptyString(args[field], `search_graph ${field}`), `search_graph ${field}`);
-          if (field === "name_pattern" || field === "file_pattern") {
+          if (field === "name_pattern" || field === "qn_pattern" || field === "file_pattern") {
             validateRegularExpression(value, `search_graph ${field}`);
           }
         }
@@ -1474,9 +1701,58 @@ export class McpGateway {
       if (minDegree !== undefined && maxDegree !== undefined && minDegree > maxDegree) {
         throw new Error("search_graph min_degree cannot be greater than max_degree");
       }
+      for (const field of ["exclude_entry_points", "include_connected"] as const) {
+        if (args[field] !== undefined && typeof args[field] !== "boolean") {
+          throw new Error(`search_graph ${field} must be a boolean`);
+        }
+      }
+    }
+    if (toolName === "read_snapshot_file") {
+      requiredNonEmptyString(args.project, "read_snapshot_file project");
+      requiredNonEmptyString(args.path, "read_snapshot_file path");
+      const startLine = optionalBoundedInteger(args.start_line, "read_snapshot_file start_line", 1);
+      const endLine = optionalBoundedInteger(args.end_line, "read_snapshot_file end_line", 1);
+      if (startLine !== undefined && endLine !== undefined && startLine > endLine) throw new Error("read_snapshot_file start_line cannot exceed end_line");
+      optionalBoundedInteger(args.max_bytes, "read_snapshot_file max_bytes", 1, 128 * 1024);
+    }
+    if (toolName === "search_snapshot_text") {
+      requiredNonEmptyString(args.query, "search_snapshot_text query");
+      optionalBoolean(args.case_sensitive, "search_snapshot_text case_sensitive");
+      optionalBoundedInteger(args.limit, "search_snapshot_text limit", 1, 100);
+      optionalBoundedInteger(args.offset, "search_snapshot_text offset", 0);
+      if (args.extensions !== undefined && (!Array.isArray(args.extensions) || args.extensions.length > 32)) {
+        throw new Error("search_snapshot_text extensions must contain at most 32 entries");
+      }
+    }
+    if (toolName === "search_code") {
+      for (const field of ["file_pattern", "path_filter"] as const) {
+        if (args[field] !== undefined) {
+          const value = validateSearchText(requiredNonEmptyString(args[field], `search_code ${field}`), `search_code ${field}`);
+          if (field === "path_filter") validateRegularExpression(value, "search_code path_filter");
+        }
+      }
+      if (args.mode !== undefined && !["compact", "full", "files"].includes(requiredNonEmptyString(args.mode, "search_code mode"))) {
+        throw new Error("search_code mode must be compact, full, or files");
+      }
+      optionalBoundedInteger(args.context, "search_code context", 0, 100);
     }
     if (toolName === "trace_path") {
       optionalBoundedInteger(args.depth, "trace_path depth", 1, 5);
+      if (args.mode !== undefined && !["calls", "data_flow", "cross_service"].includes(requiredNonEmptyString(args.mode, "trace_path mode"))) {
+        throw new Error("trace_path mode must be calls, data_flow, or cross_service");
+      }
+      if (args.parameter_name !== undefined) requiredNonEmptyString(args.parameter_name, "trace_path parameter_name");
+      if (args.edge_types !== undefined) {
+        if (!Array.isArray(args.edge_types) || args.edge_types.length === 0 || args.edge_types.length > 20
+          || args.edge_types.some((edgeType) => typeof edgeType !== "string" || !edgeType.trim())) {
+          throw new Error("trace_path edge_types must be an array of 1 to 20 non-empty strings");
+        }
+      }
+      for (const field of ["risk_labels", "include_tests"] as const) {
+        if (args[field] !== undefined && typeof args[field] !== "boolean") {
+          throw new Error(`trace_path ${field} must be a boolean`);
+        }
+      }
     }
     if (toolName === "get_architecture" && args.aspects !== undefined) {
       if (!Array.isArray(args.aspects) || args.aspects.length === 0 || args.aspects.some((aspect) => typeof aspect !== "string" || !aspect.trim())) {
@@ -1486,6 +1762,9 @@ export class McpGateway {
       if (unsupported.length > 0) {
         throw new Error(`get_architecture unsupported aspects: ${unsupported.join(", ")}; supported aspects: ${ARCHITECTURE_ASPECTS.join(", ")}`);
       }
+    }
+    if (toolName === "get_architecture" && args.path !== undefined) {
+      normalizeSnapshotRelativeFilter(requiredNonEmptyString(args.path, "get_architecture path"), "get_architecture path");
     }
   }
 
@@ -1518,7 +1797,11 @@ export class McpGateway {
     const stale = space.snapshotStatus === "stale";
     return {
       ...(sanitizeMcpValue(data, manifest, this.config.memorepoHome) as Record<string, unknown>),
-      snapshot: { version: snapshot.version, ...(stale ? { stale: true } : {}) }
+      snapshot: {
+        version: snapshot.version,
+        quality: manifest.quality ?? "unknown",
+        ...(stale ? { stale: true } : {})
+      }
     };
   }
 
@@ -1526,8 +1809,8 @@ export class McpGateway {
     return this.withSnapshotMeta(space, snapshot, manifest, isRecord(response) ? response : { result: response });
   }
 
-  private tools() {
-    return [
+  private tools(capabilities?: CbmV090Capabilities, semanticIndex = false) {
+    const definitions = [
       tool(
         "list_space_repositories",
         "List compact repositories and project names for this MemoRepo space. Branches and detailed metadata are omitted unless explicitly requested.",
@@ -1536,6 +1819,16 @@ export class McpGateway {
           properties: {
             include_branches: { type: "boolean" },
             include_details: { type: "boolean" }
+          }
+        }
+      ),
+      tool(
+        "snapshot_index_coverage",
+        "Report verified source-integrity coverage for the immutable snapshot by project and file extension, including reported skips, exclusions, quality, and whether the inventory is exhaustive. Candidate files are not claimed as proven CBM graph membership.",
+        {
+          type: "object",
+          properties: {
+            project: { type: "string" }
           }
         }
       ),
@@ -1554,6 +1847,31 @@ export class McpGateway {
           }
         }
       ),
+      tool("read_snapshot_file", "Read bounded numbered UTF-8 lines from a regular file in one immutable repository snapshot, with digest and truncation metadata.", {
+        type: "object",
+        required: ["project", "path"],
+        properties: {
+          project: { type: "string" },
+          path: { type: "string" },
+          start_line: { type: "integer", minimum: 1 },
+          end_line: { type: "integer", minimum: 1 },
+          max_bytes: { type: "integer", minimum: 1, maximum: 128 * 1024 }
+        }
+      }),
+      tool("search_snapshot_text", "Search literal text across immutable snapshot files, including files CBM does not index. Paginate to has_more=false and require complete=true before absence conclusions.", {
+        type: "object",
+        required: ["query"],
+        properties: {
+          project: { type: "string" },
+          query: { type: "string" },
+          case_sensitive: { type: "boolean" },
+          path_prefix: { type: "string" },
+          glob: { type: "string" },
+          extensions: { type: "array", maxItems: 32, items: { type: "string" } },
+          limit: { type: "integer", minimum: 1, maximum: 100 },
+          offset: { type: "integer", minimum: 0 }
+        }
+      }),
       tool("list_projects", "List CBM projects available inside this MemoRepo space snapshot.", {}),
       tool("index_status", "Check CBM indexing status for this space snapshot or one project inside it.", {
         type: "object",
@@ -1565,6 +1883,8 @@ export class McpGateway {
         type: "object",
         properties: {
           project: { type: "string" },
+          detail: { type: "string", enum: ["compact", "full"] },
+          path: { type: "string" },
           aspects: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", enum: [...ARCHITECTURE_ASPECTS] } }
         }
       }),
@@ -1578,23 +1898,20 @@ export class McpGateway {
         type: "object",
         properties: {
           project: { type: "string" },
+          detail: { type: "string", enum: ["compact", "full"] },
           query: { type: "string" },
+          semantic_query: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } },
           name_pattern: { type: "string" },
+          qn_pattern: { type: "string" },
           label: { type: "string" },
           file_pattern: { type: "string" },
+          relationship: { type: "string" },
           min_degree: { type: "number", minimum: 0 },
           max_degree: { type: "number", minimum: 0 },
+          exclude_entry_points: { type: "boolean" },
+          include_connected: { type: "boolean" },
           limit: { type: "integer", minimum: 1, maximum: SEARCH_RESULT_MAX_LIMIT },
           offset: { type: "integer", minimum: 0 }
-        }
-      }),
-      tool("semantic_query", "Run native CBM semantic search within this space snapshot.", {
-        type: "object",
-        required: ["query"],
-        properties: {
-          project: { type: "string" },
-          query: { type: "string" },
-          limit: { type: "integer", minimum: 1, maximum: SEARCH_RESULT_MAX_LIMIT }
         }
       }),
       tool("search_code", "Run native CBM indexed code text search within this space snapshot. Use offset and has_more for pagination; requested limits above 25 use an effective limit of 25. Scoped searches expose the engine's first 250 matches; cross-project searches can page across the combined accessible matches.", {
@@ -1602,7 +1919,12 @@ export class McpGateway {
         required: ["pattern"],
         properties: {
           project: { type: "string" },
+          detail: { type: "string", enum: ["compact", "full"] },
           pattern: { type: "string" },
+          file_pattern: { type: "string" },
+          path_filter: { type: "string" },
+          mode: { type: "string", enum: ["compact", "full", "files"] },
+          context: { type: "integer", minimum: 0, maximum: 100 },
           regex: { type: "boolean" },
           limit: { type: "integer", minimum: 1, maximum: SEARCH_RESULT_MAX_LIMIT },
           offset: { type: "integer", minimum: 0 }
@@ -1613,10 +1935,16 @@ export class McpGateway {
         required: ["function_name"],
         properties: {
           project: { type: "string" },
+          detail: { type: "string", enum: ["compact", "full"] },
           function_name: { type: "string" },
           qualified_name: { type: "string" },
           direction: { type: "string", enum: ["inbound", "outbound", "both"] },
-          depth: { type: "integer", minimum: 1, maximum: 5 }
+          depth: { type: "integer", minimum: 1, maximum: 5 },
+          mode: { type: "string", enum: ["calls", "data_flow", "cross_service"] },
+          parameter_name: { type: "string" },
+          edge_types: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } },
+          risk_labels: { type: "boolean" },
+          include_tests: { type: "boolean" }
         }
       }),
       tool("get_code_snippet", "Run native CBM snippet lookup by qualified symbol name.", {
@@ -1645,6 +1973,9 @@ export class McpGateway {
         }
       })
     ];
+    return capabilities
+      ? definitions.map((definition) => restrictNativeCapabilityFields(definition, capabilities, semanticIndex))
+      : definitions;
   }
 
   private buildConfigs(spaceSlug: string, token: string) {
@@ -1695,6 +2026,7 @@ export class McpGateway {
 interface SnapshotToolContext {
   signal?: AbortSignal;
   turnSessionId?: string;
+  cacheHits?: number;
 }
 
 function maskCypherLiteralsAndComments(query: string): string {
@@ -1748,9 +2080,56 @@ function maskCypherLiteralsAndComments(query: string): string {
   return result;
 }
 
-function tool(name: string, description: string, inputSchema: Record<string, unknown>) {
+interface McpToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+function tool(name: string, description: string, inputSchema: Record<string, unknown>): McpToolDefinition {
   const schema = inputSchema.type ? inputSchema : { type: "object", properties: {} };
   return { name, description, inputSchema: { ...schema, additionalProperties: false } };
+}
+
+function restrictNativeCapabilityFields(
+  definition: ReturnType<typeof tool>,
+  capabilities: CbmV090Capabilities,
+  semanticIndex: boolean
+): ReturnType<typeof tool> {
+  const fields = nativeOptionalFields(definition.name, capabilities, semanticIndex);
+  if (!fields) return definition;
+  const properties = isRecord(definition.inputSchema.properties)
+    ? { ...definition.inputSchema.properties }
+    : {};
+  for (const [field, available] of Object.entries(fields)) {
+    if (!available) delete properties[field];
+  }
+  return {
+    ...definition,
+    inputSchema: { ...definition.inputSchema, properties }
+  };
+}
+
+function nativeOptionalFields(
+  toolName: string,
+  capabilities: CbmV090Capabilities,
+  semanticIndex: boolean
+): Record<string, boolean> | null {
+  switch (toolName) {
+    case "get_architecture":
+      return capabilities.nativeFields.get_architecture;
+    case "search_graph":
+      return {
+        ...capabilities.nativeFields.search_graph,
+        semantic_query: capabilities.nativeFields.search_graph.semantic_query && semanticIndex
+      };
+    case "search_code":
+      return capabilities.nativeFields.search_code;
+    case "trace_path":
+      return capabilities.nativeFields.trace_path;
+    default:
+      return null;
+  }
 }
 
 function assertNoForbiddenCbmInput(value: unknown, toolName: string): void {
@@ -1792,6 +2171,33 @@ function maskCypherPropertyNames(query: string): string {
 function hasRepeatedRelationshipNodeVariable(query: string): boolean {
   const pattern = /\(\s*([A-Za-z_]\w*)\b[^)]*\)\s*-\s*\[[^\]]*\]\s*->\s*\(\s*([A-Za-z_]\w*)\b[^)]*\)/g;
   return [...query.matchAll(pattern)].some((match) => match[1] === match[2]);
+}
+
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
+function requiredSnapshotRepository(manifest: SnapshotManifest, requestedProject: string, toolName: string): SnapshotManifestRepository {
+  const repository = manifest.repositories.find(
+    (candidate) => candidate.projectName === requestedProject || candidate.fullName === requestedProject
+  );
+  if (!repository) throw new Error(`${toolName} project is outside this space snapshot`);
+  return repository;
+}
+
+function relationshipNodesWithoutLabels(query: string): string[] {
+  const pattern = /\(([^()]*)\)\s*(?:<-|-)\s*\[[^\]]*\]\s*(?:->|-)\s*\(([^()]*)\)/g;
+  const missing = new Set<string>();
+  for (const match of query.matchAll(pattern)) {
+    for (const [index, body] of [match[1] ?? "", match[2] ?? ""].entries()) {
+      if (/\:\s*[A-Za-z_]\w*/.test(body)) continue;
+      const variable = /^\s*([A-Za-z_]\w*)/.exec(body)?.[1];
+      missing.add(variable ?? `anonymous_${index + 1}`);
+    }
+  }
+  return [...missing];
 }
 
 function hasUnlabeledNodePropertyMap(query: string): boolean {
@@ -2193,16 +2599,17 @@ function inferHttpMethods(source: string | undefined, dottedParameter: string): 
   return [...source.matchAll(/\.\s*(get|post|put|patch|delete)\s*\(/gi)].map((match) => match[1]!.toUpperCase());
 }
 
-function extractHttpRoutes(source: string | undefined): Array<{ method: string; path: string }> {
+function extractHttpRoutes(source: string | undefined): Array<{ method: string; path: string; receiver: string; line: number }> {
   if (!source) {
     return [];
   }
-  const routes: Array<{ method: string; path: string }> = [];
-  const pattern = /\.\s*(get|post|put|patch|delete)(?:\s*<[^>]+>)?\s*\(\s*([^,\r\n]+)/gi;
+  const routes: Array<{ method: string; path: string; receiver: string; line: number }> = [];
+  const pattern = /([A-Za-z_$][\w$]*)\s*\.\s*(get|post|put|patch|delete)(?:\s*<[^>]+>)?\s*\(\s*([^,\r\n]+)/gi;
   for (const match of source.matchAll(pattern)) {
-    const routePath = parseHttpRouteArgument(match[2] ?? "");
+    const routePath = parseHttpRouteArgument(match[3] ?? "");
     if (routePath.startsWith("/")) {
-      routes.push({ method: match[1]!.toUpperCase(), path: routePath });
+      const line = source.slice(0, match.index).split(/\r?\n/).length;
+      routes.push({ method: match[2]!.toUpperCase(), path: routePath, receiver: match[1]!, line });
     }
   }
   return routes;
@@ -2731,6 +3138,16 @@ function limitMcpResponse(value: unknown): unknown {
 
 function responseBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function responseDetail(input: Record<string, unknown>, compactByDefault: boolean | undefined): CbmResponseDetail {
+  if (input.detail === "compact" || input.detail === "full") return input.detail;
+  return compactByDefault === false ? "full" : "compact";
+}
+
+function responseIsTruncated(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && (value as Record<string, unknown>).truncated === true);
 }
 
 interface ArrayTarget {

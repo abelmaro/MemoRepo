@@ -98,7 +98,7 @@
   min-width: 0;
 }
 
-.snapshot-row small {
+.snapshot-row small.snapshot-error {
   color: var(--color-status-danger);
   overflow-wrap: anywhere;
 }

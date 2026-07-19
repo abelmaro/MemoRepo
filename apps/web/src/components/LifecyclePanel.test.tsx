@@ -68,4 +68,38 @@ describe("LifecyclePanel layout", () => {
 
     queryClient.clear();
   });
+
+  it("shows snapshot quality diagnostics and indexing cost", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/snapshots")) {
+        return Promise.resolve({
+          snapshots: [{
+            id: "snapshot-1", version: 7, status: "active", active: true, quality: "partial",
+            repositoryCount: 2, engineVersions: ["0.9.0"], indexModes: ["fast"], sourceFileCount: 200,
+            skippedCount: 4, excludedDirectoryCount: 3, coveragePercent: 98, skipReasons: [{ reason: "syntax", count: 4 }],
+            indexDurationMs: 2_500, sizeBytes: 2048, createdAt: "2026-07-19T12:00:00.000Z", activatedAt: null,
+            error: null, reason: "4 source files were skipped during indexing"
+          }],
+          totalSizeBytes: 2048,
+          defaultRetention: 3
+        });
+      }
+      if (path === "/api/maintenance/summary") {
+        return Promise.resolve({ defaults: {}, candidates: {}, estimatedBytes: {} });
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LifecyclePanel space={{ id: "space-1", name: "Demo Space" } as Space} operationsDisabled={false} onChanged={() => undefined} onDeleted={() => undefined} />
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText(/CBM 0\.9\.0 · fast mode · 98% source coverage · 2\.5 s/)).toBeTruthy();
+    expect(screen.getByText("200 source files · 4 skipped · 3 excluded directories")).toBeTruthy();
+    expect(screen.getByText("4 source files were skipped during indexing")).toBeTruthy();
+    queryClient.clear();
+  });
 });

@@ -91,15 +91,21 @@ export async function systemRoutes(app: FastifyInstance) {
     }
 
     const codebaseMemory = await app.services.cbm
-      .version()
-      .then((version) => {
+      .capabilities(app.services.config.memorepoHome)
+      .then((capabilities) => {
         checks.push({
           id: "codebase-memory-mcp",
           label: "codebase-memory-mcp",
           status: "pass",
-          message: version
+          message: capabilities.reportedVersion,
+          detail: capabilities.summary
         });
-        return { installed: true, version };
+        return {
+          installed: true,
+          version: capabilities.reportedVersion,
+          adapterVersion: capabilities.adapterVersion,
+          optionalTools: capabilities.optionalTools
+        };
       })
       .catch((error: unknown) => {
         const message = publicError(app, error);

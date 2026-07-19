@@ -3,6 +3,7 @@ import { redactSensitive } from "../domain/sanitize.js";
 
 export interface ProcessResult {
   exitCode: number | null;
+  signal?: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
   stdoutTruncated: boolean;
@@ -158,7 +159,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       reject(error);
     });
 
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimers();
       if (outputBuffer.trim().length > 0) {
         options.onOutput?.(`${outputBufferTruncated ? TRUNCATED_LINE_PREFIX : ""}${outputBuffer}`);
@@ -171,7 +172,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
         reject(abortError(options.signal?.reason));
         return;
       }
-      resolve({ exitCode, stdout, stderr, stdoutTruncated, stderrTruncated });
+      resolve({ exitCode, signal, stdout, stderr, stdoutTruncated, stderrTruncated });
     });
   });
 }

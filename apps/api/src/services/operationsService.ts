@@ -9,6 +9,8 @@ import type { GitService } from "./gitService.js";
 import type { GitHubService } from "./githubService.js";
 import type { JobRunner } from "./jobRunner.js";
 import type { SnapshotService } from "./snapshotService.js";
+import { createSnapshotRebuildFingerprint } from "./snapshotRebuildFingerprint.js";
+import { classifyProcessTermination, directorySizeBytes, readCgroupMemoryMetrics, recordCbmOperationMetric } from "./operationalMetrics.js";
 import type { SpaceService } from "./spaceService.js";
 
 export class OperationsService {
@@ -210,36 +212,44 @@ export class OperationsService {
   }
 
   enqueueAddRepository(spaceId: string, githubRepositoryId: string) {
-    this.spaces.assertSpaceAcceptsWork(spaceId);
-    const spaceRepository = this.spaces.addRepositoryToSpace(spaceId, githubRepositoryId);
-    const cloneJob = this.jobs.enqueue({
-      type: "clone_space_repository",
-      spaceId,
-      spaceRepositoryId: spaceRepository.id,
-      payload: { spaceRepositoryId: spaceRepository.id }
-    });
-    const checkoutJob = this.jobs.enqueue({
-      type: "checkout_space_repository",
-      spaceId,
-      spaceRepositoryId: spaceRepository.id,
-      dependsOnJobId: cloneJob.id,
-      payload: { spaceRepositoryId: spaceRepository.id, useExistingFetch: true }
-    });
-    const indexJob = this.jobs.enqueue({
-      type: "index_space_repository",
-      spaceId,
-      spaceRepositoryId: spaceRepository.id,
-      dependsOnJobId: checkoutJob.id,
-      payload: { spaceRepositoryId: spaceRepository.id }
-    });
-    const snapshotJob = this.jobs.enqueue({
-      type: "rebuild_space_snapshot",
-      spaceId,
-      dependsOnJobId: indexJob.id,
-      payload: { spaceId }
-    });
+    return this.enqueueAddRepositories(spaceId, [githubRepositoryId], true);
+  }
 
-    return { spaceRepository, jobs: [cloneJob, checkoutJob, indexJob, snapshotJob] };
+  enqueueAddRepositories(spaceId: string, githubRepositoryIds: string[], singleCompatibility = false) {
+    this.spaces.assertSpaceAcceptsWork(spaceId);
+    const uniqueIds = [...new Set(githubRepositoryIds)];
+    if (uniqueIds.length === 0 || uniqueIds.length > 50 || uniqueIds.some((id) => !id)) {
+      throw new Error("Repository batch must contain between 1 and 50 unique repository IDs");
+    }
+    const spaceRepositories = uniqueIds.map((repositoryId) => this.spaces.addRepositoryToSpace(spaceId, repositoryId));
+    const repositoryJobs = spaceRepositories.map((spaceRepository) => {
+      const cloneJob = this.jobs.enqueue({
+        type: "clone_space_repository",
+        spaceId,
+        spaceRepositoryId: spaceRepository.id,
+        payload: { spaceRepositoryId: spaceRepository.id }
+      });
+      const checkoutJob = this.jobs.enqueue({
+        type: "checkout_space_repository",
+        spaceId,
+        spaceRepositoryId: spaceRepository.id,
+        dependsOnJobId: cloneJob.id,
+        payload: { spaceRepositoryId: spaceRepository.id, useExistingFetch: true }
+      });
+      if (this.config.snapshotOnlyIndexing) return { spaceRepository, jobs: [cloneJob, checkoutJob], terminal: checkoutJob };
+      const indexJob = this.jobs.enqueue({
+        type: "index_space_repository",
+        spaceId,
+        spaceRepositoryId: spaceRepository.id,
+        dependsOnJobId: checkoutJob.id,
+        payload: { spaceRepositoryId: spaceRepository.id }
+      });
+      return { spaceRepository, jobs: [cloneJob, checkoutJob, indexJob], terminal: indexJob };
+    });
+    const snapshotJob = this.enqueueSnapshotRebuild(spaceId, repositoryJobs.map((entry) => entry.terminal.id));
+    const jobs = [...repositoryJobs.flatMap((entry) => entry.jobs), snapshotJob];
+    if (singleCompatibility) return { spaceRepository: spaceRepositories[0]!, jobs };
+    return { spaceRepositories, jobs, snapshotJob };
   }
 
   enqueueCheckout(spaceRepositoryId: string, branch: string) {
@@ -251,6 +261,10 @@ export class OperationsService {
       spaceRepositoryId,
       payload: { spaceRepositoryId, branch }
     });
+    if (this.config.snapshotOnlyIndexing) {
+      const snapshotJob = this.enqueueSnapshotRebuild(record.space_id, [checkoutJob.id]);
+      return [checkoutJob, snapshotJob];
+    }
     const indexJob = this.jobs.enqueue({
       type: "index_space_repository",
       spaceId: record.space_id,
@@ -258,12 +272,7 @@ export class OperationsService {
       dependsOnJobId: checkoutJob.id,
       payload: { spaceRepositoryId }
     });
-    const snapshotJob = this.jobs.enqueue({
-      type: "rebuild_space_snapshot",
-      spaceId: record.space_id,
-      dependsOnJobId: indexJob.id,
-      payload: { spaceId: record.space_id }
-    });
+    const snapshotJob = this.enqueueSnapshotRebuild(record.space_id, [indexJob.id]);
     return [checkoutJob, indexJob, snapshotJob];
   }
 
@@ -296,14 +305,41 @@ export class OperationsService {
     const remainingRepositories = this.spaces.listSpaceRepositories(record.space_id);
     const snapshotJob =
       removal.revokedSnapshotId && remainingRepositories.length > 0
-        ? this.jobs.enqueue({
-            type: "rebuild_space_snapshot",
-            spaceId: record.space_id,
-            payload: { spaceId: record.space_id }
-          })
+        ? this.enqueueSnapshotRebuild(record.space_id)
         : null;
 
     return { ...removal, job: snapshotJob };
+  }
+
+  private enqueueSnapshotRebuild(spaceId: string, dependencyJobIds: string[] = []) {
+    const repositories = (this.spaces.listSpaceRepositories(spaceId) as Array<Record<string, unknown>>).map((repository) => ({
+      repositoryId: String(repository.id),
+      commit: typeof repository.selected_commit === "string" ? repository.selected_commit : null
+    }));
+    const fingerprint = createSnapshotRebuildFingerprint({ spaceId, mode: "fast", repositories });
+    const activeRepositoryJobs = (this.database.sqlite.prepare(
+      `SELECT id FROM jobs
+       WHERE space_id = ?
+         AND status IN ('pending', 'running')
+         AND type IN ('clone_space_repository', 'checkout_space_repository', 'index_space_repository')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM job_dependencies jd
+           JOIN jobs dependent ON dependent.id = jd.job_id
+           WHERE jd.dependency_job_id = jobs.id
+             AND dependent.space_id = jobs.space_id
+             AND dependent.status IN ('pending', 'running')
+             AND dependent.type IN ('clone_space_repository', 'checkout_space_repository', 'index_space_repository')
+         )
+       ORDER BY created_at ASC, id ASC`
+    ).all(spaceId) as Array<{ id: string }>).map((job) => job.id);
+    return this.jobs.enqueueCoalesced({
+      type: "rebuild_space_snapshot",
+      spaceId,
+      fingerprint,
+      dependsOnJobIds: [...new Set([...activeRepositoryJobs, ...dependencyJobIds])],
+      payload: { spaceId, mode: "fast" }
+    });
   }
 
   private async indexSpaceRepository(spaceRepositoryId: string, log: (message: string) => void, signal?: AbortSignal) {
@@ -314,6 +350,8 @@ export class OperationsService {
 
     updateRecord(this.database, "space_repositories", { indexStatus: "indexing", lastError: null, updatedAt: nowIso() }, "id", spaceRepositoryId);
 
+    const metricStartedAt = Date.now();
+    const memoryBefore = readCgroupMemoryMetrics();
     try {
       const cachePath = path.join(this.config.repoIndexesDir, spaceRepositoryId);
       const indexStartedAt = Date.now();
@@ -345,9 +383,26 @@ export class OperationsService {
         "id",
         spaceRepositoryId
       );
+      const memoryAfter = readCgroupMemoryMetrics();
+      recordCbmOperationMetric(this.database, {
+        operation: "index_repository", status: result.status, durationMs: Date.now() - metricStartedAt,
+        spaceId: record.space_id, spaceRepositoryId, projectName, indexMode: "fast",
+        ...(result.nodes !== undefined ? { nodes: result.nodes } : {}),
+        ...(result.edges !== undefined ? { edges: result.edges } : {}),
+        skippedCount: result.skippedCount,
+        artifactBytes: directorySizeBytes(cachePath), terminationKind: "completed",
+        cgroupPeakBytes: memoryAfter.peakBytes
+      });
       log(`Indexed ${record.full_name}`);
       log(`Repository index completed in ${formatDuration(Date.now() - indexStartedAt)}`);
     } catch (error) {
+      const memory = readCgroupMemoryMetrics();
+      recordCbmOperationMetric(this.database, {
+        operation: "index_repository", status: "error", durationMs: Date.now() - metricStartedAt,
+        spaceId: record.space_id, spaceRepositoryId, indexMode: "fast",
+        terminationKind: classifyProcessTermination({ error, cgroupOomKills: Math.max(0, memory.oomKillEvents - memoryBefore.oomKillEvents) }),
+        cgroupPeakBytes: memory.peakBytes
+      });
       this.failSpaceRepository(spaceRepositoryId, "indexStatus", error);
       throw error;
     }

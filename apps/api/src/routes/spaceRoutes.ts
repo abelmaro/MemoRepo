@@ -78,6 +78,15 @@ export async function spaceRoutes(app: FastifyInstance) {
     return app.services.operations.enqueueAddRepository(spaceId, repositoryId);
   });
 
+  app.post("/api/spaces/:spaceId/repositories/batch", async (request) => {
+    if (app.services.config.batchRepositoryOperations === false) {
+      throw Object.assign(new Error("Batch repository operations are disabled"), { statusCode: 404 });
+    }
+    const { spaceId } = paramsWithSpaceId.parse(request.params);
+    const body = z.object({ repositoryIds: z.array(z.string().min(1)).min(1).max(50) }).parse(request.body);
+    return app.services.operations.enqueueAddRepositories(spaceId, body.repositoryIds);
+  });
+
   app.post("/api/spaces/:spaceId/reindex", async (request) => {
     const { spaceId } = paramsWithSpaceId.parse(request.params);
     return { job: app.services.operations.enqueueReindexSpace(spaceId) };

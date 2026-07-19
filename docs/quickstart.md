@@ -153,11 +153,16 @@ For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 When using the MCP server from an agent:
 
 - start with `list_space_repositories` or `list_projects`;
+- inspect `snapshot_index_coverage` before making an exhaustive or negative claim;
 - use `list_snapshot_files` with an explicit project for file inventories or path and extension existence questions;
+- use `search_snapshot_text` for exact literals and files that CBM may not index, following every page until `has_more=false`;
+- use `read_snapshot_file` to verify the final source evidence;
 - use `get_graph_schema` before custom Cypher;
-- search with `search_graph`, `semantic_query`, or `search_code`;
+- search with `search_graph` or `search_code`;
 - use `trace_path` and `get_code_snippet` after graph or semantic search;
 - use `query_graph` only for bounded read-only Cypher; `max_rows` is optional and capped at 25.
+
+Do not interpret an empty CBM result as proof of absence when coverage is partial or unknown. A negative answer is exhaustive only when source integrity is valid, coverage reports `exhaustive=true`, the source search is complete and untruncated, and every result page was consumed.
 
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
@@ -190,7 +195,13 @@ MEMOREPO_JOB_RETENTION_DAYS=30
 MEMOREPO_JOB_CONCURRENCY=2
 MEMOREPO_CBM_INDEX_CONCURRENCY=1
 MEMOREPO_CBM_INTERACTIVE_CONCURRENCY=2
+MEMOREPO_ENFORCE_SNAPSHOT_QUALITY=true
+MEMOREPO_COMPACT_CBM_RESPONSES=true
+MEMOREPO_BATCH_REPOSITORY_OPERATIONS=true
+MEMOREPO_SNAPSHOT_ONLY_INDEXING=true
 ```
+
+Keep quality enforcement and snapshot-only indexing enabled for normal Docker Compose use. To diagnose or immediately roll back the indexing flow without removing stored artifacts, set `MEMOREPO_SNAPSHOT_ONLY_INDEXING=false` and restart the API. The snapshot list reports CBM engine versions, index modes, source coverage, skipped files, indexing duration, artifact size, and any degraded-quality reason so rollout regressions are visible without reading server logs.
 
 ## 13. Manage Jobs
 

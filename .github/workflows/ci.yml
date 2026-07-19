@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, "release/**", "feature/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  cbm-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target cbm-test -t memorepo-cbm-test -f apps/api/Dockerfile .
+      - run: docker run --rm -e MEMOREPO_RUN_CBM_CONTRACT=1 memorepo-cbm-test pnpm --filter @memorepo/api test:cbm-contract
+      - run: docker run --rm memorepo-cbm-test pnpm --filter @memorepo/api exec node --import tsx --test test/snapshotSourceTools.test.ts test/cbmBenchmarkCorpus.test.ts

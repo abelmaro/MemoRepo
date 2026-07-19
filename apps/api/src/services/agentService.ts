@@ -23,7 +23,7 @@ import { createId } from "../domain/ids.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { nowIso } from "../domain/time.js";
 import type { SnapshotQueryService } from "./snapshotQueryService.js";
-import type { SnapshotManifest, SnapshotService } from "./snapshotService.js";
+import { normalizeSnapshotQuality, type SnapshotManifest, type SnapshotService } from "./snapshotService.js";
 import type { DashboardEventBus } from "./dashboardEventBus.js";
 
 const MAX_HISTORY_MESSAGES = 100;
@@ -1857,11 +1857,13 @@ function publicSnapshotMeta(manifest: SnapshotManifest, createdAt: string | null
   return {
     createdAt: createdAt ?? manifest.createdAt,
     activatedAt,
+    quality: normalizeSnapshotQuality(manifest.quality),
     repositories: manifest.repositories.map((repository) => ({
       fullName: repository.fullName,
       branch: repository.branch,
       commit: repository.commit,
-      projectName: repository.projectName
+      projectName: repository.projectName,
+      quality: normalizeSnapshotQuality(repository.cbmIndex?.snapshotQuality)
     }))
   };
 }

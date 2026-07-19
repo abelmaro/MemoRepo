@@ -8,6 +8,16 @@ import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.js";
 import { migrate } from "../src/db/migrate.js";
 import { createServices as createAppServices } from "../src/services/appServices.js";
+import type {
+  CbmCrossRepoLinksResult,
+  CbmIndexRepositoryResult,
+  CbmIndexStatusResult,
+  CbmService,
+  McpToolDescriptor
+} from "../src/services/cbmService.js";
+import { assertCbmV090Compatible } from "../src/services/cbmV090Capabilities.js";
+import type { SnapshotManifest } from "../src/services/snapshotService.js";
+import { snapshotSourceIntegrityManifestPath } from "../src/services/snapshotSourceIntegrity.js";
 import { insertRecord, updateRecord } from "../src/db/sql.js";
 import { spaces } from "../src/db/schema.js";
 import { nowIso } from "../src/domain/time.js";
@@ -242,8 +252,7 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
   process.env.API_PORT = "8787";
 
   const services = createServices();
-  const nativeTools = ["query_graph", "search_graph", "semantic_query", "get_code_snippet"];
-  (services.cbm as unknown as { listTools: typeof services.cbm.listTools }).listTools = async () => nativeTools;
+  stubCbmCapabilities(services.cbm);
   const app = await createApp(services);
 
   try {
@@ -323,10 +332,7 @@ test("MCP HTTP endpoint initializes, lists tools, rejects revoked tokens, and de
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "search_graph"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "get_code_snippet"));
     assert.ok(toolsPayload.result?.tools.some((tool) => tool.name === "list_space_repositories"));
-    assert.equal(
-      toolsPayload.result?.tools.some((tool) => tool.name === "semantic_query"),
-      nativeTools.includes("semantic_query")
-    );
+    assert.equal(toolsPayload.result?.tools.some((tool) => tool.name === "semantic_query"), false);
     for (const legacyTool of ["get_space_architecture", "search_symbols", "trace_symbol", "get_snippet"]) {
       assert.equal(toolsPayload.result?.tools.some((tool) => tool.name === legacyTool), false);
     }
@@ -633,7 +639,7 @@ test("preflight reports local runtime checks without leaking secrets", async () 
   process.env.MEMOREPO_API_CONTAINER_NAME = "memorepo-api";
 
   const services = createServices();
-  (services.cbm as unknown as { version: () => Promise<string> }).version = async () => "codebase-memory-mcp test";
+  stubCbmCapabilities(services.cbm);
   const app = await createApp(services);
 
   try {
@@ -695,7 +701,7 @@ test("OAuth-first startup reports an actionable disconnected state without conta
   }) as typeof fetch;
 
   const services = createAppServices();
-  (services.cbm as unknown as { version: () => Promise<string> }).version = async () => "codebase-memory-mcp test";
+  stubCbmCapabilities(services.cbm);
   const app = await createApp(services);
 
   try {
@@ -867,6 +873,9 @@ test("job controls cancel pending jobs, retry terminal jobs, and reject orphaned
       startedAt: null,
       finishedAt: null
     });
+    services.database.sqlite
+      .prepare("INSERT INTO job_dependencies (job_id, dependency_job_id, created_at) VALUES (?, ?, ?)")
+      .run(childId, parentId, createdAt);
 
     const cancelResponse = await injectControlApi(app, { method: "POST", url: `/api/jobs/${parentId}/cancel`, payload: {} });
     assert.equal(cancelResponse.statusCode, 200);
@@ -1146,6 +1155,252 @@ test("failed first snapshot does not activate a partial snapshot", async () => {
   }
 });
 
+test("active snapshot manifests record the CBM engine version and clean repository quality", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-index-quality-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Quality Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4101,
+      owner: "example",
+      name: "quality"
+    });
+    stubCbmSnapshots(services, undefined, (repoPath) => ({
+      project: path.basename(repoPath),
+      status: "indexed",
+      reportedStatus: "indexed",
+      quality: "clean",
+      skippedCount: 0,
+      nodes: 11,
+      edges: 17,
+      expectedNodes: 11,
+      expectedEdges: 17,
+      excluded: { dirs: ["vendor"], count: 1, truncated: false }
+    }));
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const snapshot = services.snapshots.getActiveSnapshot(space.id) as { manifest_json: string };
+    const manifest = JSON.parse(snapshot.manifest_json) as SnapshotManifest;
+
+    assert.equal(manifest.schemaVersion, 2);
+    assert.equal(manifest.quality, "complete");
+    assert.deepEqual(manifest.repositories[0]?.cbmIndex, {
+      engineVersion: "codebase-memory-mcp test",
+      mode: "fast",
+      status: "indexed",
+      reportedStatus: "indexed",
+      quality: "clean",
+      skippedCount: 0,
+      excluded: { dirs: ["vendor"], count: 1, truncated: false },
+      nodes: 11,
+      edges: 17,
+      expectedNodes: 11,
+      expectedEdges: 17,
+      snapshotQuality: "complete",
+      statusChecks: {
+        afterPrimary: readyIndexStatus("example__quality", 11, 17)
+      }
+    });
+    assert.equal(services.snapshots.listSpaceSnapshots(space.id).snapshots[0]?.quality, "complete");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("a degraded CBM index cannot activate a snapshot", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-index-degraded-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Degraded Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4102,
+      owner: "example",
+      name: "degraded"
+    });
+    stubCbmSnapshots(services, undefined, (repoPath) => ({
+      project: path.basename(repoPath),
+      status: "degraded",
+      reportedStatus: "degraded",
+      quality: "degraded",
+      skippedCount: 0,
+      nodes: 2,
+      edges: 1,
+      expectedNodes: 20,
+      expectedEdges: 10
+    }));
+
+    await assert.rejects(
+      services.snapshots.buildSpaceSnapshot(space.id),
+      /reported degraded quality/
+    );
+    assert.equal(services.snapshots.getActiveSnapshot(space.id), null);
+    assert.equal(services.spaces.getSpaceById(space.id).snapshotStatus, "failed");
+    assert.deepEqual(
+      services.snapshots.listSpaceSnapshots(space.id).snapshots.map((snapshot) => snapshot.status),
+      ["failed"]
+    );
+    assert.equal(services.snapshots.listSpaceSnapshots(space.id).snapshots[0]?.quality, "degraded");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("CBM skipped-file errors cannot replace the active snapshot", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-index-skipped-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+
+  try {
+    const space = services.spaces.createSpace("Snapshot Skipped File Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4103,
+      owner: "example",
+      name: "skipped-file"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const activeBefore = services.snapshots.getActiveSnapshot(space.id) as { id: string };
+
+    stubCbmSnapshots(services, undefined, (repoPath) => ({
+      project: path.basename(repoPath),
+      status: "indexed",
+      reportedStatus: "indexed",
+      quality: "partial",
+      skippedCount: 1,
+      skipped: {
+        files: [{ path: "src/broken.ts", reason: "parse failed", phase: "parse" }],
+        count: 1,
+        truncated: false
+      },
+      nodes: 5,
+      edges: 4
+    }));
+
+    await assert.rejects(
+      services.snapshots.buildSpaceSnapshot(space.id),
+      /skipped 1 file due to indexing errors/
+    );
+    const activeAfter = services.snapshots.getActiveSnapshot(space.id) as { id: string };
+    assert.equal(activeAfter.id, activeBefore.id);
+    assert.equal(services.spaces.getSpaceById(space.id).snapshotStatus, "stale");
+    assert.deepEqual(
+      services.snapshots.listSpaceSnapshots(space.id).snapshots.map((snapshot) => snapshot.status),
+      ["failed", "active"]
+    );
+    assert.deepEqual(
+      services.snapshots.listSpaceSnapshots(space.id).snapshots.map((snapshot) => snapshot.quality),
+      ["partial", "complete"]
+    );
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("a degraded post-index index_status prevents snapshot activation", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-index-status-degraded-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  try {
+    const space = services.spaces.createSpace("Snapshot Status Degraded Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4104,
+      owner: "example",
+      name: "status-degraded"
+    });
+    stubCbmSnapshots(services, undefined, (repoPath) => ({
+      project: path.basename(repoPath),
+      status: "indexed",
+      reportedStatus: "indexed",
+      quality: "clean",
+      skippedCount: 0,
+      nodes: 8,
+      edges: 4,
+      indexStatus: {
+        project: path.basename(repoPath),
+        status: "degraded",
+        reportedStatus: "degraded",
+        quality: "degraded",
+        nodes: 8,
+        edges: 4
+      }
+    }));
+
+    await assert.rejects(services.snapshots.buildSpaceSnapshot(space.id), /reported degraded quality/);
+    assert.equal(services.snapshots.getActiveSnapshot(space.id), null);
+    assert.equal(services.snapshots.listSpaceSnapshots(space.id).snapshots[0]?.quality, "degraded");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("a degraded post-link index_status prevents a multi-repository snapshot from activating", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-link-status-degraded-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  try {
+    const space = services.spaces.createSpace("Snapshot Link Status Degraded Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4105,
+      owner: "example",
+      name: "link-a"
+    });
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4106,
+      owner: "example",
+      name: "link-b"
+    });
+    stubCbmSnapshots(services, undefined, undefined, (repoPath) => ({
+      project: path.basename(repoPath),
+      status: "linked",
+      indexStatus: {
+        project: path.basename(repoPath),
+        status: "error",
+        reportedStatus: "error",
+        quality: "degraded",
+        nodes: 1,
+        edges: 0
+      }
+    }));
+
+    await assert.rejects(services.snapshots.buildSpaceSnapshot(space.id), /reported degraded quality/);
+    assert.equal(services.snapshots.getActiveSnapshot(space.id), null);
+    const failed = services.snapshots.listSpaceSnapshots(space.id).snapshots[0];
+    assert.equal(failed?.quality, "degraded");
+    const row = services.database.sqlite
+      .prepare("SELECT manifest_json AS manifestJson FROM space_snapshots WHERE id = ?")
+      .get(failed?.id) as { manifestJson: string };
+    const manifest = JSON.parse(row.manifestJson) as SnapshotManifest;
+    assert.equal(manifest.quality, "degraded");
+    assert.equal(manifest.repositories[0]?.cbmIndex?.statusChecks?.afterLinking?.status, "error");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
 test("GitHub repository resolution hides upstream HTML outages behind a stable error code", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
   const testRoot = fs.mkdtempSync(path.join(testsRoot, "github-upstream-error-"));
@@ -1301,6 +1556,99 @@ test("replacement snapshots reuse an immutable source for the same repository co
     const snapshots = services.snapshots.listSpaceSnapshots(space.id).snapshots;
     assert.equal(snapshots.length, 2);
     assert.equal(snapshots[0]?.status, "active");
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("replacement snapshots rebuild a cached source changed with the same size and mtime", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-source-integrity-rebuild-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  try {
+    const space = services.spaces.createSpace("Snapshot Source Integrity Rebuild Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4503,
+      owner: "example",
+      name: "integrity-rebuild"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const firstRow = services.snapshots.getActiveSnapshot(space.id) as { manifest_json: string };
+    const firstManifest = JSON.parse(firstRow.manifest_json) as SnapshotManifest;
+    const firstRepository = firstManifest.repositories[0]!;
+    const sourceFile = path.join(firstRepository.localPath, "README.md");
+    const original = fs.readFileSync(sourceFile);
+    const originalStat = fs.statSync(sourceFile);
+    const changed = Buffer.from(original);
+    changed[0] = changed[0] === 0x23 ? 0x24 : (changed[0]! ^ 1);
+    fs.writeFileSync(sourceFile, changed);
+    fs.utimesSync(sourceFile, originalStat.atime, originalStat.mtime);
+    assert.equal(fs.statSync(sourceFile).size, originalStat.size);
+    assert.equal(fs.existsSync(snapshotSourceIntegrityManifestPath(firstRepository.localPath)), true);
+
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    assert.deepEqual(fs.readFileSync(sourceFile), original);
+    const secondRow = services.snapshots.getActiveSnapshot(space.id) as { manifest_json: string };
+    const secondManifest = JSON.parse(secondRow.manifest_json) as SnapshotManifest;
+    assert.deepEqual(secondManifest.repositories[0]?.sourceIntegrity, firstRepository.sourceIntegrity);
+    assert.equal(secondManifest.repositories[0]?.sourceIntegrity?.fileCount, 1);
+  } finally {
+    services.database.sqlite.close();
+    cleanupTestRoot(testRoot);
+  }
+});
+
+test("cancelled integrity rebuild preserves the previous source and cleans staging directories", async () => {
+  fs.mkdirSync(testsRoot, { recursive: true });
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-source-integrity-cancel-"));
+  process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
+  process.env.API_PORT = "8787";
+
+  const services = createServices();
+  try {
+    const space = services.spaces.createSpace("Snapshot Source Integrity Cancel Space");
+    createSnapshotReadySpaceRepository(services, space.id, {
+      githubId: 4504,
+      owner: "example",
+      name: "integrity-cancel"
+    });
+    stubCbmSnapshots(services);
+    await services.snapshots.buildSpaceSnapshot(space.id);
+    const activeBefore = services.snapshots.getActiveSnapshot(space.id) as { id: string; manifest_json: string };
+    const manifest = JSON.parse(activeBefore.manifest_json) as SnapshotManifest;
+    const sourcePath = manifest.repositories[0]!.localPath;
+    const sourceFile = path.join(sourcePath, "README.md");
+    const changed = Buffer.from(fs.readFileSync(sourceFile));
+    changed[0] = changed[0] === 0x23 ? 0x24 : (changed[0]! ^ 1);
+    fs.writeFileSync(sourceFile, changed);
+    const controller = new AbortController();
+    Object.defineProperty(services.snapshots, "materializeRepository", {
+      value: async (_home: string, _repositoryPath: string, _commit: string, targetPath: string) => {
+        fs.mkdirSync(targetPath, { recursive: true });
+        fs.writeFileSync(path.join(targetPath, "partial.txt"), "partial\n", "utf8");
+        controller.abort(new Error("cancelled integrity rebuild"));
+        const error = new Error("cancelled integrity rebuild");
+        error.name = "AbortError";
+        throw error;
+      }
+    });
+
+    await assert.rejects(
+      services.snapshots.buildSpaceSnapshot(space.id, undefined, controller.signal),
+      /cancelled integrity rebuild/
+    );
+    assert.deepEqual(fs.readFileSync(sourceFile), changed);
+    assert.equal((services.snapshots.getActiveSnapshot(space.id) as { id: string }).id, activeBefore.id);
+    const commitRoot = path.dirname(sourcePath);
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(commitRoot)).filter((entry) => entry.startsWith(".tmp-") || entry.startsWith(".stale-")),
+      []
+    );
   } finally {
     services.database.sqlite.close();
     cleanupTestRoot(testRoot);
@@ -2546,12 +2894,12 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
       assert.ok(routesArchitecture.routes.some((route) =>
         route.path === "/articles/:slug" && route.method === "PUT"
       ));
-      assert.ok(routesArchitecture.routes.some((route) =>
+      assert.equal(routesArchitecture.routes.some((route) =>
         route.path === "/articles/:slug/comments/:commentId" && route.method === "DELETE"
-      ));
-      assert.ok(routesArchitecture.routes.some((route) =>
+      ), false);
+      assert.equal(routesArchitecture.routes.some((route) =>
         route.path === "/profiles/:username/follow" && route.method === "POST"
-      ));
+      ), false);
 
       const expressArchitecture = await services.mcp.callTool(space.slug, connection.token, "get_architecture", {
         project: betaProject,
@@ -2690,7 +3038,7 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 
       const exactGetCalls = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
         project: alphaProject,
-        query: "MATCH (caller)-[:CALLS]->(target) WHERE target.qualified_name = 'src.ArticlesService.get' RETURN caller.name AS caller, caller.qualified_name AS caller_qn"
+        query: "MATCH (caller:Function)-[:CALLS]->(target:Method) WHERE target.qualified_name = 'src.ArticlesService.get' RETURN caller.name AS caller, caller.qualified_name AS caller_qn"
       }) as { rows: string[][]; filtered_receiver_incompatible_calls?: number };
       assert.deepEqual(exactGetCalls.rows, [["load", "src.ArticleComponent.load"]]);
       assert.equal(exactGetCalls.filtered_receiver_incompatible_calls, 1);
@@ -2735,7 +3083,9 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
         method: "POST",
         path: "/profiles/:username/follow",
         relation: "CALLS",
-        evidence: "indexed_source"
+        evidence: "indexed_source",
+        confidence: "verified",
+        source_kind: "exact_source"
       }]);
       assert.equal(followTrace.filtered_contradictory_self_hops, 2);
 
@@ -2754,14 +3104,14 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 
       const filteredCalls = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
         project: alphaProject,
-        query: "MATCH (caller)-[:CALLS]->(target) WHERE target.qualified_name = 'src.ArticlesService.update' RETURN caller.name AS caller, caller.qualified_name AS caller_qn"
+        query: "MATCH (caller:Function)-[:CALLS]->(target:Method) WHERE target.qualified_name = 'src.ArticlesService.update' RETURN caller.name AS caller, caller.qualified_name AS caller_qn"
       }) as { rows: string[][]; filtered_receiver_incompatible_calls?: number };
       assert.deepEqual(filteredCalls.rows, [["submitForm", "src.editor.submitForm"]]);
       assert.equal(filteredCalls.filtered_receiver_incompatible_calls, 1);
 
       const filteredOutboundCalls = await services.mcp.callTool(space.slug, connection.token, "query_graph", {
         project: alphaProject,
-        query: "MATCH (source:Method {qualified_name: 'src.ArticlesService.update'})-[:CALLS]->(target) RETURN target.name AS target, target.qualified_name AS qualified_name"
+        query: "MATCH (source:Method {qualified_name: 'src.ArticlesService.update'})-[:CALLS]->(target:Method) RETURN target.name AS target, target.qualified_name AS qualified_name"
       }) as { rows: string[][]; filtered_receiver_incompatible_calls?: number };
       assert.deepEqual(filteredOutboundCalls.rows, [["/articles/:slug", "__route__PUT__/articles/:slug"]]);
       assert.equal(filteredOutboundCalls.filtered_receiver_incompatible_calls, 2);
@@ -2818,9 +3168,9 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
       assert.ok(routeSearch.results.some((route) =>
         route.path === "/articles/:slug" && route.method === "PUT"
       ));
-      assert.ok(routeSearch.results.some((route) =>
+      assert.equal(routeSearch.results.some((route) =>
         route.path === "/articles/:slug/comments/:commentId" && route.method === "DELETE"
-      ));
+      ), false);
       assert.ok(routeSearch.results.some((route) => route.navigable === false && typeof route.navigation_notice === "string"));
       assert.equal(routeSearch.results.some((route) => route.path === "/articles/:slug/comments" && route.method === undefined), false);
 
@@ -2830,7 +3180,7 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
         max_rows: 25
       }) as { rows: string[][] };
       assert.ok(routeGraph.rows.some((row) => row[0] === "/articles/:slug" && row[2] === "PUT"));
-      assert.ok(routeGraph.rows.some((row) => row[0] === "/articles/:slug/comments/:commentId" && row[2] === "DELETE"));
+      assert.equal(routeGraph.rows.some((row) => row[0] === "/articles/:slug/comments/:commentId" && row[2] === "DELETE"), false);
 
       toolCalls.length = 0;
       const invalidLabel = await services.mcp.callTool(space.slug, connection.token, "search_graph", {
@@ -3090,7 +3440,7 @@ test("MCP graph tools route multi-repo spaces through the CBM snapshot store", a
 
       await assert.rejects(
         () => services.mcp.callTool(space.slug, connection.token, "detect_changes", { repo_path: testRoot }),
-        /received unsupported arguments|cannot receive filesystem path arguments/
+        /received unsupported arguments|cannot receive filesystem path arguments|not available for immutable snapshot queries/
       );
 
       for (const legacyTool of ["get_space_architecture", "search_symbols", "trace_symbol", "get_snippet"]) {
@@ -3743,30 +4093,98 @@ function createSnapshotReadySpaceRepository(
   return services.spaces.getSpaceRepository(spaceRepository.id);
 }
 
-function stubCbmSnapshots(services: ReturnType<typeof createServices>, failingRepositoryPath?: string): void {
+function stubCbmSnapshots(
+  services: ReturnType<typeof createServices>,
+  failingRepositoryPath?: string,
+  resultForRepository?: (repoPath: string) => CbmIndexRepositoryResult,
+  resultForCrossRepoLinks?: (repoPath: string) => CbmCrossRepoLinksResult
+): void {
+  stubCbmCapabilities(services.cbm);
   const cbm = services.cbm as unknown as {
+    version: () => Promise<string>;
     indexRepository: (
       repoPath: string,
       cacheDir: string,
       mode?: "fast" | "moderate" | "full",
       onOutput?: (line: string) => void
-    ) => Promise<{ project?: string; status?: string; nodes?: number; edges?: number }>;
+    ) => Promise<CbmIndexRepositoryResult>;
     buildCrossRepoLinks: (
       repoPath: string,
       cacheDir: string,
       onOutput?: (line: string) => void
-    ) => Promise<{ status: string }>;
+    ) => Promise<CbmCrossRepoLinksResult>;
   };
 
+  cbm.version = async () => "codebase-memory-mcp test";
   cbm.indexRepository = async (repoPath, cacheDir) => {
     if (failingRepositoryPath && path.basename(repoPath) === path.basename(failingRepositoryPath)) {
       throw new Error(`index failed for ${repoPath}`);
     }
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, `${path.basename(repoPath)}.index`), "indexed\n", "utf8");
-    return { project: path.basename(repoPath), status: "indexed", nodes: 1, edges: 0 };
+    const result = resultForRepository?.(repoPath) ?? {
+      project: path.basename(repoPath),
+      status: "indexed",
+      reportedStatus: "indexed",
+      quality: "clean",
+      skippedCount: 0,
+      nodes: 1,
+      edges: 0
+    };
+    return {
+      ...result,
+      indexStatus: result.indexStatus ?? readyIndexStatus(
+        result.project ?? path.basename(repoPath),
+        result.nodes ?? 0,
+        result.edges ?? 0
+      )
+    };
   };
-  cbm.buildCrossRepoLinks = async () => ({ status: "linked" });
+  cbm.buildCrossRepoLinks = async (repoPath) => resultForCrossRepoLinks?.(repoPath) ?? {
+    project: path.basename(repoPath),
+    status: "linked",
+    indexStatus: readyIndexStatus(path.basename(repoPath), 1, 0)
+  };
+}
+
+function readyIndexStatus(project: string, nodes: number, edges: number): CbmIndexStatusResult {
+  return {
+    project,
+    status: "ready",
+    reportedStatus: "ready",
+    quality: "complete",
+    nodes,
+    edges,
+    git: { rootExists: true }
+  };
+}
+
+function stubCbmCapabilities(cbm: CbmService): void {
+  const descriptors: McpToolDescriptor[] = [
+    "list_projects",
+    "index_status",
+    "get_architecture",
+    "get_graph_schema",
+    "search_graph",
+    "search_code",
+    "trace_path",
+    "get_code_snippet",
+    "query_graph",
+    "detect_changes",
+    "index_repository"
+  ].map((name) => ({
+    name,
+    inputSchema: {
+      type: "object",
+      properties: name === "search_graph" ? { semantic_query: {} } : {}
+    }
+  }));
+  const runtime = cbm as unknown as {
+    version: () => Promise<string>;
+    capabilities: () => Promise<ReturnType<typeof assertCbmV090Compatible>>;
+  };
+  runtime.version = async () => "codebase-memory-mcp 0.9.0";
+  runtime.capabilities = async () => assertCbmV090Compatible("codebase-memory-mcp 0.9.0", descriptors);
 }
 
 function escapeRegExp(value: string): string {

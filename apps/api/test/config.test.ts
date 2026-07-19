@@ -24,7 +24,11 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     agentMaxActiveTurns: process.env.MEMOREPO_AGENT_MAX_ACTIVE_TURNS,
     agentMaxQueuedTurns: process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS,
     cbmIndexConcurrency: process.env.MEMOREPO_CBM_INDEX_CONCURRENCY,
-    cbmInteractiveConcurrency: process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY
+    cbmInteractiveConcurrency: process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY,
+    enforceSnapshotQuality: process.env.MEMOREPO_ENFORCE_SNAPSHOT_QUALITY,
+    compactCbmResponses: process.env.MEMOREPO_COMPACT_CBM_RESPONSES,
+    batchRepositoryOperations: process.env.MEMOREPO_BATCH_REPOSITORY_OPERATIONS,
+    snapshotOnlyIndexing: process.env.MEMOREPO_SNAPSHOT_ONLY_INDEXING
   };
 
   try {
@@ -42,6 +46,10 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     delete process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS;
     delete process.env.MEMOREPO_CBM_INDEX_CONCURRENCY;
     delete process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY;
+    delete process.env.MEMOREPO_ENFORCE_SNAPSHOT_QUALITY;
+    delete process.env.MEMOREPO_COMPACT_CBM_RESPONSES;
+    delete process.env.MEMOREPO_BATCH_REPOSITORY_OPERATIONS;
+    delete process.env.MEMOREPO_SNAPSHOT_ONLY_INDEXING;
 
     const unconfiguredAgent = loadConfig();
     assert.equal(unconfiguredAgent.agentProvider, "");
@@ -52,6 +60,10 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     assert.equal(unconfiguredAgent.agentMaxActiveTurns, 2);
     assert.equal(unconfiguredAgent.agentMaxQueuedTurns, 20);
     assert.equal(unconfiguredAgent.cbmIndexConcurrency, 1);
+    assert.equal(unconfiguredAgent.snapshotOnlyIndexing, false);
+    assert.equal(unconfiguredAgent.enforceSnapshotQuality, true);
+    assert.equal(unconfiguredAgent.compactCbmResponses, true);
+    assert.equal(unconfiguredAgent.batchRepositoryOperations, true);
     assert.equal(unconfiguredAgent.cbmInteractiveConcurrency, 2);
 
     process.env.MEMOREPO_AGENT_PROVIDER_ID = "test-provider";
@@ -63,6 +75,10 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     process.env.MEMOREPO_AGENT_MAX_QUEUED_TURNS = "30";
     process.env.MEMOREPO_CBM_INDEX_CONCURRENCY = "3";
     process.env.MEMOREPO_CBM_INTERACTIVE_CONCURRENCY = "4";
+    process.env.MEMOREPO_ENFORCE_SNAPSHOT_QUALITY = "off";
+    process.env.MEMOREPO_COMPACT_CBM_RESPONSES = "no";
+    process.env.MEMOREPO_BATCH_REPOSITORY_OPERATIONS = "0";
+    process.env.MEMOREPO_SNAPSHOT_ONLY_INDEXING = "yes";
 
     const officialConfig = loadConfig();
 
@@ -79,6 +95,10 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     assert.equal(officialConfig.agentMaxQueuedTurns, 30);
     assert.equal(officialConfig.cbmIndexConcurrency, 3);
     assert.equal(officialConfig.cbmInteractiveConcurrency, 4);
+    assert.equal(officialConfig.enforceSnapshotQuality, false);
+    assert.equal(officialConfig.compactCbmResponses, false);
+    assert.equal(officialConfig.batchRepositoryOperations, false);
+    assert.equal(officialConfig.snapshotOnlyIndexing, true);
     assert.equal(officialConfig.agentCredentialPath, path.join(officialConfig.secretsDir, "agent-credentials.json"));
 
     process.env.GITHUB_OAUTH_CLIENT_ID = "development-client-id";
@@ -108,6 +128,10 @@ test("configuration ships the official public GitHub OAuth client ID and accepts
     restoreEnvironment("MEMOREPO_AGENT_MAX_QUEUED_TURNS", previous.agentMaxQueuedTurns);
     restoreEnvironment("MEMOREPO_CBM_INDEX_CONCURRENCY", previous.cbmIndexConcurrency);
     restoreEnvironment("MEMOREPO_CBM_INTERACTIVE_CONCURRENCY", previous.cbmInteractiveConcurrency);
+    restoreEnvironment("MEMOREPO_ENFORCE_SNAPSHOT_QUALITY", previous.enforceSnapshotQuality);
+    restoreEnvironment("MEMOREPO_COMPACT_CBM_RESPONSES", previous.compactCbmResponses);
+    restoreEnvironment("MEMOREPO_BATCH_REPOSITORY_OPERATIONS", previous.batchRepositoryOperations);
+    restoreEnvironment("MEMOREPO_SNAPSHOT_ONLY_INDEXING", previous.snapshotOnlyIndexing);
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
 });

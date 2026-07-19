@@ -138,10 +138,19 @@ export function LifecyclePanel({
                 <div>
                   <strong>v{snapshot.version.toString().padStart(6, "0")}</strong>
                   <span>{snapshot.repositoryCount} repos · {formatBytes(snapshot.sizeBytes)} · {formatSnapshotTime(snapshot.createdAt)}</span>
-                  {snapshot.error ? <small>{snapshot.error}</small> : null}
+                  <span>
+                    CBM {snapshot.engineVersions?.join(", ") || "unknown"} · {snapshot.indexModes?.join(", ") || "unknown"} mode
+                    {snapshot.coveragePercent === null ? "" : ` · ${snapshot.coveragePercent}% source coverage`}
+                    {snapshot.indexDurationMs === null ? "" : ` · ${formatDuration(snapshot.indexDurationMs)}`}
+                  </span>
+                  <span>
+                    {snapshot.sourceFileCount ?? 0} source files · {snapshot.skippedCount ?? 0} skipped · {snapshot.excludedDirectoryCount ?? 0} excluded directories
+                  </span>
+                  {snapshot.reason ? <small className={snapshot.error ? "snapshot-error" : undefined}>{snapshot.reason}</small> : null}
                 </div>
                 <div className="repo-badges">
                   {snapshot.active ? <StatusBadge status="active" tone="green" /> : <StatusBadge status={snapshot.status} />}
+                  <StatusBadge status={snapshot.quality} />
                 </div>
               </article>
             ))}
@@ -253,6 +262,13 @@ function formatBytes(bytes: number): string {
     unitIndex += 1;
   }
   return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "unknown duration";
+  if (durationMs < 1_000) return `${Math.round(durationMs)} ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1_000).toFixed(1)} s`;
+  return `${(durationMs / 60_000).toFixed(1)} min`;
 }
 
 function maintenanceCandidateCount(summary: MaintenanceSummary): number {

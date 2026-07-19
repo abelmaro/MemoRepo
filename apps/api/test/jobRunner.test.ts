@@ -11,6 +11,106 @@ import { schema } from "../src/db/schema.js";
 import { JOB_EVENT_MESSAGE_MAX_BYTES, JOB_LOG_EVENT_MAX_COUNT, JobRunner } from "../src/services/jobRunner.js";
 import { SpaceService } from "../src/services/spaceService.js";
 import { DashboardEventBus } from "../src/services/dashboardEventBus.js";
+import { createSnapshotRebuildFingerprint } from "../src/services/snapshotRebuildFingerprint.js";
+
+test("snapshot rebuild fingerprints are stable across repository order and sensitive to every input", () => {
+  const base = {
+    spaceId: "spc_one",
+    mode: "fast" as const,
+    repositories: [
+      { repositoryId: "repo_b", commit: "bbb" },
+      { repositoryId: "repo_a", commit: "aaa" }
+    ]
+  };
+  const fingerprint = createSnapshotRebuildFingerprint(base);
+  assert.match(fingerprint, /^[a-f0-9]{64}$/u);
+  assert.equal(createSnapshotRebuildFingerprint({ ...base, repositories: [...base.repositories].reverse() }), fingerprint);
+  assert.notEqual(createSnapshotRebuildFingerprint({ ...base, spaceId: "spc_two" }), fingerprint);
+  assert.notEqual(createSnapshotRebuildFingerprint({ ...base, mode: "moderate" }), fingerprint);
+  assert.notEqual(createSnapshotRebuildFingerprint({
+    ...base,
+    repositories: [{ repositoryId: "repo_a", commit: "changed" }, { repositoryId: "repo_b", commit: "bbb" }]
+  }), fingerprint);
+});
+
+test("coalesced rebuilds reuse identical work and retain only the latest pending follow-up", () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 0);
+  const input = (fingerprint: string) => ({
+    type: "rebuild_space_snapshot",
+    spaceId: "spc_test",
+    fingerprint,
+    payload: { spaceId: "spc_test", mode: "fast" }
+  });
+  try {
+    const running = jobs.enqueueCoalesced(input("fingerprint-one"));
+    database.sqlite.prepare("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), running.id);
+    assert.equal(jobs.enqueueCoalesced(input("fingerprint-one")).id, running.id);
+
+    const followUp = jobs.enqueueCoalesced(input("fingerprint-two"));
+    assert.notEqual(followUp.id, running.id);
+    const latest = jobs.enqueueCoalesced(input("fingerprint-three"));
+    assert.equal(latest.id, followUp.id);
+    assert.equal(countActiveJobs(database, "spc_test", "rebuild_space_snapshot"), 2);
+    const stored = database.sqlite.prepare("SELECT payload_json FROM jobs WHERE id = ?").get(followUp.id) as { payload_json: string };
+    assert.equal((JSON.parse(stored.payload_json) as { inputFingerprint: string }).inputFingerprint, "fingerprint-three");
+    assert.equal((jobs.getJobEvents(followUp.id) as Array<{ event_type: string }>).filter((event) => event.event_type === "coalesced").length, 1);
+
+    const reverted = jobs.enqueueCoalesced(input("fingerprint-one"));
+    assert.equal(reverted.id, running.id);
+    assert.equal((jobs.getJob(followUp.id) as { status: string }).status, "cancelled");
+    assert.equal(countActiveJobs(database, "spc_test", "rebuild_space_snapshot"), 1);
+  } finally {
+    database.sqlite.close();
+  }
+});
+
+test("coalesced follow-up replaces dependencies atomically", () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 0);
+  try {
+    const firstDependency = jobs.enqueue({ type: "checkout_one" });
+    const secondDependency = jobs.enqueue({ type: "checkout_two" });
+    const first = jobs.enqueueCoalesced({
+      type: "rebuild_space_snapshot", spaceId: "spc_test", fingerprint: "one",
+      dependsOnJobId: firstDependency.id, payload: { spaceId: "spc_test" }
+    });
+    const updated = jobs.enqueueCoalesced({
+      type: "rebuild_space_snapshot", spaceId: "spc_test", fingerprint: "two",
+      dependsOnJobId: secondDependency.id, payload: { spaceId: "spc_test" }
+    });
+    assert.equal(updated.id, first.id);
+    assert.deepEqual(jobs.getJobDependencies(first.id).map((job: { id: string }) => job.id), [secondDependency.id]);
+  } finally {
+    database.sqlite.close();
+  }
+});
+
+test("coalesced pending follow-up survives restart and an active rebuild failure", () => {
+  const database = createTestDatabase();
+  const firstRunner = new JobRunner(database, 0);
+  try {
+    const running = firstRunner.enqueueCoalesced({
+      type: "rebuild_space_snapshot", spaceId: "spc_test", fingerprint: "one", payload: { spaceId: "spc_test" }
+    });
+    database.sqlite.prepare("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), running.id);
+    const followUp = firstRunner.enqueueCoalesced({
+      type: "rebuild_space_snapshot", spaceId: "spc_test", fingerprint: "two", payload: { spaceId: "spc_test" }
+    });
+
+    const restarted = new JobRunner(database, 0);
+    assert.equal(restarted.recoverRunningJobs(), 1);
+    assert.equal((restarted.getJob(running.id) as { status: string }).status, "failed");
+    assert.equal((restarted.getJob(followUp.id) as { status: string }).status, "pending");
+    assert.equal(restarted.enqueueCoalesced({
+      type: "rebuild_space_snapshot", spaceId: "spc_test", fingerprint: "two", payload: { spaceId: "spc_test" }
+    }).id, followUp.id);
+  } finally {
+    database.sqlite.close();
+  }
+});
 
 test("terminal snapshot jobs invalidate jobs, the space, and snapshots without forwarding logs", async () => {
   const database = createTestDatabase();
@@ -95,18 +195,70 @@ test("logical job identity includes payload and dependency", () => {
       spaceId: "spc_test",
       payload: { spaceId: "spc_test" }
     };
-    const first = jobs.enqueue({ ...base, dependsOnJobId: "job_index_one" });
-    const differentDependency = jobs.enqueue({ ...base, dependsOnJobId: "job_index_two" });
+    const dependencyOne = jobs.enqueue({ type: "index_one" });
+    const dependencyTwo = jobs.enqueue({ type: "index_two" });
+    const first = jobs.enqueue({ ...base, dependsOnJobId: dependencyOne.id });
+    const differentDependency = jobs.enqueue({ ...base, dependsOnJobId: dependencyTwo.id });
     const differentPayload = jobs.enqueue({
       ...base,
-      dependsOnJobId: "job_index_one",
+      dependsOnJobId: dependencyOne.id,
       payload: { spaceId: "spc_test", force: true }
     });
 
     assert.notEqual(differentDependency.id, first.id);
     assert.notEqual(differentPayload.id, first.id);
-    assert.equal(countJobs(database), 3);
+    assert.equal(countJobs(database), 5);
   } finally {
+    database.sqlite.close();
+  }
+});
+
+test("jobs wait for every dependency and expose the complete dependency set", async () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 2);
+  let releaseSecond = () => {};
+  const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  jobs.register("parent_fast", async () => undefined);
+  jobs.register("parent_slow", async () => secondGate);
+  jobs.register("child", async () => undefined);
+
+  try {
+    jobs.start();
+    const first = jobs.enqueue({ type: "parent_fast" });
+    const second = jobs.enqueue({ type: "parent_slow" });
+    const child = jobs.enqueue({ type: "child", dependsOnJobIds: [second.id, first.id] });
+    await waitFor(() => (jobs.getJob(first.id) as { status: string }).status === "succeeded");
+    assert.equal((jobs.getJob(child.id) as { status: string }).status, "pending");
+    assert.deepEqual(
+      jobs.getJobDependencies(child.id).map((dependency: { id: string }) => dependency.id).sort(),
+      [first.id, second.id].sort()
+    );
+    releaseSecond();
+    await waitForTerminalJob(database, child.id);
+    assert.equal((jobs.getJob(child.id) as { status: string }).status, "succeeded");
+  } finally {
+    jobs.stop();
+    database.sqlite.close();
+  }
+});
+
+test("a failed member of a multi-dependency set skips the dependent job", async () => {
+  const database = createTestDatabase();
+  const jobs = new JobRunner(database, 2);
+  jobs.register("ok", async () => undefined);
+  jobs.register("fail", async () => { throw new Error("expected failure"); });
+  jobs.register("child", async () => undefined);
+  try {
+    jobs.start();
+    const ok = jobs.enqueue({ type: "ok" });
+    const failed = jobs.enqueue({ type: "fail" });
+    const child = jobs.enqueue({ type: "child", dependsOnJobIds: [ok.id, failed.id] });
+    await waitForTerminalJob(database, child.id);
+    const result = jobs.getJob(child.id) as { status: string; error: string };
+    assert.equal(result.status, "skipped");
+    assert.match(result.error, /Dependency did not succeed/);
+  } finally {
+    jobs.stop();
     database.sqlite.close();
   }
 });
@@ -254,6 +406,12 @@ function createTestDatabase(): AppDatabase {
 
 function countJobs(database: AppDatabase): number {
   return (database.sqlite.prepare("SELECT COUNT(*) AS count FROM jobs").get() as { count: number }).count;
+}
+
+function countActiveJobs(database: AppDatabase, spaceId: string, type: string): number {
+  return (database.sqlite.prepare(
+    "SELECT COUNT(*) AS count FROM jobs WHERE space_id = ? AND type = ? AND status IN ('pending', 'running')"
+  ).get(spaceId, type) as { count: number }).count;
 }
 
 function countEvents(database: AppDatabase): number {

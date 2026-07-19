@@ -9,9 +9,27 @@ import { createId } from "../domain/ids.js";
 import { assertInside, ensureInsideDir } from "../domain/paths.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { nowIso } from "../domain/time.js";
-import type { CbmService } from "./cbmService.js";
+import type {
+  CbmIndexExcludedSummary,
+  CbmIndexMode,
+  CbmIndexQuality,
+  CbmIndexRepositoryResult,
+  CbmIndexSkippedSummary,
+  CbmIndexStatusResult,
+  CbmIndexStatus,
+  CbmService
+} from "./cbmService.js";
 import { createSafeProcessEnvironment, runProcess } from "./process.js";
 import type { SpaceRepositoryRecord } from "./spaceService.js";
+import { classifyProcessTermination, directorySizeBytes, readCgroupMemoryMetrics, recordCbmOperationMetric } from "./operationalMetrics.js";
+import {
+  createSnapshotSourceIntegrityManifest,
+  snapshotSourceIntegrityManifestPath,
+  snapshotSourceIntegritySummary,
+  verifySnapshotSourceIntegrity,
+  writeSnapshotSourceIntegrityManifestAtomic,
+  type SnapshotSourceIntegritySummary
+} from "./snapshotSourceIntegrity.js";
 
 type SnapshotRepositoryMaterializer = (
   memorepoHome: string,
@@ -21,6 +39,36 @@ type SnapshotRepositoryMaterializer = (
   signal?: AbortSignal
 ) => Promise<void>;
 
+interface MaterializedRevisionSource {
+  sourcePath: string;
+  sourceIntegrity: SnapshotSourceIntegritySummary;
+}
+
+export const SNAPSHOT_MANIFEST_SCHEMA_VERSION = 2;
+export type SnapshotQuality = "complete" | "partial" | "degraded" | "unknown";
+
+export interface SnapshotManifestRepositoryStatusChecks {
+  afterPrimary: CbmIndexStatusResult;
+  afterLinking?: CbmIndexStatusResult;
+}
+
+export interface SnapshotManifestRepositoryCbmIndex {
+  engineVersion: string;
+  mode: CbmIndexMode;
+  status: CbmIndexStatus;
+  reportedStatus?: string;
+  quality: CbmIndexQuality;
+  skippedCount: number;
+  skipped?: CbmIndexSkippedSummary;
+  excluded?: CbmIndexExcludedSummary;
+  nodes?: number;
+  edges?: number;
+  expectedNodes?: number;
+  expectedEdges?: number;
+  snapshotQuality?: SnapshotQuality;
+  statusChecks?: SnapshotManifestRepositoryStatusChecks;
+}
+
 export interface SnapshotManifestRepository {
   spaceRepositoryId: string;
   githubRepositoryId: string;
@@ -29,9 +77,13 @@ export interface SnapshotManifestRepository {
   commit: string;
   projectName: string;
   localPath: string;
+  sourceIntegrity?: SnapshotSourceIntegritySummary;
+  cbmIndex?: SnapshotManifestRepositoryCbmIndex;
 }
 
 export interface SnapshotManifest {
+  schemaVersion?: number;
+  quality?: SnapshotQuality;
   snapshotId: string;
   version: number;
   createdAt: string;
@@ -40,7 +92,7 @@ export interface SnapshotManifest {
 
 export class SnapshotService {
   private readonly pruningSnapshotIds = new Set<string>();
-  private readonly sourceMaterializations = new Map<string, Promise<string>>();
+  private readonly sourceMaterializations = new Map<string, Promise<MaterializedRevisionSource>>();
   private readonly snapshotSizeTasks = new Map<string, Promise<void>>();
 
   constructor(
@@ -76,6 +128,17 @@ export class SnapshotService {
     const version = this.nextVersion(spaceId);
     const snapshotId = createId("snp");
     const createdAt = nowIso();
+    const manifestRepositories: SnapshotManifestRepository[] = [];
+    let manifestQuality: SnapshotQuality = "unknown";
+    let linkingVerificationRequired = false;
+    const currentManifest = (): SnapshotManifest => ({
+      schemaVersion: SNAPSHOT_MANIFEST_SCHEMA_VERSION,
+      quality: manifestQuality,
+      snapshotId,
+      version,
+      createdAt,
+      repositories: manifestRepositories
+    });
     const versionName = `v${version.toString().padStart(6, "0")}`;
     const snapshotRoot = ensurePlainManagedDirectory(
       this.config.memorepoHome,
@@ -90,7 +153,7 @@ export class SnapshotService {
       version,
       status: "building",
       artifactPath,
-      manifestJson: JSON.stringify({ snapshotId, version, createdAt, repositories: [] }),
+      manifestJson: JSON.stringify(currentManifest()),
       createdAt,
       activatedAt: null,
       error: null,
@@ -100,44 +163,97 @@ export class SnapshotService {
     this.updateSpaceSnapshotStatus(spaceId, "building");
 
     try {
-      const manifestRepositories: SnapshotManifestRepository[] = [];
       const materializedRepositories: Array<{ repository: SpaceRepositoryRecord; sourcePath: string }> = [];
+      const engineVersion = await this.cbm.version();
 
       for (const repo of activeRepos) {
         throwIfAborted(signal);
         const materializeStartedAt = Date.now();
         onOutput?.(`Indexing ${repo.full_name} into snapshot ${versionName}`);
-        const sourcePath = await this.materializeRevisionSource(repo, signal);
+        const materializedSource = await this.materializeRevisionSource(repo, signal);
+        const sourcePath = materializedSource.sourcePath;
         onOutput?.(`Snapshot source prepared in ${formatDuration(Date.now() - materializeStartedAt)}`);
         const indexStartedAt = Date.now();
-        const result = await this.cbm.indexRepository(sourcePath, artifactPath, "fast", onOutput, signal);
-        onOutput?.(`Snapshot index for ${repo.full_name} completed in ${formatDuration(Date.now() - indexStartedAt)}`);
+        const mode = "fast" as const;
+        const memoryBefore = readCgroupMemoryMetrics();
+        let result: CbmIndexRepositoryResult;
+        try {
+          result = await this.cbm.indexRepository(sourcePath, artifactPath, mode, onOutput, signal);
+        } catch (error) {
+          const memory = readCgroupMemoryMetrics();
+          recordCbmOperationMetric(this.database, {
+            operation: "snapshot_index_repository", status: "error", durationMs: Date.now() - indexStartedAt,
+            spaceId, snapshotId, spaceRepositoryId: repo.id, engineVersion, indexMode: mode,
+            terminationKind: classifyProcessTermination({ error, cgroupOomKills: Math.max(0, memory.oomKillEvents - memoryBefore.oomKillEvents) }),
+            cgroupPeakBytes: memory.peakBytes
+          });
+          throw error;
+        }
         const projectName = result.project ?? this.projectNameFromPath(sourcePath);
         materializedRepositories.push({ repository: repo, sourcePath });
-        manifestRepositories.push({
+        const manifestRepository: SnapshotManifestRepository = {
           spaceRepositoryId: repo.id,
           githubRepositoryId: repo.github_repository_id,
           fullName: repo.full_name,
           branch: repo.selected_branch!,
           commit: repo.selected_commit!,
           projectName,
-          localPath: sourcePath
+          localPath: sourcePath,
+          sourceIntegrity: materializedSource.sourceIntegrity,
+          cbmIndex: snapshotManifestRepositoryCbmIndex(engineVersion, mode, result)
+        };
+        manifestRepositories.push(manifestRepository);
+        manifestQuality = aggregateSnapshotQuality(manifestRepositories, activeRepos.length, false);
+        this.persistBuildingManifest(snapshotId, currentManifest());
+        if (this.config.enforceSnapshotQuality !== false) {
+          assertSnapshotIndexCanActivate(repo.full_name, manifestRepository.cbmIndex!);
+        }
+        recordCbmOperationMetric(this.database, {
+          operation: "snapshot_index_repository", status: result.status, durationMs: Date.now() - indexStartedAt,
+          spaceId, snapshotId, spaceRepositoryId: repo.id, projectName, engineVersion, indexMode: mode,
+          ...(result.nodes !== undefined ? { nodes: result.nodes } : {}),
+          ...(result.edges !== undefined ? { edges: result.edges } : {}),
+          skippedCount: result.skippedCount,
+          artifactBytes: directorySizeBytes(artifactPath), terminationKind: "completed",
+          cgroupPeakBytes: readCgroupMemoryMetrics().peakBytes
         });
+        onOutput?.(`Snapshot index for ${repo.full_name} completed in ${formatDuration(Date.now() - indexStartedAt)}`);
       }
 
       if (materializedRepositories.length > 1) {
+        linkingVerificationRequired = true;
+        for (const repository of manifestRepositories) {
+          if (repository.cbmIndex) repository.cbmIndex.snapshotQuality = "unknown";
+        }
+        manifestQuality = aggregateSnapshotQuality(manifestRepositories, activeRepos.length, true);
+        this.persistBuildingManifest(snapshotId, currentManifest());
         for (const { repository, sourcePath } of materializedRepositories) {
           onOutput?.(`Linking cross-repo intelligence for ${repository.full_name}`);
-          await this.cbm.buildCrossRepoLinks(sourcePath, artifactPath, onOutput, signal);
+          const result = await this.cbm.buildCrossRepoLinks(sourcePath, artifactPath, onOutput, signal);
+          const manifestRepository = manifestRepositories.find((candidate) => candidate.spaceRepositoryId === repository.id);
+          if (!manifestRepository?.cbmIndex) throw new Error("Snapshot repository index metadata is missing");
+          manifestRepository.cbmIndex.statusChecks = {
+            ...(manifestRepository.cbmIndex.statusChecks ?? { afterPrimary: normalizeMissingIndexStatus() }),
+            afterLinking: result.indexStatus
+          };
+          manifestRepository.cbmIndex.snapshotQuality = snapshotRepositoryIndexQuality(manifestRepository.cbmIndex, true);
+          manifestQuality = aggregateSnapshotQuality(manifestRepositories, activeRepos.length, true);
+          this.persistBuildingManifest(snapshotId, currentManifest());
+          if (this.config.enforceSnapshotQuality !== false) {
+            assertSnapshotIndexCanActivate(repository.full_name, manifestRepository.cbmIndex);
+          }
         }
       }
 
-      const manifest: SnapshotManifest = {
-        snapshotId,
-        version,
-        createdAt,
-        repositories: manifestRepositories
-      };
+      manifestQuality = aggregateSnapshotQuality(
+        manifestRepositories,
+        activeRepos.length,
+        linkingVerificationRequired
+      );
+      if (this.config.enforceSnapshotQuality !== false && manifestQuality !== "complete") {
+        throw new Error(`Snapshot index quality is ${manifestQuality}; activation requires complete quality`);
+      }
+      const manifest = currentManifest();
       const sizeBytes = await managedPathSizeAsync(snapshotRoot, artifactPath, signal);
       const activatedAt = nowIso();
 
@@ -189,6 +305,11 @@ export class SnapshotService {
 
       return { snapshotId, version };
     } catch (error) {
+      manifestQuality = aggregateSnapshotQuality(
+        manifestRepositories,
+        activeRepos.length,
+        linkingVerificationRequired
+      );
       const message = sanitizePublicMessage(error, [this.config.memorepoHome]);
       const failedAt = nowIso();
       const currentSpace = this.database.sqlite
@@ -196,7 +317,13 @@ export class SnapshotService {
         .get(spaceId) as { activeSnapshotId: string | null } | undefined;
 
       this.database.sqlite.transaction(() => {
-        updateRecord(this.database, "space_snapshots", { status: "failed", error: message }, "id", snapshotId);
+        updateRecord(
+          this.database,
+          "space_snapshots",
+          { status: "failed", manifestJson: JSON.stringify(currentManifest()), error: message },
+          "id",
+          snapshotId
+        );
         updateRecord(
           this.database,
           "spaces",
@@ -228,6 +355,15 @@ export class SnapshotService {
   listSpaceSnapshots(spaceId: string) {
     const activeSnapshotId = this.activeSnapshotId(spaceId);
     const rows = this.snapshotRows(spaceId);
+    const durationRows = this.database.sqlite
+      .prepare(`
+        SELECT snapshot_id AS snapshotId, SUM(duration_ms) AS durationMs
+        FROM cbm_operation_metrics
+        WHERE space_id = ? AND snapshot_id IS NOT NULL AND operation = 'snapshot_index_repository'
+        GROUP BY snapshot_id
+      `)
+      .all(spaceId) as Array<{ snapshotId: string; durationMs: number }>;
+    const durationBySnapshot = new Map(durationRows.map((row) => [row.snapshotId, row.durationMs]));
     const snapshotRoot = ensurePlainManagedDirectory(
       this.config.memorepoHome,
       this.config.snapshotIndexesDir,
@@ -243,7 +379,8 @@ export class SnapshotService {
       snapshots: rows.map((row) => toPublicSnapshot(
         row,
         activeSnapshotId,
-        this.config.memorepoHome
+        this.config.memorepoHome,
+        durationBySnapshot.get(row.id) ?? null
       )),
       totalSizeBytes: rows.reduce((total, row) => total + (row.sizeBytes ?? 0), 0),
       defaultRetention: this.config.snapshotRetentionDefault
@@ -336,17 +473,24 @@ export class SnapshotService {
 
   assertAgentTurnCanStart(snapshotId: string): void {
     const row = this.database.sqlite
-      .prepare("SELECT status FROM space_snapshots WHERE id = ?")
-      .get(snapshotId) as { status: string } | undefined;
+      .prepare("SELECT status, manifest_json AS manifestJson FROM space_snapshots WHERE id = ?")
+      .get(snapshotId) as { status: string; manifestJson: string } | undefined;
     if (this.pruningSnapshotIds.has(snapshotId) || row?.status === "pruning") {
       throw Object.assign(new Error("This chat's snapshot is being pruned"), { statusCode: 409 });
+    }
+    const quality = row ? declaredSnapshotQuality(row.manifestJson) : undefined;
+    if (this.config.enforceSnapshotQuality !== false && quality && quality !== "complete") {
+      throw Object.assign(
+        new Error(`This chat's snapshot has ${quality} index quality and cannot start new agent turns`),
+        { statusCode: 409 }
+      );
     }
   }
 
   private reconcileInterruptedSnapshotBuilds(): void {
     const rows = this.database.sqlite
-      .prepare("SELECT id, space_id AS spaceId FROM space_snapshots WHERE status = 'building'")
-      .all() as Array<{ id: string; spaceId: string }>;
+      .prepare("SELECT id, space_id AS spaceId, manifest_json AS manifestJson FROM space_snapshots WHERE status = 'building'")
+      .all() as Array<{ id: string; spaceId: string; manifestJson: string }>;
     if (rows.length === 0) return;
 
     const failedAt = nowIso();
@@ -354,8 +498,10 @@ export class SnapshotService {
     this.database.sqlite.transaction(() => {
       for (const row of rows) {
         this.database.sqlite
-          .prepare("UPDATE space_snapshots SET status = 'failed', error = ? WHERE id = ? AND status = 'building'")
-          .run(message, row.id);
+          .prepare(
+            "UPDATE space_snapshots SET status = 'failed', manifest_json = ?, error = ? WHERE id = ? AND status = 'building'"
+          )
+          .run(snapshotManifestJsonWithQuality(row.manifestJson, "unknown"), message, row.id);
       }
       for (const spaceId of new Set(rows.map((row) => row.spaceId))) {
         const space = this.database.sqlite
@@ -459,6 +605,15 @@ export class SnapshotService {
     updateRecord(this.database, "spaces", { snapshotStatus: status, snapshotStatusUpdatedAt: timestamp, updatedAt: timestamp }, "id", spaceId);
   }
 
+  private persistBuildingManifest(snapshotId: string, manifest: SnapshotManifest): void {
+    const updated = this.database.sqlite
+      .prepare("UPDATE space_snapshots SET manifest_json = ? WHERE id = ? AND status = 'building'")
+      .run(JSON.stringify(manifest), snapshotId);
+    if (updated.changes !== 1) {
+      throw new Error("Snapshot changed while index quality was being recorded");
+    }
+  }
+
   private projectNameFromPath(repoPath: string): string {
     return repoPath.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }
@@ -525,7 +680,10 @@ export class SnapshotService {
     });
   }
 
-  private materializeRevisionSource(repo: SpaceRepositoryRecord, signal?: AbortSignal): Promise<string> {
+  private materializeRevisionSource(
+    repo: SpaceRepositoryRecord,
+    signal?: AbortSignal
+  ): Promise<MaterializedRevisionSource> {
     const sourceRoot = ensurePlainManagedDirectory(
       this.config.memorepoHome,
       this.config.revisionSourcesDir,
@@ -544,7 +702,7 @@ export class SnapshotService {
     void materialization.finally(() => {
       if (this.sourceMaterializations.get(key) === materialization) this.sourceMaterializations.delete(key);
     }).catch(() => undefined);
-    return waitForSharedMaterialization(materialization, signal);
+    return materialization;
   }
 
   private async createRevisionSource(
@@ -553,11 +711,10 @@ export class SnapshotService {
     commitRoot: string,
     targetPath: string,
     signal?: AbortSignal
-  ): Promise<string> {
-    if (isPlainDirectoryInside(sourceRoot, targetPath)) return targetPath;
-    if (fs.existsSync(commitRoot)) {
-      await fs.promises.rm(assertDeletableManagedPath(sourceRoot, commitRoot), { recursive: true, force: true });
-    }
+  ): Promise<MaterializedRevisionSource> {
+    const treeSha = await selectedGitTreeSha(repo.local_path, repo.selected_commit!, signal);
+    const existing = await reusableRevisionSource(sourceRoot, targetPath, treeSha, signal);
+    if (existing) return existing;
 
     ensureInsideDir(sourceRoot, path.dirname(commitRoot));
     const temporaryRoot = assertInside(
@@ -565,6 +722,12 @@ export class SnapshotService {
       path.join(path.dirname(commitRoot), `.tmp-${path.basename(commitRoot)}-${createId("src").slice(-8)}`)
     );
     const temporaryTarget = assertInside(temporaryRoot, path.join(temporaryRoot, path.basename(targetPath)));
+    const temporaryManifestPath = snapshotSourceIntegrityManifestPath(temporaryTarget);
+    const staleRoot = assertInside(
+      sourceRoot,
+      path.join(path.dirname(commitRoot), `.stale-${path.basename(commitRoot)}-${createId("src").slice(-8)}`)
+    );
+    let movedExisting = false;
     try {
       await this.materializeRepository(
         this.config.memorepoHome,
@@ -574,13 +737,45 @@ export class SnapshotService {
         signal
       );
       throwIfAborted(signal);
+      const integrity = await createSnapshotSourceIntegrityManifest(temporaryTarget, treeSha, signal);
+      await writeSnapshotSourceIntegrityManifestAtomic(temporaryManifestPath, integrity, signal);
+      const temporaryVerification = await verifySnapshotSourceIntegrity(
+        temporaryTarget,
+        temporaryManifestPath,
+        treeSha,
+        signal
+      );
+      if (!temporaryVerification.valid) {
+        throw new Error(`Snapshot source integrity verification failed: ${temporaryVerification.reason ?? "unknown"}`);
+      }
+      throwIfAborted(signal);
+      if (fs.existsSync(commitRoot)) {
+        await fs.promises.rename(commitRoot, staleRoot);
+        movedExisting = true;
+      }
       await fs.promises.rename(temporaryRoot, commitRoot);
-      return targetPath;
+      if (movedExisting) {
+        await fs.promises.rm(assertDeletableManagedPath(sourceRoot, staleRoot), { recursive: true, force: true });
+        movedExisting = false;
+      }
+      return {
+        sourcePath: targetPath,
+        sourceIntegrity: snapshotSourceIntegritySummary(integrity)
+      };
     } catch (error) {
-      if (isPlainDirectoryInside(sourceRoot, targetPath)) return targetPath;
+      if (movedExisting && !fs.existsSync(commitRoot) && fs.existsSync(staleRoot)) {
+        await fs.promises.rename(staleRoot, commitRoot).catch(() => undefined);
+        movedExisting = false;
+      }
+      throwIfAborted(signal);
+      const concurrentlyCreated = await reusableRevisionSource(sourceRoot, targetPath, treeSha, signal);
+      if (concurrentlyCreated) return concurrentlyCreated;
       throw error;
     } finally {
       await fs.promises.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+      if (movedExisting && fs.existsSync(staleRoot)) {
+        await fs.promises.rename(staleRoot, commitRoot).catch(() => undefined);
+      }
     }
   }
 }
@@ -588,19 +783,84 @@ export class SnapshotService {
 function toPublicSnapshot(
   row: SnapshotRow,
   activeSnapshotId: string | null,
-  memorepoHome: string
+  memorepoHome: string,
+  indexDurationMs: number | null
 ): PublicSnapshot {
+  const observability = snapshotObservability(row.manifestJson);
+  const error = row.error ? sanitizePublicMessage(row.error, [memorepoHome]) : null;
   return {
     id: row.id,
     version: row.version,
     status: row.status,
     active: row.id === activeSnapshotId,
     repositoryCount: snapshotRepositoryCount(row.manifestJson),
+    ...observability,
+    indexDurationMs,
     sizeBytes: row.sizeBytes ?? 0,
     createdAt: row.createdAt,
     activatedAt: row.activatedAt,
-    error: row.error ? sanitizePublicMessage(row.error, [memorepoHome]) : null
+    error,
+    reason: error ?? qualityReason(observability.quality, observability.skippedCount)
   };
+}
+
+export function snapshotObservability(manifestJson: string): SnapshotObservability {
+  try {
+    const manifest = JSON.parse(manifestJson) as SnapshotManifest;
+    const repositories = Array.isArray(manifest.repositories) ? manifest.repositories : [];
+    const indexes = repositories.flatMap((repository) => repository.cbmIndex ? [repository.cbmIndex] : []);
+    const sourceFileCount = repositories.reduce(
+      (total, repository) => total + (repository.sourceIntegrity?.fileCount ?? 0),
+      0
+    );
+    const skippedCount = indexes.reduce((total, index) => total + Math.max(0, index.skippedCount ?? 0), 0);
+    const excludedDirectoryCount = indexes.reduce(
+      (total, index) => total + Math.max(0, index.excluded?.count ?? 0),
+      0
+    );
+    const reasons = new Map<string, number>();
+    for (const index of indexes) {
+      for (const skipped of index.skipped?.files ?? []) {
+        const reason = skipped.reason.trim() || "unspecified";
+        reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    const quality = normalizeSnapshotQuality(manifest.quality) ?? "unknown";
+    return {
+      quality,
+      engineVersions: uniqueStrings(indexes.map((index) => index.engineVersion)),
+      indexModes: uniqueStrings(indexes.map((index) => index.mode)),
+      sourceFileCount,
+      skippedCount,
+      excludedDirectoryCount,
+      coveragePercent: sourceFileCount > 0
+        ? Math.max(0, Math.min(100, Math.round(((sourceFileCount - skippedCount) / sourceFileCount) * 1_000) / 10))
+        : null,
+      skipReasons: Array.from(reasons, ([reason, count]) => ({ reason, count }))
+        .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason))
+    };
+  } catch {
+    return {
+      quality: "unknown",
+      engineVersions: [],
+      indexModes: [],
+      sourceFileCount: 0,
+      skippedCount: 0,
+      excludedDirectoryCount: 0,
+      coveragePercent: null,
+      skipReasons: []
+    };
+  }
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).sort();
+}
+
+function qualityReason(quality: SnapshotQuality, skippedCount: number): string | null {
+  if (quality === "complete") return null;
+  if (skippedCount > 0) return `${skippedCount} source file${skippedCount === 1 ? " was" : "s were"} skipped during indexing`;
+  return `Snapshot index quality is ${quality}`;
 }
 
 function snapshotRepositoryCount(manifestJson: string): number {
@@ -609,6 +869,124 @@ function snapshotRepositoryCount(manifestJson: string): number {
     return Array.isArray(manifest.repositories) ? manifest.repositories.length : 0;
   } catch {
     return 0;
+  }
+}
+
+function assertSnapshotIndexCanActivate(
+  repositoryName: string,
+  result: SnapshotManifestRepositoryCbmIndex
+): void {
+  const quality = normalizeSnapshotQuality(result.snapshotQuality);
+  if (quality === "degraded") {
+    throw new Error(`CBM index for ${repositoryName} reported degraded quality`);
+  }
+  if (quality === "partial" && result.skippedCount > 0) {
+    const noun = result.skippedCount === 1 ? "file" : "files";
+    throw new Error(`CBM index for ${repositoryName} skipped ${result.skippedCount} ${noun} due to indexing errors`);
+  }
+  if (quality === "partial") {
+    throw new Error(`CBM index for ${repositoryName} reported partial quality`);
+  }
+  if (quality === "unknown") {
+    throw new Error(`CBM index for ${repositoryName} could not be verified as complete`);
+  }
+}
+
+function snapshotManifestRepositoryCbmIndex(
+  engineVersion: string,
+  mode: CbmIndexMode,
+  result: CbmIndexRepositoryResult
+): SnapshotManifestRepositoryCbmIndex {
+  const index: SnapshotManifestRepositoryCbmIndex = {
+    engineVersion,
+    mode,
+    status: result.status,
+    quality: result.quality,
+    skippedCount: result.skippedCount,
+    ...(result.reportedStatus ? { reportedStatus: result.reportedStatus } : {}),
+    ...(result.skipped ? { skipped: result.skipped } : {}),
+    ...(result.excluded ? { excluded: result.excluded } : {}),
+    ...(result.nodes === undefined ? {} : { nodes: result.nodes }),
+    ...(result.edges === undefined ? {} : { edges: result.edges }),
+    ...(result.expectedNodes === undefined ? {} : { expectedNodes: result.expectedNodes }),
+    ...(result.expectedEdges === undefined ? {} : { expectedEdges: result.expectedEdges }),
+    statusChecks: {
+      afterPrimary: result.indexStatus ?? normalizeMissingIndexStatus()
+    }
+  };
+  index.snapshotQuality = snapshotRepositoryIndexQuality(index, false);
+  return index;
+}
+
+function normalizeMissingIndexStatus(): CbmIndexStatusResult {
+  return { status: "unknown", quality: "unknown" };
+}
+
+function snapshotRepositoryIndexQuality(
+  index: SnapshotManifestRepositoryCbmIndex,
+  requireLinkingVerification: boolean
+): SnapshotQuality {
+  const afterPrimary = index.statusChecks?.afterPrimary;
+  const afterLinking = index.statusChecks?.afterLinking;
+  const checks = requireLinkingVerification ? [afterPrimary, afterLinking] : [afterPrimary];
+
+  if (
+    index.status === "degraded"
+    || index.status === "error"
+    || index.status === "skipped"
+    || index.quality === "degraded"
+    || checks.some((check) => check?.quality === "degraded")
+  ) {
+    return "degraded";
+  }
+  if (index.skippedCount > 0 || index.quality === "partial") return "partial";
+  if (index.status !== "indexed" || index.quality !== "clean") return "unknown";
+  if (checks.some((check) => check?.status !== "ready" || check.quality !== "complete")) return "unknown";
+  return "complete";
+}
+
+function aggregateSnapshotQuality(
+  repositories: SnapshotManifestRepository[],
+  expectedRepositoryCount: number,
+  requireLinkingVerification: boolean
+): SnapshotQuality {
+  const qualities = repositories.map((repository) => repository.cbmIndex
+    ? snapshotRepositoryIndexQuality(repository.cbmIndex, requireLinkingVerification)
+    : "unknown");
+  if (qualities.includes("degraded")) return "degraded";
+  if (qualities.includes("partial")) return "partial";
+  if (repositories.length !== expectedRepositoryCount || qualities.includes("unknown")) return "unknown";
+  return "complete";
+}
+
+export function normalizeSnapshotQuality(value: unknown): SnapshotQuality {
+  return value === "complete" || value === "partial" || value === "degraded" ? value : "unknown";
+}
+
+function declaredSnapshotQuality(manifestJson: string): SnapshotQuality | undefined {
+  try {
+    const value = (JSON.parse(manifestJson) as { quality?: unknown }).quality;
+    return value === "complete" || value === "partial" || value === "degraded" || value === "unknown"
+      ? value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotQuality(manifestJson: string): SnapshotQuality {
+  return declaredSnapshotQuality(manifestJson) ?? "unknown";
+}
+
+function snapshotManifestJsonWithQuality(manifestJson: string, quality: SnapshotQuality): string {
+  try {
+    const manifest = JSON.parse(manifestJson) as unknown;
+    const record = manifest && typeof manifest === "object" && !Array.isArray(manifest)
+      ? manifest as Record<string, unknown>
+      : {};
+    return JSON.stringify({ ...record, quality });
+  } catch {
+    return JSON.stringify({ quality });
   }
 }
 
@@ -735,11 +1113,50 @@ function isPlainDirectoryInside(root: string, target: string): boolean {
   }
 }
 
-async function waitForSharedMaterialization(materialization: Promise<string>, signal?: AbortSignal): Promise<string> {
+async function reusableRevisionSource(
+  sourceRoot: string,
+  targetPath: string,
+  treeSha: string,
+  signal?: AbortSignal
+): Promise<MaterializedRevisionSource | null> {
+  if (!isPlainDirectoryInside(sourceRoot, targetPath)) return null;
+  const verification = await verifySnapshotSourceIntegrity(
+    targetPath,
+    snapshotSourceIntegrityManifestPath(targetPath),
+    treeSha,
+    signal
+  );
+  if (!verification.valid || !verification.manifest) return null;
+  return {
+    sourcePath: targetPath,
+    sourceIntegrity: snapshotSourceIntegritySummary(verification.manifest)
+  };
+}
+
+async function selectedGitTreeSha(
+  repositoryPath: string,
+  commit: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const result = await runGit(
+    repositoryPath,
+    ["rev-parse", "--verify", `${commit}^{tree}`],
+    signal,
+    undefined,
+    1024
+  );
+  const treeSha = result.stdout.trim();
+  if (result.exitCode !== 0 || result.stdoutTruncated || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(treeSha)) {
+    throw new Error("Git could not resolve the selected snapshot tree");
+  }
+  return treeSha.toLocaleLowerCase("en-US");
+}
+
+async function waitForSharedMaterialization<T>(materialization: Promise<T>, signal?: AbortSignal): Promise<T> {
   throwIfAborted(signal);
   if (!signal) return materialization;
 
-  return await new Promise<string>((resolve, reject) => {
+  return await new Promise<T>((resolve, reject) => {
     const abort = () => reject(abortError(signal));
     signal.addEventListener("abort", abort, { once: true });
     materialization.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
@@ -926,9 +1343,30 @@ interface PublicSnapshot {
   version: number;
   status: string;
   active: boolean;
+  quality: SnapshotQuality;
   repositoryCount: number;
+  engineVersions: string[];
+  indexModes: string[];
+  sourceFileCount: number;
+  skippedCount: number;
+  excludedDirectoryCount: number;
+  coveragePercent: number | null;
+  skipReasons: Array<{ reason: string; count: number }>;
+  indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;
   activatedAt: string | null;
   error: string | null;
+  reason: string | null;
+}
+
+export interface SnapshotObservability {
+  quality: SnapshotQuality;
+  engineVersions: string[];
+  indexModes: string[];
+  sourceFileCount: number;
+  skippedCount: number;
+  excludedDirectoryCount: number;
+  coveragePercent: number | null;
+  skipReasons: Array<{ reason: string; count: number }>;
 }

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 interface Migration {
   version: number;
@@ -20,6 +20,8 @@ const migrations: Migration[] = [
   { version: 10, up: addAgentSubmissionSequence },
   { version: 11, up: addAdaptiveAgentRuns },
   { version: 12, up: addAgentModelPreferences },
+  { version: 13, up: addJobDependencies },
+  { version: 14, up: addOperationalMetrics },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -202,6 +204,71 @@ function addJobDeduplication(sqlite: Database.Database): void {
       WHERE deduplication_key IS NOT NULL
         AND status IN ('pending', 'running');
   `);
+}
+
+function addJobDependencies(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS job_dependencies (
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      dependency_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (job_id, dependency_job_id),
+      CHECK (job_id <> dependency_job_id)
+    );
+    CREATE INDEX IF NOT EXISTS job_dependencies_dependency_idx
+      ON job_dependencies(dependency_job_id, job_id);
+    INSERT OR IGNORE INTO job_dependencies (job_id, dependency_job_id, created_at)
+      SELECT id, depends_on_job_id, created_at
+      FROM jobs
+      WHERE depends_on_job_id IS NOT NULL;
+  `);
+}
+
+function addOperationalMetrics(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_tool_stats (
+      space_id TEXT NOT NULL REFERENCES spaces(id), tool_name TEXT NOT NULL,
+      call_count INTEGER NOT NULL DEFAULT 0, total_response_bytes INTEGER NOT NULL DEFAULT 0,
+      max_response_bytes INTEGER NOT NULL DEFAULT 0, total_duration_ms INTEGER NOT NULL DEFAULT 0,
+      max_duration_ms INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+      cache_hit_count INTEGER NOT NULL DEFAULT 0, truncated_count INTEGER NOT NULL DEFAULT 0,
+      last_called_at TEXT NOT NULL, PRIMARY KEY (space_id, tool_name)
+    );
+    CREATE TABLE IF NOT EXISTS cbm_operation_metrics (
+      id TEXT PRIMARY KEY,
+      operation TEXT NOT NULL,
+      space_id TEXT,
+      snapshot_id TEXT,
+      space_repository_id TEXT,
+      project_name TEXT,
+      engine_version TEXT,
+      index_mode TEXT,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      exit_code INTEGER,
+      termination_kind TEXT,
+      nodes INTEGER,
+      edges INTEGER,
+      skipped_count INTEGER,
+      artifact_bytes INTEGER,
+      response_bytes INTEGER,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      truncated INTEGER NOT NULL DEFAULT 0,
+      cgroup_peak_bytes INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cbm_operation_metrics_created_idx ON cbm_operation_metrics(created_at);
+    CREATE INDEX IF NOT EXISTS cbm_operation_metrics_space_created_idx ON cbm_operation_metrics(space_id, created_at);
+  `);
+  const columns = new Set((sqlite.pragma("table_info(mcp_tool_stats)") as Array<{ name: string }>).map((column) => column.name));
+  const additions = [
+    ["total_duration_ms", "INTEGER NOT NULL DEFAULT 0"], ["max_duration_ms", "INTEGER NOT NULL DEFAULT 0"],
+    ["error_count", "INTEGER NOT NULL DEFAULT 0"], ["cache_hit_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["truncated_count", "INTEGER NOT NULL DEFAULT 0"]
+  ] as const;
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) sqlite.exec(`ALTER TABLE mcp_tool_stats ADD COLUMN ${name} ${definition}`);
+  }
 }
 
 function normalizeSnapshotStatuses(sqlite: Database.Database): void {

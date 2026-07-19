@@ -18,6 +18,7 @@ export async function jobRoutes(app: FastifyInstance) {
     return {
       job,
       dependency: app.services.jobs.getJobDependency(jobId),
+      dependencies: app.services.jobs.getJobDependencies(jobId),
       dependents: app.services.jobs.getJobDependents(jobId),
       events: app.services.jobs.getJobEvents(jobId)
     };

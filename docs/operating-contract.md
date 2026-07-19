@@ -43,6 +43,13 @@ MemoRepo accepts these runtime inputs:
 - `MEMOREPO_JOB_CONCURRENCY`: the maximum number of background jobs MemoRepo runs at once, defaulting to `2`.
 - `MEMOREPO_CBM_INDEX_CONCURRENCY`: the maximum number of heavyweight CBM indexing commands, defaulting to `1`.
 - `MEMOREPO_CBM_INTERACTIVE_CONCURRENCY`: the independent capacity reserved for snapshot query sessions, defaulting to `2`.
+- `MEMOREPO_ENFORCE_SNAPSHOT_QUALITY`: rejects activation and new agent turns for incomplete snapshot indexes, defaulting to `true`. Disable only for a bounded diagnostic rollout.
+- `MEMOREPO_COMPACT_CBM_RESPONSES`: makes compact CBM tool responses the default while still allowing an explicit `detail` override, defaulting to `true`.
+- `MEMOREPO_BATCH_REPOSITORY_OPERATIONS`: exposes the batch repository endpoint, defaulting to `true`. When disabled, the endpoint responds as unavailable.
+- `MEMOREPO_SNAPSHOT_ONLY_INDEXING`: skips mutable repository index jobs and builds only immutable snapshot indexes. Docker Compose and `.env.example` default it to `true`; bare direct API startup defaults it to `false`. Set it to `false` explicitly for an immediate rollback path.
+- `MEMOREPO_API_MEMORY_LIMIT`: the API container hard memory limit, defaulting to `12g`. Size it to at least 1.5 times the observed p95 CBM peak for the largest supported space.
+- `MEMOREPO_API_MEMORY_RESERVATION`: the API container soft reservation, defaulting to `2g`.
+- `MEMOREPO_API_PIDS_LIMIT`: the API container process limit, defaulting to `512`.
 - `MEMOREPO_STORAGE`: the Docker Compose storage source. New installations use the `memorepo-data` named volume; existing configurations without this variable continue using `MEMOREPO_HOME` as a bind mount.
 - `MEMOREPO_DATA_VOLUME_NAME`: the physical Docker volume name used when `MEMOREPO_STORAGE` selects the managed data volume, defaulting to `memorepo-data`.
 - `MEMOREPO_RATE_LIMIT_WINDOW_MS` and the `MEMOREPO_*_RATE_LIMIT_MAX` values: per-IP budgets for authentication checks, API reads, API mutations, SSE connections, and MCP requests.
@@ -73,7 +80,7 @@ Job:
 A background operation persisted in SQLite. Jobs cover GitHub sync, clone, checkout, branch refresh, repository indexing, and space snapshot rebuild. Jobs may depend on earlier jobs.
 
 Repository index:
-A `codebase-memory-mcp` cache for one managed repository at one selected branch and commit. Repository indexes are operational artifacts and can be regenerated.
+A legacy mutable `codebase-memory-mcp` cache for one managed repository at one selected branch and commit. Snapshot-only indexing omits new repository indexes by default; retained indexes remain regenerable operational artifacts for rollback and maintenance.
 
 Snapshot:
 An immutable per-space index artifact. It is built by materializing each selected repository's recorded commit directly from Git into a content-addressed immutable source store, then indexing those exact trees. An unchanged repository commit reuses its existing tree instead of copying it into every replacement snapshot. A snapshot is activated only after the build succeeds, and later managed-clone changes cannot alter its source-backed query results. Tracked symbolic links are intentionally unsupported and make materialization fail closed; replace them with regular files or directories before indexing.
@@ -137,6 +144,8 @@ The provider-neutral query boundary called by `AgentService` for each runtime to
 SQLite:
 SQLite is the source of truth for spaces, repositories, jobs, snapshots, MCP connections, provider account sessions, the global agent model selection, and visible agent chat transcripts.
 
+Before the first startup that raises the SQLite schema version, MemoRepo creates one consistent `VACUUM INTO` backup beside the database named `memorepo.sqlite.pre-v<version>.sqlite`. Keep that file through rollout verification. A binary rollback after a schema bump requires stopping MemoRepo and restoring the backup created for the older binary; running an older binary directly against a newer schema is intentionally rejected. Snapshot manifests remain backward-readable independently of the database backup.
+
 Managed clones:
 Managed clones are disposable operational state. MemoRepo may run branch checkout, hard reset, and clean operations against them.
 
@@ -146,12 +155,22 @@ Snapshots are the stable read model for agents. A failed snapshot build must not
 Maintenance:
 MemoRepo can prune inactive snapshots, remove failed snapshot artifacts, clean removed repository clones, delete stale repository index records, delete orphan repository index directories, delete content-addressed revision trees no longer referenced by any retained snapshot, and delete old terminal jobs. Revision-source collection is skipped while a snapshot build is active. Maintenance operations refuse to remove active snapshots and should not run against spaces with pending or running jobs. Snapshot pruning also refuses to remove a snapshot while an agent answer pinned to it is active.
 
+CBM compatibility:
+
+MemoRepo validates the pinned CBM runtime version and the complete paginated `tools/list` catalog before gateway use. Missing required tools or an incompatible runtime version fail preflight and MCP tool discovery instead of silently reducing the contract. Optional native input fields are exposed only when present in the runtime descriptor. `fast` snapshots keep semantic graph input disabled; `moderate` and `full` snapshots require native `search_graph.semantic_query` support.
+
 Jobs:
-MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. Heavy CBM indexing is additionally bounded by its own lane, while snapshot queries use independent interactive capacity so an active index does not consume every chat slot. One CBM session is reused across the tool calls of a single agent turn and closed at the turn boundary. When a submitted job exactly matches an active job's type, space, managed repository, dependency, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. This is exact input deduplication, not semantic deduplication of similar operations. A new matching job can be created after the prior one reaches a terminal state. Pending jobs can be cancelled before they start. Active jobs accept cooperative cancellation through their Git, indexing, and snapshot subprocesses, with forced termination after a bounded grace period. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
+MemoRepo runs background jobs with configurable global concurrency. Jobs that target the same managed repository are serialized. A job may depend on multiple predecessors and runs only after all succeed; a failed, skipped, or cancelled dependency explicitly skips the dependent work. Batch repository ingestion retains per-repository clone/checkout visibility and creates one coalesced snapshot rebuild after every repository is ready. Snapshot fingerprints cover the space, index mode, and sorted repository commits, so identical work is reused and changing inputs create at most one pending follow-up. Heavy CBM indexing is additionally bounded by its own lane, while snapshot queries use independent interactive capacity so an active index does not consume every chat slot. One CBM session is reused across the tool calls of a single agent turn and closed at the turn boundary. When a submitted job exactly matches an active job's type, space, managed repository, dependencies, and canonical JSON payload, enqueue returns that existing pending or running job instead of inserting another row. Pending jobs can be cancelled before they start. Active jobs accept cooperative cancellation through their Git, indexing, and snapshot subprocesses, with forced termination after a bounded grace period. Failed, skipped, or cancelled jobs can be retried as new jobs with the same payload. If the API restarts while a job is running, that abandoned job is marked failed on startup so the queue can move forward.
+
+CBM operational telemetry stores aggregate durations, status, graph counts, skipped-file counts, artifact and response sizes, cache and truncation counters, and cgroup peak memory. It never stores source content, queries, tool arguments, or responses. Timeout, cancellation, Unix signal, exit code 137, and cgroup `oom_kill` deltas are distinguished. Code 137, `SIGKILL`, or a new `oom_kill` event is reported as a possible out-of-memory termination rather than asserted as definitive. Operators should compare `memory.peak` across representative small, medium, and large spaces before lowering `MEMOREPO_API_MEMORY_LIMIT`.
 
 Subprocess stdout and stderr capture, unterminated output lines, persisted job-event messages, and retained log-event counts are bounded. MemoRepo preserves recent stream output, emits explicit truncation markers when additional diagnostic output is discarded, records phase timings for clone/index/snapshot pipelines, and attaches stable `MR-*` codes to job-runner failures. Errors handled by the central API application handler include a stable code and request ID for server-log correlation; early HTTP boundary and authentication rejections keep their dedicated response shape.
 
 The space-level check and update job fetches each selected remote branch and compares its remote commit with the commit recorded by MemoRepo. It skips current repository indexes, repairs stale or failed indexes even when the commit is unchanged, and builds one replacement snapshot only when repository or snapshot state requires it. Per-repository reindex remains an explicit forced rebuild operation.
+
+Repository ingestion has two independently reversible rollout switches. `MEMOREPO_BATCH_REPOSITORY_OPERATIONS=true` enables the batch API (up to 50 repositories), while `MEMOREPO_SNAPSHOT_ONLY_INDEXING=true` omits the redundant mutable repository index because every repository is indexed into the immutable snapshot. To roll back indexing behavior without changing stored data, set `MEMOREPO_SNAPSHOT_ONLY_INDEXING=false` and restart the API. The batch endpoint can be disabled separately; the single-repository endpoint remains available.
+
+Each snapshot-only batch creates one clone and checkout chain per repository, exactly one primary snapshot index per repository, and one coalesced snapshot rebuild. The snapshot activates only after every repository dependency succeeds. Run `pnpm --filter @memorepo/api perf:ingestion` to compare the legacy and snapshot-only plans for 1, 3, and 5 repositories under identical scheduler settings. The command fails unless snapshot-only produces exactly one rebuild, one primary index per repository, and at least a 50% reduction in ingestion index operations.
 
 ## MCP Gateway Contract
 
@@ -160,18 +179,23 @@ The MCP gateway is scoped to one space and serves its active snapshot.
 Available tools:
 
 - `list_space_repositories`
+- `snapshot_index_coverage`
+- `list_snapshot_files`
+- `read_snapshot_file`
+- `search_snapshot_text`
 - `list_projects`
 - `index_status`
 - `get_architecture`
 - `get_graph_schema`
 - `search_graph`
-- `semantic_query`
 - `search_code`
 - `trace_path`
 - `get_code_snippet`
 - `query_graph`
 
 The detailed agent-facing contract is documented in [mcp-tools.md](mcp-tools.md).
+
+CBM is the structural discovery accelerator, not the sole source of truth. Exact and exhaustive questions use immutable snapshot text search, and final claims are verified against immutable source reads. An agent must not infer absence from an incomplete, truncated, partially covered, or unpaginated result.
 
 Important limits:
 

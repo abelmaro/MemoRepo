@@ -29,6 +29,12 @@ services:
       MEMOREPO_AGENT_MAX_QUEUED_TURNS: ${MEMOREPO_AGENT_MAX_QUEUED_TURNS:-20}
       MEMOREPO_CBM_INDEX_CONCURRENCY: ${MEMOREPO_CBM_INDEX_CONCURRENCY:-1}
       MEMOREPO_CBM_INTERACTIVE_CONCURRENCY: ${MEMOREPO_CBM_INTERACTIVE_CONCURRENCY:-2}
+      MEMOREPO_ENFORCE_SNAPSHOT_QUALITY: ${MEMOREPO_ENFORCE_SNAPSHOT_QUALITY:-true}
+      MEMOREPO_COMPACT_CBM_RESPONSES: ${MEMOREPO_COMPACT_CBM_RESPONSES:-true}
+      MEMOREPO_BATCH_REPOSITORY_OPERATIONS: ${MEMOREPO_BATCH_REPOSITORY_OPERATIONS:-true}
+      # Snapshot-only is the production rollout default. Set to false for an immediate
+      # rollback to the legacy per-repository mutable index plus snapshot flow.
+      MEMOREPO_SNAPSHOT_ONLY_INDEXING: ${MEMOREPO_SNAPSHOT_ONLY_INDEXING:-true}
       MEMOREPO_PUBLIC_API_URL: http://127.0.0.1:${API_PORT:-8787}
       FRONTEND_ORIGIN: http://127.0.0.1:${WEB_PORT:-5173}
       MEMOREPO_RATE_LIMIT_WINDOW_MS: ${MEMOREPO_RATE_LIMIT_WINDOW_MS:-60000}
@@ -44,6 +50,11 @@ services:
       - memorepo-secrets:/var/lib/memorepo-secrets
     ports:
       - "127.0.0.1:${API_PORT:-8787}:8787"
+    # Bounds CBM indexing failures to the API container. Tune from measured cgroup
+    # peak memory; code 137 and oom_kill events are reported as possible OOMs.
+    mem_limit: ${MEMOREPO_API_MEMORY_LIMIT:-12g}
+    mem_reservation: ${MEMOREPO_API_MEMORY_RESERVATION:-2g}
+    pids_limit: ${MEMOREPO_API_PIDS_LIMIT:-512}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]

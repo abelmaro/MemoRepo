@@ -25,6 +25,7 @@ import {
   type AgentRuntimePort
 } from "../src/services/agentService.js";
 import type { CbmService } from "../src/services/cbmService.js";
+import { inspectCbmV090Capabilities } from "../src/services/cbmV090Capabilities.js";
 import { McpGateway } from "../src/services/mcpGateway.js";
 import { SnapshotQueryService } from "../src/services/snapshotQueryService.js";
 import { SnapshotService } from "../src/services/snapshotService.js";
@@ -178,6 +179,8 @@ test("agent chats stay pinned and persist sanitized tool-backed transcripts", as
     const created = await service.createChat("spc_test");
     assert.equal(created.chat.snapshot.id, "snp_one");
     assert.equal(created.chat.snapshot.version, 1);
+    assert.equal(created.chat.snapshot.quality, "unknown");
+    assert.equal(created.chat.snapshot.repositories?.[0]?.quality, "unknown");
     assert.equal(created.chat.continuable, true);
 
     activateSecondSnapshot(database);
@@ -1010,6 +1013,12 @@ test("interrupt waits for stalled snapshot query cancellation and ignores late r
   const lateResultObserved = deferred<void>();
   const config = testConfig(root);
   const cbm = {
+    async capabilities() {
+      return inspectCbmV090Capabilities("codebase-memory-mcp 0.9.0", [
+        "list_projects", "index_status", "get_architecture", "get_graph_schema", "search_graph",
+        "search_code", "trace_path", "get_code_snippet", "query_graph"
+      ].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })));
+    },
     async listTools() {
       return ["search_code"];
     },
@@ -1092,9 +1101,14 @@ test("interrupt waits for stalled snapshot query cancellation and ignores late r
     assert.equal(afterLateResult.messages[1]?.sources.length, 0);
     assert.equal(afterLateResult.messages[1]?.content, "");
     assert.equal(afterLateResult.chat.activeTurnId, null);
-    assert.equal(
-      database.sqlite.prepare("SELECT COUNT(*) FROM mcp_tool_stats WHERE space_id = ?").pluck().get("spc_test"),
-      0
+    assert.deepEqual(
+      database.sqlite
+        .prepare(
+          "SELECT call_count AS callCount, error_count AS errorCount, total_response_bytes AS responseBytes " +
+            "FROM mcp_tool_stats WHERE space_id = ? AND tool_name = ?"
+        )
+        .get("spc_test", "search_code"),
+      { callCount: 1, errorCount: 1, responseBytes: 0 }
     );
   } finally {
     await service.close();
@@ -1500,14 +1514,65 @@ test("startup marks abandoned snapshot builds as failed and repairs the Space st
   const cbm = { closeSession: async () => undefined } as unknown as CbmService;
 
   try {
-    new SnapshotService(database, config, cbm);
+    const snapshots = new SnapshotService(database, config, cbm);
     const snapshot = database.sqlite
-      .prepare("SELECT status, error FROM space_snapshots WHERE id = 'snp_build_interrupted'")
-      .get() as { status: string; error: string };
+      .prepare("SELECT status, error, manifest_json AS manifestJson FROM space_snapshots WHERE id = 'snp_build_interrupted'")
+      .get() as { status: string; error: string; manifestJson: string };
     assert.equal(snapshot.status, "failed");
     assert.match(snapshot.error, /interrupted by a previous shutdown/);
+    assert.equal((JSON.parse(snapshot.manifestJson) as { quality?: string }).quality, "unknown");
+    assert.throws(
+      () => snapshots.assertAgentTurnCanStart("snp_build_interrupted"),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 409
+    );
     assert.equal(database.sqlite.prepare("SELECT snapshot_status FROM spaces WHERE id = 'spc_build'").pluck().get(), "failed");
     await access(artifactPath);
+  } finally {
+    database.sqlite.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy snapshots project unknown quality without blocking existing chats", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-snapshot-legacy-quality-"));
+  const database = memoryDatabase();
+  const snapshotRoot = path.join(root, "snapshot-indexes");
+  const artifactPath = path.join(snapshotRoot, "snp_legacy_quality");
+  const spaceRoot = path.join(root, "spaces", "legacy-space");
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  await mkdir(artifactPath, { recursive: true });
+  await mkdir(spaceRoot, { recursive: true });
+  database.sqlite
+    .prepare(
+      `INSERT INTO spaces
+        (id, name, slug, root_path, active_snapshot_id, snapshot_status, snapshot_status_updated_at, created_at, updated_at)
+       VALUES ('spc_legacy', 'Legacy', 'legacy', ?, 'snp_legacy_quality', 'active', ?, ?, ?)`
+    )
+    .run(spaceRoot, timestamp, timestamp, timestamp);
+  database.sqlite
+    .prepare(
+      `INSERT INTO space_snapshots
+        (id, space_id, version, status, artifact_path, manifest_json, created_at, activated_at, error, size_bytes)
+       VALUES ('snp_legacy_quality', 'spc_legacy', 1, 'active', ?, ?, ?, ?, NULL, 0)`
+    )
+    .run(artifactPath, JSON.stringify({ repositories: [] }), timestamp, timestamp);
+  const snapshots = new SnapshotService(
+    database,
+    { ...testConfig(root), snapshotIndexesDir: snapshotRoot },
+    { closeSession: async () => undefined } as unknown as CbmService
+  );
+
+  try {
+    assert.doesNotThrow(() => snapshots.assertAgentTurnCanStart("snp_legacy_quality"));
+    assert.equal(snapshots.listSpaceSnapshots("spc_legacy").snapshots[0]?.quality, "unknown");
+
+    database.sqlite
+      .prepare("UPDATE space_snapshots SET manifest_json = ? WHERE id = 'snp_legacy_quality'")
+      .run(JSON.stringify({ quality: "partial", repositories: [] }));
+    assert.throws(
+      () => snapshots.assertAgentTurnCanStart("snp_legacy_quality"),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 409
+    );
   } finally {
     database.sqlite.close();
     await rm(root, { recursive: true, force: true });

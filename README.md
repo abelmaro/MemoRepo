@@ -6,6 +6,8 @@ MemoRepo is a local-first dashboard for building isolated repository spaces, ind
 
 MemoRepo is meant to be run by one developer or one local workstation environment. It manages local clones, builds immutable code graph snapshots, and gives coding agents a narrow MCP interface over those snapshots.
 
+CBM accelerates structural discovery; the immutable snapshot source remains the authority for exact evidence, exhaustive searches, and negative conclusions.
+
 ![MemoRepo dashboard](docs/assets/dashboard.png)
 
 ## Requirements
@@ -93,7 +95,9 @@ Under Docker Compose, managed agent OAuth credentials are stored in the existing
 - Creates isolated repository spaces for agent context.
 - Clones GitHub repositories into MemoRepo-managed local paths.
 - Checks out selected remote branches and records the selected commit.
-- Indexes managed clones with `codebase-memory-mcp`.
+- Indexes exact selected commits into immutable space snapshots with `codebase-memory-mcp`.
+- Searches and reads immutable snapshot text directly when a file is outside CBM coverage or an answer requires exact source verification.
+- Adds repositories in bounded batches with one primary snapshot index per repository and one coalesced rebuild.
 - Checks selected remote branch commits and updates only repositories whose commit or index state changed.
 - Builds immutable per-space snapshots from the selected repositories.
 - Exposes the active snapshot through read-only native `codebase-memory-mcp` tools under a space-scoped MCP gateway.
@@ -137,7 +141,7 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 - Space: an isolated set of repositories exposed to agents as one context.
 - Managed repository: a GitHub repository cloned under `MEMOREPO_HOME` for one space.
 - Job: a background operation such as GitHub sync, clone, checkout, index, or snapshot rebuild.
-- Repository index: the per-repository `codebase-memory-mcp` cache for one selected branch and commit.
+- Repository index: a legacy mutable per-repository CBM cache retained for rollback and maintenance when snapshot-only indexing is disabled.
 - Snapshot: an immutable per-space artifact built from the selected repositories and commits.
 - Active snapshot: the snapshot currently served to MCP clients for a space.
 - Stale snapshot: an older active snapshot that remains usable after repository membership or checkout changes.
@@ -153,7 +157,8 @@ If you need multi-user access, network exposure, or tenant isolation, MemoRepo i
 - `AgentService` owns chat persistence and coordinates the in-process `agent-runtime`; runtime tool callbacks are resolved by `SnapshotQueryService` against the chat's pinned snapshot.
 - Git remotes stay clean HTTPS URLs; the active GitHub credential is supplied ephemerally through `GIT_ASKPASS`.
 - The MCP gateway is read-only and serves the active immutable snapshot for a single space.
-- Native CBM read tools such as `search_graph`, `semantic_query`, `trace_path`, `get_code_snippet`, `get_architecture`, `get_graph_schema`, `search_code`, and `query_graph` are exposed with MemoRepo scope and safety policy. MemoRepo also exposes `list_snapshot_files` for paginated, filtered inventories of regular files in an immutable repository snapshot.
+- Native CBM read tools such as `search_graph`, `trace_path`, `get_code_snippet`, `get_architecture`, `get_graph_schema`, `search_code`, and `query_graph` are exposed with MemoRepo scope and safety policy. MemoRepo-owned `snapshot_index_coverage`, `list_snapshot_files`, `search_snapshot_text`, and `read_snapshot_file` tools report completeness and verify immutable source beyond CBM's indexed-file coverage. Semantic graph search is not advertised for the current `fast` snapshot indexes.
+- Snapshot activation fails closed on incomplete index quality by default, and the dashboard reports engine version, mode, coverage, skips, duration, size, and quality reasons.
 - Multi-repository spaces are served from one CBM snapshot store so CBM can use cross-repo graph intelligence.
 - `query_graph` is available to agents with a maximum of 25 rows and a 10 second timeout.
 - Generated stdio MCP configs use `docker exec` against the stable `memorepo-api` container.

@@ -5,6 +5,7 @@ import type { AppConfig } from "../config.js";
 import { ensureInsideDir } from "../domain/paths.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { redactSensitive } from "../domain/sanitize.js";
+import { assertCbmV090Compatible, type CbmV090Capabilities } from "./cbmV090Capabilities.js";
 import { createSafeProcessEnvironment, runProcess, type ProcessResult } from "./process.js";
 
 const DEFAULT_INTERACTIVE_CBM_CONCURRENCY = 2;
@@ -13,6 +14,8 @@ const MAX_MCP_STDERR_CHARS = 64 * 1024;
 const MAX_MCP_HEADER_BYTES = 16 * 1024;
 const MAX_MCP_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_MCP_BUFFER_BYTES = MAX_MCP_HEADER_BYTES + 6 + MAX_MCP_BODY_BYTES;
+const MAX_MCP_TOOL_PAGES = 16;
+const MAX_MCP_TOOLS = 256;
 
 type CbmMcpProcessFactory = (cacheDir: string) => ChildProcessWithoutNullStreams;
 
@@ -21,6 +24,85 @@ export interface CbmCommandOptions {
   timeoutMs?: number | undefined;
   onOutput?: ((line: string) => void) | undefined;
   signal?: AbortSignal | undefined;
+}
+
+export type CbmIndexMode = "fast" | "moderate" | "full";
+export type CbmIndexStatus = "indexed" | "degraded" | "error" | "skipped" | "unknown";
+export type CbmIndexQuality = "clean" | "partial" | "degraded" | "failed";
+export type CbmIndexVerificationStatus = "ready" | "degraded" | "error" | "skipped" | "unknown";
+export type CbmIndexVerificationQuality = "complete" | "degraded" | "unknown";
+
+export interface CbmIndexSkippedFile {
+  path: string;
+  reason: string;
+  phase: string;
+}
+
+export interface CbmIndexSkippedSummary {
+  files: CbmIndexSkippedFile[];
+  count: number;
+  truncated: boolean;
+}
+
+export interface CbmIndexExcludedSummary {
+  dirs: string[];
+  count: number;
+  truncated: boolean;
+}
+
+export interface CbmIndexRepositoryResult {
+  project?: string;
+  status: CbmIndexStatus;
+  reportedStatus?: string;
+  quality: CbmIndexQuality;
+  skippedCount: number;
+  skipped?: CbmIndexSkippedSummary;
+  excluded?: CbmIndexExcludedSummary;
+  nodes?: number;
+  edges?: number;
+  expectedNodes?: number;
+  expectedEdges?: number;
+  hint?: string;
+  adrPresent?: boolean;
+  adrHint?: string;
+  artifactPresent?: boolean;
+  artifactHint?: string;
+  logfile?: string;
+  outcome?: string;
+  repoPath?: string;
+  indexStatus?: CbmIndexStatusResult;
+}
+
+export interface CbmIndexStatusGitMetadata {
+  isGit?: boolean;
+  isWorktree?: boolean;
+  isDetached?: boolean;
+  rootExists?: boolean;
+  worktreeRoot?: string;
+  gitDir?: string;
+  gitCommonDir?: string;
+  canonicalRoot?: string;
+  branch?: string;
+  branchSlug?: string;
+  headSha?: string;
+  baseSha?: string;
+}
+
+export interface CbmIndexStatusResult {
+  project?: string;
+  status: CbmIndexVerificationStatus;
+  reportedStatus?: string;
+  quality: CbmIndexVerificationQuality;
+  nodes?: number;
+  edges?: number;
+  rootPath?: string;
+  git?: CbmIndexStatusGitMetadata;
+}
+
+export interface CbmCrossRepoLinksResult {
+  project?: string;
+  status?: string;
+  indexStatus: CbmIndexStatusResult;
 }
 
 export function createCbmEnvironment(
@@ -45,6 +127,7 @@ export class CbmService {
   private readonly isolatedPermits: AbortablePermitPool;
   private readonly indexPermits: AbortablePermitPool;
   private readonly immutableCacheConfiguration = new Map<string, Promise<void>>();
+  private runtimeVersion: Promise<string> | null = null;
 
   constructor(
     private readonly config: AppConfig,
@@ -60,6 +143,14 @@ export class CbmService {
   }
 
   async version(): Promise<string> {
+    this.runtimeVersion ??= this.readVersion().catch((error: unknown) => {
+      this.runtimeVersion = null;
+      throw error;
+    });
+    return this.runtimeVersion;
+  }
+
+  private async readVersion(): Promise<string> {
     const result = await this.runCbmProcess({
       command: "codebase-memory-mcp",
       args: ["--version"],
@@ -73,28 +164,80 @@ export class CbmService {
     return (result.stdout || result.stderr).trim();
   }
 
+  async capabilities(cacheDir: string): Promise<CbmV090Capabilities> {
+    const [version, descriptors] = await Promise.all([
+      this.version(),
+      this.listToolDescriptors(cacheDir)
+    ]);
+    return assertCbmV090Compatible(version, descriptors);
+  }
+
   async indexRepository(
     repoPath: string,
     cacheDir: string,
-    mode: "fast" | "moderate" | "full" = "fast",
+    mode: CbmIndexMode = "fast",
     onOutput?: (line: string) => void,
     signal?: AbortSignal
-  ) {
-    const result = await this.cli<{ project?: string; status?: string; nodes?: number; edges?: number }>(
+  ): Promise<CbmIndexRepositoryResult> {
+    const rawResult = await this.cli<unknown>(
       "index_repository",
       { repo_path: repoPath, mode, persistence: false },
       { cacheDir, timeoutMs: 30 * 60_000, onOutput, signal }
     );
-    const project = await this.resolveProjectName(repoPath, cacheDir);
-    return { ...result, project: project ?? result.project };
+    const result = normalizeCbmIndexRepositoryResult(rawResult);
+    const project = await this.resolveProjectName(repoPath, cacheDir) ?? result.project;
+    const indexStatus = project
+      ? await this.indexStatus(project, cacheDir, signal)
+      : normalizeCbmIndexStatusResult({});
+    const quality = combineCbmIndexQuality(result.quality, indexStatus.quality);
+    return {
+      ...result,
+      quality,
+      indexStatus,
+      ...(project ? { project } : {})
+    };
   }
 
-  async buildCrossRepoLinks(repoPath: string, cacheDir: string, onOutput?: (line: string) => void, signal?: AbortSignal) {
-    return this.cli(
+  async buildCrossRepoLinks(
+    repoPath: string,
+    cacheDir: string,
+    onOutput?: (line: string) => void,
+    signal?: AbortSignal
+  ): Promise<CbmCrossRepoLinksResult> {
+    const rawResult = await this.cli<unknown>(
       "index_repository",
       { repo_path: repoPath, mode: "cross-repo-intelligence", target_projects: ["*"] },
       { cacheDir, timeoutMs: 30 * 60_000, onOutput, signal }
     );
+    const result = recordValue(rawResult) ?? {};
+    const project = await this.resolveProjectName(repoPath, cacheDir) ?? normalizedString(result.project);
+    const indexStatus = project
+      ? await this.indexStatus(project, cacheDir, signal)
+      : normalizeCbmIndexStatusResult({});
+    return {
+      ...(normalizedString(result.status) ? { status: normalizedString(result.status)! } : {}),
+      ...(project ? { project } : {}),
+      indexStatus
+    };
+  }
+
+  async indexStatus(project: string, cacheDir: string, signal?: AbortSignal): Promise<CbmIndexStatusResult> {
+    const rawResult = await this.cli<unknown>(
+      "index_status",
+      { project },
+      { cacheDir, timeoutMs: 60_000, signal }
+    );
+    const result = normalizeCbmIndexStatusResult(rawResult);
+    const projectMatches = result.project?.toLocaleLowerCase("en-US") === project.toLocaleLowerCase("en-US");
+    const hasCounts = result.nodes !== undefined && result.edges !== undefined;
+    const rootExists = result.git?.rootExists;
+    if (!projectMatches || !hasCounts) {
+      return { ...result, quality: "unknown" };
+    }
+    if (rootExists === false) {
+      return { ...result, quality: "degraded" };
+    }
+    return result;
   }
 
   async listProjects(cacheDir: string) {
@@ -153,10 +296,15 @@ export class CbmService {
   }
 
   async listTools(cacheDir: string): Promise<string[]> {
+    const tools = await this.listToolDescriptors(cacheDir);
+    return tools.map((tool) => tool.name);
+  }
+
+  async listToolDescriptors(cacheDir: string): Promise<McpToolDescriptor[]> {
     const resolvedCacheDir = ensureInsideDir(this.config.memorepoHome, cacheDir);
     fs.mkdirSync(resolvedCacheDir, { recursive: true });
     await this.ensureImmutableCacheConfiguration(resolvedCacheDir);
-    return this.session(resolvedCacheDir).listTools();
+    return this.session(resolvedCacheDir).listToolDescriptors();
   }
 
   async closeSession(cacheDir: string): Promise<void> {
@@ -277,7 +425,8 @@ export class CbmService {
         result.stderr || result.stdout || `codebase-memory-mcp ${tool} failed`,
         [this.config.memorepoHome]
       );
-      throw new Error(`codebase-memory-mcp ${tool} failed: ${detail}`);
+      const termination = result.signal ? `signal ${result.signal}` : `exit code ${result.exitCode ?? "unknown"}`;
+      throw new Error(`codebase-memory-mcp ${tool} failed (${termination}): ${detail}`);
     }
 
     const stdout = result.stdout.trim();
@@ -365,6 +514,218 @@ function normalizePath(input: string): string {
   return input.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 }
 
+export function normalizeCbmIndexRepositoryResult(value: unknown): CbmIndexRepositoryResult {
+  const result = recordValue(value) ?? {};
+  const reportedStatus = normalizedString(result.status);
+  const status = normalizeCbmIndexStatus(reportedStatus);
+  const skippedSource = recordValue(result.skipped);
+  const skippedFiles = normalizeCbmIndexSkippedFiles(
+    skippedSource?.files ?? result.skipped_files ?? result.skippedFiles ?? (Array.isArray(result.skipped) ? result.skipped : undefined)
+  );
+  const skippedCount = Math.max(
+    normalizedNonNegativeInteger(result.skipped_count) ?? 0,
+    normalizedNonNegativeInteger(result.skippedCount) ?? 0,
+    normalizedNonNegativeInteger(skippedSource?.count) ?? 0,
+    skippedFiles.length
+  );
+  const skipped = skippedCount > 0
+    ? {
+        files: skippedFiles,
+        count: skippedCount,
+        truncated: normalizedBoolean(skippedSource?.truncated) ?? skippedCount > skippedFiles.length
+      }
+    : undefined;
+  const excludedSource = recordValue(result.excluded);
+  const excludedDirs = normalizedStringArray(excludedSource?.dirs);
+  const excludedCount = Math.max(
+    normalizedNonNegativeInteger(excludedSource?.count) ?? 0,
+    excludedDirs.length
+  );
+  const excluded = excludedCount > 0
+    ? {
+        dirs: excludedDirs,
+        count: excludedCount,
+        truncated: normalizedBoolean(excludedSource?.truncated) ?? excludedCount > excludedDirs.length
+      }
+    : undefined;
+  const quality: CbmIndexQuality = status === "degraded"
+    ? "degraded"
+    : status !== "indexed"
+      ? "failed"
+      : skippedCount > 0
+        ? "partial"
+        : "clean";
+
+  return {
+    status,
+    quality,
+    skippedCount,
+    ...(reportedStatus ? { reportedStatus } : {}),
+    ...(normalizedString(result.project) ? { project: normalizedString(result.project)! } : {}),
+    ...(skipped ? { skipped } : {}),
+    ...(excluded ? { excluded } : {}),
+    ...optionalNormalizedNumber("nodes", result.nodes),
+    ...optionalNormalizedNumber("edges", result.edges),
+    ...optionalNormalizedNumber("expectedNodes", result.expected_nodes ?? result.expectedNodes),
+    ...optionalNormalizedNumber("expectedEdges", result.expected_edges ?? result.expectedEdges),
+    ...optionalNormalizedString("hint", result.hint),
+    ...optionalNormalizedBoolean("adrPresent", result.adr_present ?? result.adrPresent),
+    ...optionalNormalizedString("adrHint", result.adr_hint ?? result.adrHint),
+    ...optionalNormalizedBoolean("artifactPresent", result.artifact_present ?? result.artifactPresent),
+    ...optionalNormalizedString("artifactHint", result.artifact_hint ?? result.artifactHint),
+    ...optionalNormalizedString("logfile", result.logfile),
+    ...optionalNormalizedString("outcome", result.outcome),
+    ...optionalNormalizedString("repoPath", result.repo_path ?? result.repoPath)
+  };
+}
+
+export function normalizeCbmIndexStatusResult(value: unknown): CbmIndexStatusResult {
+  const result = recordValue(value) ?? {};
+  const reportedStatus = normalizedString(result.status);
+  const status = normalizeCbmIndexVerificationStatus(reportedStatus);
+  const nodes = normalizedNonNegativeInteger(result.nodes);
+  const edges = normalizedNonNegativeInteger(result.edges);
+  const git = normalizeCbmIndexStatusGit(result.git);
+  const quality: CbmIndexVerificationQuality = status === "ready"
+    ? "complete"
+    : status === "unknown"
+      ? "unknown"
+      : "degraded";
+
+  return {
+    status,
+    quality,
+    ...(reportedStatus ? { reportedStatus } : {}),
+    ...optionalNormalizedString("project", result.project),
+    ...(nodes === undefined ? {} : { nodes }),
+    ...(edges === undefined ? {} : { edges }),
+    ...optionalNormalizedString("rootPath", result.root_path ?? result.rootPath),
+    ...(git ? { git } : {})
+  };
+}
+
+function normalizeCbmIndexVerificationStatus(value: string | undefined): CbmIndexVerificationStatus {
+  switch (value?.toLocaleLowerCase("en-US")) {
+    case "ready":
+    case "indexed":
+    case "complete":
+    case "completed":
+    case "success":
+    case "ok":
+      return "ready";
+    case "degraded":
+      return "degraded";
+    case "failed":
+    case "error":
+      return "error";
+    case "skipped":
+      return "skipped";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeCbmIndexStatusGit(value: unknown): CbmIndexStatusGitMetadata | undefined {
+  const git = recordValue(value);
+  if (!git) return undefined;
+  const normalized = {
+    ...optionalNormalizedBoolean("isGit", git.is_git ?? git.isGit),
+    ...optionalNormalizedBoolean("isWorktree", git.is_worktree ?? git.isWorktree),
+    ...optionalNormalizedBoolean("isDetached", git.is_detached ?? git.isDetached),
+    ...optionalNormalizedBoolean("rootExists", git.root_exists ?? git.rootExists),
+    ...optionalNormalizedString("worktreeRoot", git.worktree_root ?? git.worktreeRoot),
+    ...optionalNormalizedString("gitDir", git.git_dir ?? git.gitDir),
+    ...optionalNormalizedString("gitCommonDir", git.git_common_dir ?? git.gitCommonDir),
+    ...optionalNormalizedString("canonicalRoot", git.canonical_root ?? git.canonicalRoot),
+    ...optionalNormalizedString("branch", git.branch),
+    ...optionalNormalizedString("branchSlug", git.branch_slug ?? git.branchSlug),
+    ...optionalNormalizedString("headSha", git.head_sha ?? git.headSha),
+    ...optionalNormalizedString("baseSha", git.base_sha ?? git.baseSha)
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function combineCbmIndexQuality(
+  primary: CbmIndexQuality,
+  verification: CbmIndexVerificationQuality
+): CbmIndexQuality {
+  if (primary === "degraded" || primary === "failed" || verification === "degraded") return "degraded";
+  if (primary === "partial") return "partial";
+  return verification === "complete" ? "clean" : "failed";
+}
+
+function normalizeCbmIndexStatus(value: string | undefined): CbmIndexStatus {
+  switch (value?.toLocaleLowerCase("en-US")) {
+    case "indexed":
+    case "complete":
+    case "completed":
+    case "success":
+    case "ok":
+      return "indexed";
+    case "degraded":
+      return "degraded";
+    case "error":
+      return "error";
+    case "skipped":
+      return "skipped";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeCbmIndexSkippedFiles(value: unknown): CbmIndexSkippedFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    const item = recordValue(candidate);
+    if (!item) return [];
+    return [{
+      path: normalizedString(item.path) ?? "",
+      reason: normalizedString(item.reason) ?? "",
+      phase: normalizedString(item.phase) ?? ""
+    }];
+  });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function normalizedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizedStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.flatMap((item) => {
+    const normalized = normalizedString(item);
+    return normalized ? [normalized] : [];
+  }) : [];
+}
+
+function normalizedNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function normalizedBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalNormalizedString<Key extends string>(key: Key, value: unknown): Partial<Record<Key, string>> {
+  const normalized = normalizedString(value);
+  return normalized ? { [key]: normalized } as Record<Key, string> : {};
+}
+
+function optionalNormalizedNumber<Key extends string>(key: Key, value: unknown): Partial<Record<Key, number>> {
+  const normalized = normalizedNonNegativeInteger(value);
+  return normalized === undefined ? {} : { [key]: normalized } as Record<Key, number>;
+}
+
+function optionalNormalizedBoolean<Key extends string>(key: Key, value: unknown): Partial<Record<Key, boolean>> {
+  const normalized = normalizedBoolean(value);
+  return normalized === undefined ? {} : { [key]: normalized } as Record<Key, boolean>;
+}
+
 class CbmMcpSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest>();
@@ -372,7 +733,7 @@ class CbmMcpSession {
   private buffer = Buffer.alloc(0);
   private nextId = 1;
   private stderr = "";
-  private toolNames: Promise<string[]> | null = null;
+  private toolDescriptors: Promise<McpToolDescriptor[]> | null = null;
   private closing: Promise<void> | null = null;
   closed = false;
 
@@ -415,11 +776,59 @@ class CbmMcpSession {
   }
 
   async listTools(): Promise<string[]> {
+    const tools = await this.listToolDescriptors();
+    return tools.map((tool) => tool.name);
+  }
+
+  async listToolDescriptors(): Promise<McpToolDescriptor[]> {
     await this.ready;
-    this.toolNames ??= this.request<McpToolsListResult>("tools/list", {}, 10_000).then((response) =>
-      (response.tools ?? []).flatMap((candidate) => typeof candidate.name === "string" ? [candidate.name] : [])
-    );
-    return this.toolNames;
+    this.toolDescriptors ??= this.fetchToolDescriptors();
+    return this.toolDescriptors;
+  }
+
+  private async fetchToolDescriptors(): Promise<McpToolDescriptor[]> {
+    const tools = new Map<string, McpToolDescriptor>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let candidateCount = 0;
+
+    for (let page = 0; page < MAX_MCP_TOOL_PAGES; page += 1) {
+      const rawResponse = await this.request<unknown>(
+        "tools/list",
+        cursor === undefined ? {} : { cursor },
+        10_000
+      );
+      if (!rawResponse || typeof rawResponse !== "object" || Array.isArray(rawResponse)) {
+        throw new Error("codebase-memory-mcp tools/list returned an invalid result");
+      }
+      const response = rawResponse as McpToolsListResult;
+      if (response.tools !== undefined && !Array.isArray(response.tools)) {
+        throw new Error("codebase-memory-mcp tools/list returned an invalid tools collection");
+      }
+
+      for (const candidate of response.tools ?? []) {
+        candidateCount += 1;
+        if (candidateCount > MAX_MCP_TOOLS) {
+          throw new Error(`codebase-memory-mcp tools/list exceeded ${MAX_MCP_TOOLS} tools`);
+        }
+        const descriptor = normalizeMcpToolDescriptor(candidate);
+        if (descriptor && !tools.has(descriptor.name)) tools.set(descriptor.name, descriptor);
+      }
+
+      if (response.nextCursor === undefined) {
+        return Array.from(tools.values());
+      }
+      if (typeof response.nextCursor !== "string" || response.nextCursor.length === 0) {
+        throw new Error("codebase-memory-mcp tools/list returned an invalid nextCursor");
+      }
+      if (seenCursors.has(response.nextCursor)) {
+        throw new Error("codebase-memory-mcp tools/list returned a repeated nextCursor");
+      }
+      seenCursors.add(response.nextCursor);
+      cursor = response.nextCursor;
+    }
+
+    throw new Error(`codebase-memory-mcp tools/list exceeded ${MAX_MCP_TOOL_PAGES} pages`);
   }
 
   close(): Promise<void> {
@@ -771,8 +1180,15 @@ export interface McpToolCallResult {
   isError?: boolean;
 }
 
+export interface McpToolDescriptor {
+  name: string;
+  description?: string | undefined;
+  inputSchema?: Record<string, unknown> | undefined;
+}
+
 interface McpToolsListResult {
-  tools?: Array<{ name?: unknown }>;
+  tools?: unknown;
+  nextCursor?: unknown;
 }
 
 interface JsonRpcMessage {
@@ -786,6 +1202,19 @@ export class CbmToolExecutionError extends Error {
     super(message);
     this.name = "CbmToolExecutionError";
   }
+}
+
+function normalizeMcpToolDescriptor(candidate: unknown): McpToolDescriptor | null {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const value = candidate as Record<string, unknown>;
+  if (typeof value.name !== "string" || value.name.length === 0) return null;
+
+  const descriptor: McpToolDescriptor = { name: value.name };
+  if (typeof value.description === "string") descriptor.description = value.description;
+  if (value.inputSchema && typeof value.inputSchema === "object" && !Array.isArray(value.inputSchema)) {
+    descriptor.inputSchema = value.inputSchema as Record<string, unknown>;
+  }
+  return descriptor;
 }
 
 export function parseCbmToolResult<T>(tool: string, response: McpToolCallResult): T {
