@@ -29,7 +29,7 @@ export function App() {
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
-  const [askSpaceOpen, setAskSpaceOpen] = useState(false);
+  const [askSpaceOpenBySpace, setAskSpaceOpenBySpace] = useState<Record<string, boolean>>({});
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [repoKindFilter, setRepoKindFilter] = useState<RepositoryKindFilter>("all");
@@ -53,6 +53,7 @@ export function App() {
     }
     return spaces[0] ?? null;
   }, [selectedSpaceId, spacesQuery.data?.spaces]);
+  const askSpaceOpen = selectedSpace ? (askSpaceOpenBySpace[selectedSpace.id] ?? false) : false;
 
   const spaceDetailQuery = useQuery({
     queryKey: ["space", selectedSpace?.id],
@@ -125,7 +126,13 @@ export function App() {
     setRepoSearch("");
     setRepoKindFilter("all");
     setManagementView(null);
-    setAskSpaceOpen(false);
+  }
+
+  function setAskSpaceOpen(open: boolean) {
+    if (!selectedSpace) {
+      return;
+    }
+    setAskSpaceOpenBySpace((current) => ({ ...current, [selectedSpace.id]: open }));
   }
 
   function checkForUpdates() {
@@ -454,10 +461,14 @@ export function App() {
                           void queryClient.invalidateQueries({ queryKey: ["jobs"] });
                         }}
                         onDeleted={() => {
+                          setAskSpaceOpenBySpace((current) => {
+                            const next = { ...current };
+                            delete next[selectedSpace.id];
+                            return next;
+                          });
                           setSelectedSpaceId(null);
                           setAddRepoOpen(false);
                           setMcpOpen(false);
-                          setAskSpaceOpen(false);
                           setManagementView(null);
                           void queryClient.invalidateQueries({ queryKey: ["spaces"] });
                           void queryClient.invalidateQueries({ queryKey: ["jobs"] });

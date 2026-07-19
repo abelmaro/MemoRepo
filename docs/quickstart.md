@@ -130,7 +130,7 @@ After a space has an active snapshot, open **Ask this Space**, choose a provider
 
 The connection button remains disabled until you accept the data disclosure. Questions, chat history, snapshot query results, and relevant code excerpts are sent to the selected provider for inference. Repository-access credentials and the MemoRepo control token are not included in model prompts or tool request/result payloads.
 
-The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or running answer is active. Open **Advanced** to change verbosity or reasoning effort when the selected model supports them; unsupported controls are omitted. Dashboard changes last until the API restarts. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
+The initial provider and model come from `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`; the supplied `.env.example` selects Pi's `openai-codex` provider and GPT-5.4. The dashboard can switch among OAuth-capable entries from the bundled Pi catalog while no login or running answer is active. Open **Advanced** to change verbosity or reasoning effort when the selected model supports them; unsupported controls are omitted. MemoRepo stores the global provider, model, verbosity, and reasoning-effort selection in SQLite and restores it after API restarts. If a saved selection is no longer available in the current catalog, the configured initial selection is restored. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are not. Managed OAuth credentials are stored in the private `memorepo-secrets` volume.
 
 Ask the question directly; there is no research-mode selector. The agent chooses the investigation depth from the question and available evidence, stops naturally when the answer is supported, and reserves part of its budget to synthesize a response. `MEMOREPO_AGENT_MAX_RUN_SECONDS`, `MEMOREPO_AGENT_MAX_TOOL_CALLS`, and `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS` are high internal safety ceilings rather than user-facing quality modes. The defaults are 1,800 seconds, 200 tool calls, and 50 provider rounds.
 
@@ -153,6 +153,7 @@ For the full tool contract, see [mcp-tools.md](mcp-tools.md).
 When using the MCP server from an agent:
 
 - start with `list_space_repositories` or `list_projects`;
+- use `list_snapshot_files` with an explicit project for file inventories or path and extension existence questions;
 - use `get_graph_schema` before custom Cypher;
 - search with `search_graph`, `semantic_query`, or `search_code`;
 - use `trace_path` and `get_code_snippet` after graph or semantic search;

@@ -198,6 +198,109 @@ test("cached snapshot manifests are revalidated after the sources root becomes a
   }
 });
 
+test("snapshot file inventory lists the captured tree with project scope, filters, and pagination", async () => {
+  const fixture = createGatewayFixture();
+
+  try {
+    const definitions = await fixture.gateway.toolDefinitionsForSnapshot("spc_gateway", "snp_gateway");
+    const definition = definitions.find((candidate) => candidate.name === "list_snapshot_files");
+    assert.ok(definition);
+    assert.deepEqual((definition.inputSchema as { required?: string[] }).required, ["project"]);
+    assert.match(
+      await fixture.gateway.instructionsForSnapshot("spc_gateway", "snp_gateway"),
+      /use list_snapshot_files for file inventories/
+    );
+
+    const firstPage = await fixture.gateway.callSnapshotTool(
+      "spc_gateway",
+      "snp_gateway",
+      "list_snapshot_files",
+      { project: "pinned-project", limit: 2 }
+    ) as { files: string[]; total: number; returned: number; has_more: boolean; next_offset?: number };
+    assert.deepEqual(firstPage.files, ["README.md", "assets/css/estilos.css"]);
+    assert.equal(firstPage.total, 3);
+    assert.equal(firstPage.returned, 2);
+    assert.equal(firstPage.has_more, true);
+    assert.equal(firstPage.next_offset, 2);
+
+    const secondPage = await fixture.gateway.callSnapshotTool(
+      "spc_gateway",
+      "snp_gateway",
+      "list_snapshot_files",
+      { project: "example/pinned-repository", limit: 2, offset: 2 }
+    ) as { files: string[]; has_more: boolean };
+    assert.deepEqual(secondPage.files, ["index.html"]);
+    assert.equal(secondPage.has_more, false);
+
+    const cssFiles = await fixture.gateway.callSnapshotTool(
+      "spc_gateway",
+      "snp_gateway",
+      "list_snapshot_files",
+      { project: "pinned-project", path_prefix: "assets", glob: "**/*.css" }
+    ) as { files: string[]; repository: string; project: string };
+    assert.deepEqual(cssFiles.files, ["assets/css/estilos.css"]);
+    assert.equal(cssFiles.repository, "example/pinned-repository");
+    assert.equal(cssFiles.project, "pinned-project");
+    assert.doesNotMatch(JSON.stringify(cssFiles), new RegExp(escapeRegExp(fixture.snapshotSourcePath)));
+    assert.equal(fixture.cbmToolCalls.length, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("snapshot file inventory rejects unscoped, external, and traversal requests", async () => {
+  const fixture = createGatewayFixture();
+
+  try {
+    await assert.rejects(
+      () => fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "list_snapshot_files", {}),
+      /list_snapshot_files project must be a non-empty string/
+    );
+    await assert.rejects(
+      () => fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "list_snapshot_files", { project: "other-project" }),
+      /project is outside this space snapshot/
+    );
+    await assert.rejects(
+      () => fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "list_snapshot_files", {
+        project: "pinned-project",
+        path_prefix: "../outside"
+      }),
+      /must not contain.*parent-directory/
+    );
+    await assert.rejects(
+      () => fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "list_snapshot_files", {
+        project: "pinned-project",
+        glob: "C:\\**\\*.css"
+      }),
+      /glob must be relative/
+    );
+    assert.equal(fixture.cbmToolCalls.length, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("CSS search results from CBM remain visible alongside snapshot inventory", async () => {
+  const fixture = createGatewayFixture();
+
+  try {
+    const response = await fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "search_code", {
+      project: "pinned-project",
+      pattern: "rebeccapurple"
+    });
+    const serialized = JSON.stringify(response);
+    assert.match(serialized, /assets\/css\/estilos\.css/);
+    assert.match(serialized, /rebeccapurple/);
+    assert.doesNotMatch(serialized, new RegExp(escapeRegExp(fixture.snapshotSourcePath)));
+    assert.deepEqual(fixture.cbmToolCalls, [{
+      toolName: "search_code",
+      input: { project: "pinned-project", pattern: "rebeccapurple", limit: 11 }
+    }]);
+  } finally {
+    fixture.close();
+  }
+});
+
 const TEST_TIME = "2026-01-01T00:00:00.000Z";
 
 function createGatewayFixture() {
@@ -206,6 +309,10 @@ function createGatewayFixture() {
   const snapshotSourcePath = path.join(artifactPath, "sources", "pinned-repository");
   const liveRepositoryPath = path.join(root, "spaces", "gateway-space", "pinned-repository");
   fs.mkdirSync(snapshotSourcePath, { recursive: true });
+  fs.mkdirSync(path.join(snapshotSourcePath, "assets", "css"), { recursive: true });
+  fs.writeFileSync(path.join(snapshotSourcePath, "README.md"), "# Pinned repository\n", "utf8");
+  fs.writeFileSync(path.join(snapshotSourcePath, "index.html"), "<link rel=\"stylesheet\" href=\"assets/css/estilos.css\">\n", "utf8");
+  fs.writeFileSync(path.join(snapshotSourcePath, "assets", "css", "estilos.css"), "body { color: rebeccapurple; }\n", "utf8");
   fs.mkdirSync(liveRepositoryPath, { recursive: true });
   fs.mkdirSync(path.join(root, "indexes", "c"), { recursive: true });
   const sqlite = new Database(":memory:");
@@ -220,6 +327,14 @@ function createGatewayFixture() {
     },
     async tool(toolName: string, input: Record<string, unknown>) {
       cbmToolCalls.push({ toolName, input });
+      if (toolName === "search_code" && input.pattern === "rebeccapurple") {
+        return {
+          results: [{
+            file_path: path.join(snapshotSourcePath, "assets", "css", "estilos.css"),
+            snippet: "body { color: rebeccapurple; }"
+          }]
+        };
+      }
       return { results: [] };
     }
   } as unknown as CbmService;
@@ -374,4 +489,8 @@ function isLegacySnapshotError(error: unknown): boolean {
   return error instanceof Error
     && error.message === "Rebuild this snapshot before using immutable code queries"
     && (error as Error & { statusCode?: number }).statusCode === 409;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

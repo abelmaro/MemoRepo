@@ -1,7 +1,9 @@
 import type {
   AgentLoginAttempt,
+  AgentModelCatalog,
   AgentProviderStatus,
   AgentRunInput,
+  AgentRunSettings,
   AgentToolResult,
   JsonValue
 } from "@memorepo/agent-runtime";
@@ -17,12 +19,146 @@ import type { AppConfig } from "../src/config.js";
 import type { AppDatabase } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
 import { schema } from "../src/db/schema.js";
-import { AgentService, type AgentRuntimePort } from "../src/services/agentService.js";
+import {
+  AgentService,
+  type AgentModelSelectionPort,
+  type AgentRuntimePort
+} from "../src/services/agentService.js";
 import type { CbmService } from "../src/services/cbmService.js";
 import { McpGateway } from "../src/services/mcpGateway.js";
 import { SnapshotQueryService } from "../src/services/snapshotQueryService.js";
 import { SnapshotService } from "../src/services/snapshotService.js";
 import { SpaceService } from "../src/services/spaceService.js";
+
+test("agent model selection persists globally across service restarts", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-agent-model-"));
+  const databasePath = path.join(root, "memorepo.sqlite");
+  const database = openTestDatabase(databasePath);
+  const firstSelection = new FakeModelSelection();
+  const firstService = new AgentService(
+    database,
+    testConfig(),
+    new FakeAgentRuntime(),
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([]),
+    firstSelection
+  );
+  let secondService: AgentService | null = null;
+  let secondDatabase: AppDatabase | null = null;
+
+  try {
+    const selected = firstService.selectModel("provider-two", "model-two", {
+      effort: "high",
+      verbosity: "low"
+    });
+    assert.deepEqual(selected.selected, {
+      providerId: "provider-two",
+      modelId: "model-two",
+      settings: { effort: "high", verbosity: "low" }
+    });
+    assert.deepEqual(
+      database.sqlite
+        .prepare(
+          "SELECT provider_id, model_id, effort, verbosity FROM agent_model_preferences WHERE id = 1"
+        )
+        .get(),
+      { provider_id: "provider-two", model_id: "model-two", effort: "high", verbosity: "low" }
+    );
+
+    await firstService.close();
+    database.sqlite.close();
+    secondDatabase = openTestDatabase(databasePath);
+    const secondSelection = new FakeModelSelection();
+    secondService = new AgentService(
+      secondDatabase,
+      testConfig(),
+      new FakeAgentRuntime(),
+      snapshotQueries({ definitions: [], calls: [] }),
+      snapshotGuard([]),
+      secondSelection
+    );
+    assert.deepEqual(secondService.modelCatalog().selected, selected.selected);
+  } finally {
+    await secondService?.close();
+    await firstService.close();
+    if (secondDatabase?.sqlite.open) secondDatabase.sqlite.close();
+    if (database.sqlite.open) database.sqlite.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid saved model selection falls back to the configured catalog selection", async () => {
+  const database = memoryDatabase();
+  database.sqlite
+    .prepare(
+      `INSERT INTO agent_model_preferences
+        (id, provider_id, model_id, effort, verbosity, updated_at)
+       VALUES (1, 'removed-provider', 'removed-model', 'high', 'low', ?)`
+    )
+    .run(new Date().toISOString());
+  const service = new AgentService(
+    database,
+    testConfig(),
+    new FakeAgentRuntime(),
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([]),
+    new FakeModelSelection()
+  );
+
+  try {
+    assert.deepEqual(service.modelCatalog().selected, {
+      providerId: "test-provider",
+      modelId: "test-model",
+      settings: { effort: "medium", verbosity: "medium" }
+    });
+    assert.deepEqual(
+      database.sqlite
+        .prepare(
+          "SELECT provider_id, model_id, effort, verbosity FROM agent_model_preferences WHERE id = 1"
+        )
+        .get(),
+      {
+        provider_id: "test-provider",
+        model_id: "test-model",
+        effort: "medium",
+        verbosity: "medium"
+      }
+    );
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
+
+test("saved settings that are no longer supported fall back safely", async () => {
+  const database = memoryDatabase();
+  database.sqlite
+    .prepare(
+      `INSERT INTO agent_model_preferences
+        (id, provider_id, model_id, effort, verbosity, updated_at)
+       VALUES (1, 'provider-two', 'model-two', 'max', 'low', ?)`
+    )
+    .run(new Date().toISOString());
+  const service = new AgentService(
+    database,
+    testConfig(),
+    new FakeAgentRuntime(),
+    snapshotQueries({ definitions: [], calls: [] }),
+    snapshotGuard([]),
+    new FakeModelSelection()
+  );
+
+  try {
+    assert.deepEqual(service.modelCatalog().selected, {
+      providerId: "test-provider",
+      modelId: "test-model",
+      settings: { effort: "medium", verbosity: "medium" }
+    });
+  } finally {
+    await service.close();
+    database.sqlite.close();
+  }
+});
 
 test("agent chats stay pinned and persist sanitized tool-backed transcripts", async () => {
   const database = memoryDatabase();
@@ -1384,6 +1520,75 @@ interface FakeRun {
   finished: boolean;
 }
 
+class FakeModelSelection implements AgentModelSelectionPort {
+  private selected = {
+    providerId: "test-provider",
+    modelId: "test-model",
+    settings: { effort: "medium", verbosity: "medium" } as AgentRunSettings
+  };
+
+  catalog(): AgentModelCatalog {
+    return {
+      providers: [
+        {
+          id: "test-provider",
+          name: "Test Provider",
+          models: [
+            {
+              id: "test-model",
+              name: "Test Model",
+              capabilities: {
+                effort: { options: ["low", "medium", "high"], default: "medium" },
+                verbosity: { options: ["low", "medium", "high"], default: "medium" }
+              }
+            }
+          ]
+        },
+        {
+          id: "provider-two",
+          name: "Provider Two",
+          models: [
+            {
+              id: "model-two",
+              name: "Model Two",
+              capabilities: {
+                effort: { options: ["low", "medium", "high"], default: "medium" },
+                verbosity: { options: ["low", "medium", "high"], default: "medium" }
+              }
+            }
+          ]
+        }
+      ],
+      selected: {
+        providerId: this.selected.providerId,
+        modelId: this.selected.modelId,
+        settings: { ...this.selected.settings }
+      }
+    };
+  }
+
+  selectModel(providerId: string, modelId: string, settings?: AgentRunSettings): void {
+    const model = this.catalog()
+      .providers.find((provider) => provider.id === providerId)
+      ?.models.find((candidate) => candidate.id === modelId);
+    if (!model) throw new Error("Model is unavailable");
+    if (settings?.effort && !model.capabilities.effort?.options.includes(settings.effort)) {
+      throw new Error("Effort is unsupported");
+    }
+    if (settings?.verbosity && !model.capabilities.verbosity?.options.includes(settings.verbosity)) {
+      throw new Error("Verbosity is unsupported");
+    }
+    this.selected = {
+      providerId,
+      modelId,
+      settings: {
+        effort: settings?.effort ?? model.capabilities.effort?.default,
+        verbosity: settings?.verbosity ?? model.capabilities.verbosity?.default
+      }
+    };
+  }
+}
+
 class FakeAgentRuntime implements AgentRuntimePort {
   connected = true;
   available = true;
@@ -1667,7 +1872,11 @@ function snapshotGuard(calls: string[] = []): Pick<SnapshotService, "assertAgent
 }
 
 function memoryDatabase(): AppDatabase {
-  const sqlite = new Database(":memory:");
+  return openTestDatabase(":memory:");
+}
+
+function openTestDatabase(databasePath: string): AppDatabase {
+  const sqlite = new Database(databasePath);
   migrate(sqlite);
   return { sqlite, db: drizzle(sqlite, { schema }) };
 }

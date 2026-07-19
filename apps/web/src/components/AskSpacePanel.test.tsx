@@ -405,6 +405,23 @@ it("streams an answer into the persistent assistant message", async () => {
   await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
   const onEvent = (subscribeMock.mock.calls as unknown as Array<[string, (event: unknown) => void]>)[0]?.[1];
   if (!onEvent) throw new Error("Agent stream callback was not registered");
+  const messageList = document.querySelector<HTMLElement>(".ask-space-messages");
+  if (!messageList) throw new Error("Message list was not rendered");
+  Object.defineProperties(messageList, {
+    scrollHeight: { configurable: true, value: 1_000 },
+    clientHeight: { configurable: true, value: 200 }
+  });
+  messageList.scrollTop = 100;
+  fireEvent.scroll(messageList);
+  onEvent({ type: "turn.started", turnId: "turn_1", turn: {
+    id: "turn_1", chatId: chat.id, userMessageId: "message_user", assistantMessageId: "message_assistant",
+    status: "running", error: null, createdAt: chat.createdAt, startedAt: chat.createdAt, finishedAt: null
+  } });
+  expect(await screen.findByText("Planning the investigation…")).toBeTruthy();
+  onEvent({ type: "tool.started", turnId: "turn_1", tool: "search_code" });
+  expect(await screen.findByText("Searching the snapshot…")).toBeTruthy();
+  onEvent({ type: "tool.completed", turnId: "turn_1", tool: "search_code", success: true, sources: [] });
+  expect(await screen.findByText("Snapshot search completed; reviewing the results…")).toBeTruthy();
   const partial = "The flow starts";
   onEvent({
     type: "state",
@@ -417,9 +434,43 @@ it("streams an answer into the persistent assistant message", async () => {
       sources: [], error: null, createdAt: chat.createdAt, completedAt: null
     }
   });
+  expect(await screen.findByRole("button", { name: "Latest answer" })).toBeTruthy();
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: partial.length, delta: " here." });
   onEvent({ type: "assistant.delta", turnId: "turn_1", messageId: "message_assistant", offset: 0, delta: partial });
   expect(await screen.findByText("The flow starts here.")).toBeTruthy();
+  expect(screen.getByText("Writing the answer…")).toBeTruthy();
+});
+
+it("copies completed assistant answers as plain text or Markdown", async () => {
+  const chat = { ...chatFixture("chat_copy", "Copyable answer"), messageCount: 2 };
+  const markdown = "## Result\n\nUse **the snapshot** and `[source](https://example.com)`.";
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  apiMock.mockImplementation((path: string) => {
+    if (path === "/api/agent/models") return Promise.resolve(modelCatalog("provider-a", "Provider A", "model-a", "Model A"));
+    if (path === "/api/agent/status") return Promise.resolve(connectedStatus());
+    if (path === "/api/agent/spaces/space_1/chats?includeArchived=true") return Promise.resolve({ chats: [chat] });
+    if (path === "/api/agent/spaces/space_1/chats/chat_copy") {
+      return Promise.resolve({
+        chat,
+        messages: [
+          { id: "user", sequence: 1, role: "user", status: "completed", content: "Explain", sources: [], error: null, createdAt: chat.createdAt, completedAt: chat.createdAt },
+          { id: "assistant", sequence: 2, role: "assistant", status: "completed", content: markdown, sources: [], error: null, createdAt: chat.createdAt, completedAt: chat.createdAt }
+        ],
+        turns: []
+      });
+    }
+    throw new Error(`Unexpected API request: ${path}`);
+  });
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole("button", { name: /Copyable answer/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Copy answer as plain text" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("Result\n\nUse the snapshot and source."));
+
+  fireEvent.click(screen.getByLabelText("Copy options"));
+  fireEvent.click(screen.getByRole("button", { name: "Copy Markdown" }));
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(markdown));
 });
 
 it("shows queue capacity and lets a queued answer be cancelled", async () => {

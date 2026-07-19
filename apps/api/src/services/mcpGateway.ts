@@ -25,6 +25,8 @@ const QUERY_GRAPH_MAX_OFFSET = ENGINE_RESULT_WINDOW - 1;
 const QUERY_GRAPH_TIMEOUT_MS = 10_000;
 const MCP_RESPONSE_MAX_BYTES = 50_000;
 const SEARCH_RESULT_MAX_LIMIT = SNAPSHOT_SEARCH_RESULT_MAX;
+const SNAPSHOT_FILE_LIST_DEFAULT_LIMIT = 100;
+const SNAPSHOT_FILE_LIST_MAX_LIMIT = 100;
 const SEARCH_CODE_SCOPED_MAX_OFFSET = ENGINE_RESULT_WINDOW - 1;
 const GLOBAL_SEARCH_CODE_CANDIDATE_TARGET = ENGINE_RESULT_WINDOW - 1;
 const LAST_USED_WRITE_INTERVAL_MS = 60_000;
@@ -309,6 +311,8 @@ export class McpGateway {
           }),
           space: { name: space.name, slug: space.slug, snapshotStatus: space.snapshotStatus }
         };
+      case "list_snapshot_files":
+        return this.listSnapshotFiles(space, snapshot, manifest, args);
       case "query_graph":
         return this.queryGraph(space, snapshot, manifest, args);
       default:
@@ -1131,8 +1135,54 @@ export class McpGateway {
     const declared = this.tools().filter((candidate) => !MUTABLE_SNAPSHOT_TOOLS.has(candidate.name));
     const native = new Set(await this.cbm.listTools(snapshot?.artifactPath ?? this.config.memorepoHome));
     return declared.filter((candidate) =>
-      candidate.name === "list_space_repositories" || (candidate.name === "query_graph" ? native.has("query_graph") : native.has(candidate.name))
+      candidate.name === "list_space_repositories"
+      || candidate.name === "list_snapshot_files"
+      || (candidate.name === "query_graph" ? native.has("query_graph") : native.has(candidate.name))
     );
+  }
+
+  private listSnapshotFiles(
+    space: SpaceRow,
+    snapshot: SnapshotRow,
+    manifest: SnapshotManifest,
+    args: Record<string, unknown>
+  ): Record<string, unknown> {
+    const requestedProject = requiredNonEmptyString(args.project, "list_snapshot_files project");
+    const repository = manifest.repositories.find(
+      (candidate) => candidate.projectName === requestedProject || candidate.fullName === requestedProject
+    );
+    if (!repository) {
+      throw new Error("list_snapshot_files project is outside this space snapshot");
+    }
+
+    const pathPrefix = normalizeSnapshotRelativeFilter(optionalString(args.path_prefix), "list_snapshot_files path_prefix");
+    const glob = optionalString(args.glob);
+    const globPattern = glob ? compileSnapshotGlob(validateSearchText(glob, "list_snapshot_files glob")) : undefined;
+    const offset = optionalNonNegativeInteger(args.offset, 0, "list_snapshot_files offset");
+    const limit = optionalBoundedInteger(
+      args.limit,
+      "list_snapshot_files limit",
+      1,
+      SNAPSHOT_FILE_LIST_MAX_LIMIT
+    ) ?? SNAPSHOT_FILE_LIST_DEFAULT_LIMIT;
+    const signal = this.snapshotToolContext.getStore()?.signal;
+    const files = snapshotFilePaths(repository.localPath, signal)
+      .filter((relativePath) => !pathPrefix || relativePath === pathPrefix || relativePath.startsWith(`${pathPrefix}/`))
+      .filter((relativePath) => !globPattern || globPattern.test(relativePath));
+    const page = files.slice(offset, offset + limit);
+    const hasMore = offset + page.length < files.length;
+
+    return this.withSnapshotMeta(space, snapshot, manifest, {
+      project: repository.projectName,
+      repository: repository.fullName,
+      files: page,
+      offset,
+      effective_limit: limit,
+      returned: page.length,
+      total: files.length,
+      has_more: hasMore,
+      ...(hasMore ? { next_offset: offset + page.length } : {})
+    });
   }
 
   private async tracePath(
@@ -1383,6 +1433,17 @@ export class McpGateway {
     if (toolName === "search_graph" || toolName === "search_code" || toolName === "semantic_query") {
       optionalBoundedInteger(args.limit, `${toolName} limit`, 1);
     }
+    if (toolName === "list_snapshot_files") {
+      requiredNonEmptyString(args.project, "list_snapshot_files project");
+      optionalBoundedInteger(args.limit, "list_snapshot_files limit", 1, SNAPSHOT_FILE_LIST_MAX_LIMIT);
+      optionalNonNegativeInteger(args.offset, 0, "list_snapshot_files offset");
+      if (args.path_prefix !== undefined) {
+        normalizeSnapshotRelativeFilter(requiredNonEmptyString(args.path_prefix, "list_snapshot_files path_prefix"), "list_snapshot_files path_prefix");
+      }
+      if (args.glob !== undefined) {
+        compileSnapshotGlob(validateSearchText(requiredNonEmptyString(args.glob, "list_snapshot_files glob"), "list_snapshot_files glob"));
+      }
+    }
     if (toolName === "search_code") {
       validateSearchText(requiredNonEmptyString(args.pattern, "search_code pattern"), "search_code pattern");
       optionalBoundedInteger(
@@ -1475,6 +1536,21 @@ export class McpGateway {
           properties: {
             include_branches: { type: "boolean" },
             include_details: { type: "boolean" }
+          }
+        }
+      ),
+      tool(
+        "list_snapshot_files",
+        "List regular files captured in one repository's immutable snapshot tree. Use this for file inventories and extension/path existence questions; results contain relative paths only and support prefix/glob filtering plus offset pagination.",
+        {
+          type: "object",
+          required: ["project"],
+          properties: {
+            project: { type: "string" },
+            path_prefix: { type: "string" },
+            glob: { type: "string" },
+            limit: { type: "integer", minimum: 1, maximum: SNAPSHOT_FILE_LIST_MAX_LIMIT },
+            offset: { type: "integer", minimum: 0 }
           }
         }
       ),
@@ -2932,6 +3008,86 @@ function isDirectory(target: string): boolean {
   } catch {
     return false;
   }
+}
+
+function snapshotFilePaths(repositoryRoot: string, signal?: AbortSignal): string[] {
+  const root = fs.realpathSync(repositoryRoot);
+  const files: string[] = [];
+  const pending: Array<{ absolutePath: string; relativePath: string }> = [{ absolutePath: root, relativePath: "" }];
+
+  while (pending.length > 0) {
+    throwIfAborted(signal);
+    const current = pending.pop()!;
+    const entries = fs.readdirSync(current.absolutePath, { withFileTypes: true });
+    for (const entry of entries) {
+      throwIfAborted(signal);
+      const absolutePath = path.join(current.absolutePath, entry.name);
+      const relativePath = current.relativePath ? `${current.relativePath}/${entry.name}` : entry.name;
+      const stats = fs.lstatSync(absolutePath);
+      if (stats.isSymbolicLink()) {
+        throw legacySnapshotError();
+      }
+      const realPath = fs.realpathSync(absolutePath);
+      if (!isStrictlyInside(root, realPath)) {
+        throw legacySnapshotError();
+      }
+      if (stats.isDirectory()) {
+        pending.push({ absolutePath, relativePath });
+      } else if (stats.isFile()) {
+        files.push(relativePath);
+      }
+    }
+  }
+
+  return files.sort(compareSnapshotPaths);
+}
+
+function compareSnapshotPaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function normalizeSnapshotRelativeFilter(value: string | undefined, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    throw new Error(`${label} must be a relative snapshot path`);
+  }
+  const components = normalized.split("/");
+  if (components.some((component) => !component || component === "." || component === "..")) {
+    throw new Error(`${label} must not contain empty, current-directory, or parent-directory segments`);
+  }
+  return normalized;
+}
+
+function compileSnapshotGlob(value: string): RegExp {
+  const glob = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (glob.startsWith("/") || /^[A-Za-z]:/.test(glob)) {
+    throw new Error("list_snapshot_files glob must be relative to the repository snapshot");
+  }
+  if (glob.split("/").some((component) => !component || component === "." || component === "..")) {
+    throw new Error("list_snapshot_files glob must not contain empty, current-directory, or parent-directory segments");
+  }
+
+  let pattern = "^";
+  for (let index = 0; index < glob.length; index += 1) {
+    const character = glob[index]!;
+    if (character === "*" && glob[index + 1] === "*") {
+      if (glob[index + 2] === "/") {
+        pattern += "(?:.*/)?";
+        index += 2;
+      } else {
+        pattern += ".*";
+        index += 1;
+      }
+    } else if (character === "*") {
+      pattern += "[^/]*";
+    } else if (character === "?") {
+      pattern += "[^/]";
+    } else {
+      pattern += escapeRegExp(character);
+    }
+  }
+  return new RegExp(`${pattern}$`);
 }
 
 function isStrictlyInside(root: string, target: string): boolean {

@@ -30,11 +30,12 @@ When the connection token is valid, `initialize` returns `instructions` with the
 ## Recommended Agent Workflow
 
 1. Start with `list_space_repositories` or `list_projects`.
-2. Use `get_graph_schema` before custom Cypher.
-3. Use `get_architecture` for a high-level map of the active space snapshot.
-4. Use `search_graph`, `semantic_query`, or `search_code` for discovery.
-5. Use `trace_path` and `get_code_snippet` with names returned by CBM search tools.
-6. Use `query_graph` for bounded read-only Cypher only when the higher-level tools are not enough.
+2. Use `list_snapshot_files` for file inventories or questions about whether a path or extension exists.
+3. Use `get_graph_schema` before custom Cypher.
+4. Use `get_architecture` for a high-level map of the active space snapshot.
+5. Use `search_graph`, `semantic_query`, or `search_code` for discovery.
+6. Use `trace_path` and `get_code_snippet` with names returned by CBM search tools.
+7. Use `query_graph` for bounded read-only Cypher only when the higher-level tools are not enough.
 
 For multi-repository spaces, omit `project` to have MemoRepo run the tool against every repository in the immutable snapshot. Pass `project` only when you intentionally want to narrow a call to one indexed project.
 
@@ -74,6 +75,20 @@ Arguments:
 Use this when you need MemoRepo metadata such as selected branch, selected commit, clone status, index status, or the CBM `project` names for repositories in the space.
 
 The default response is intentionally compact and contains only `fullName` and `project`. Set `include_details: true` for repository IDs, selected revisions, lifecycle status, URLs, and other metadata; set `include_branches: true` for the branch array.
+
+### `list_snapshot_files`
+
+Lists regular files captured in one repository's immutable snapshot tree. Returned paths are relative to the repository root, sorted deterministically, and never read from the mutable managed clone.
+
+Arguments:
+
+- `project` required string. MemoRepo accepts either the CBM project name or repository full name, but the value must identify one repository in the current space snapshot.
+- `path_prefix` optional relative path. It narrows results to one file or directory prefix.
+- `glob` optional relative glob. `*`, `?`, and `**` are supported.
+- `limit` optional integer from `1` to `100`, defaulting to `100`.
+- `offset` optional non-negative integer, defaulting to `0`.
+
+Responses include `files`, `total`, `offset`, `effective_limit`, `returned`, and `has_more`; when another page exists, `next_offset` identifies its starting point. Absolute paths, parent-directory traversal, empty path segments, symbolic links, and entries that escape the immutable snapshot root are rejected.
 
 ### `list_projects`
 

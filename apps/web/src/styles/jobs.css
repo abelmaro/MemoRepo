@@ -37,7 +37,7 @@
 
 .job-terminal-row {
   display: grid;
-  grid-template-columns: 74px 84px minmax(160px, 1fr) minmax(0, 1fr);
+  grid-template-columns: max-content 84px minmax(160px, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-10);
   min-height: 28px;
@@ -57,6 +57,7 @@
   color: var(--color-code-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-label);
+  white-space: nowrap;
 }
 
 .job-terminal-status {

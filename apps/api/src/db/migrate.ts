@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 interface Migration {
   version: number;
@@ -19,6 +19,7 @@ const migrations: Migration[] = [
   { version: 9, up: addAgentQueueAndModes },
   { version: 10, up: addAgentSubmissionSequence },
   { version: 11, up: addAdaptiveAgentRuns },
+  { version: 12, up: addAgentModelPreferences },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -427,6 +428,19 @@ function addAdaptiveAgentRuns(sqlite: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS agent_turn_tool_results_turn_sequence_idx
       ON agent_turn_tool_results(turn_id, sequence);
+  `);
+}
+
+function addAgentModelPreferences(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS agent_model_preferences (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      provider_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      effort TEXT,
+      verbosity TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 

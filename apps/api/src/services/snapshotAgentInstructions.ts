@@ -31,5 +31,5 @@ export function buildSnapshotInstructions(context: SnapshotInstructionContext): 
 }
 
 export function snapshotToolWorkflow(): string {
-  return `Recommended flow: start with list_space_repositories when project names are unclear; use get_architecture for broad questions and get_graph_schema before custom Cypher; use an advertised search tool to locate symbols, then trace_path or get_code_snippet to verify implementations. Follow has_more pagination and retry narrower queries when a response reports truncation. Tool availability is negotiated with the installed CBM engine. Search limits cap at ${SNAPSHOT_SEARCH_RESULT_MAX} results and query_graph at ${SNAPSHOT_QUERY_GRAPH_MAX_ROWS} rows.`;
+  return `Recommended flow: start with list_space_repositories when project names are unclear; use list_snapshot_files for file inventories or questions about whether paths/extensions exist; use get_architecture for broad questions and get_graph_schema before custom Cypher; use an advertised search tool to locate symbols, then trace_path or get_code_snippet to verify implementations. Follow has_more pagination and retry narrower queries when a response reports truncation. Tool availability is negotiated with the installed CBM engine. Search limits cap at ${SNAPSHOT_SEARCH_RESULT_MAX} results and query_graph at ${SNAPSHOT_QUERY_GRAPH_MAX_ROWS} rows.`;
 }

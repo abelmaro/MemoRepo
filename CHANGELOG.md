@@ -11,6 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Add snapshot-scoped file inventory with path-prefix and glob filtering so agents can answer file and extension existence questions from the immutable source tree.
+- Add plain-text and Markdown copy actions for assistant responses.
 - Add capability-aware advanced Ask this Space controls for model verbosity and reasoning effort.
 - Persist per-turn provider stop reasons, token usage, provider round counts, and tool-call counts for answer diagnostics.
 - Add an authenticated dashboard event stream for reactive state invalidation and automatic reconciliation after reconnecting.
@@ -18,6 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Persist the global Ask this Space provider, model, verbosity, and reasoning-effort selection in SQLite across API restarts.
 - Strengthen Ask this Space investigations with the snapshot gateway workflow, evidence verification, pagination, and truncation guidance.
 - Materialize exact Git commits directly into reusable immutable revision trees instead of creating and copying temporary worktrees for every snapshot.
 - Use a Docker-managed data volume for new installations while preserving existing bind-mount configurations.
@@ -30,6 +33,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Keep Ask this Space conversations and panel state isolated when switching between spaces.
+- Respect manual scrolling while an answer streams, provide a latest-answer shortcut, contain long source references, and keep activity timestamps on one line.
+- Use stable agent activity messages while answers are queued, investigated, and finalized.
 - Avoid synchronous recursive size scans on repeated snapshot-list requests by persisting snapshot artifact sizes and backfilling legacy rows asynchronously.
 - Skip redundant clean Git checkouts and repairs when a managed clone already matches its selected remote commit.
 - Reclaim content-addressed revision trees after their last retained snapshot reference is removed and garbage collection runs.

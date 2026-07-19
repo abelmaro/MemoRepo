@@ -6,8 +6,10 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  ChevronDown,
   Clipboard,
   Clock3,
+  Copy,
   Database,
   ExternalLink,
   History,
@@ -80,9 +82,11 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   const [copiedCode, setCopiedCode] = useState(false);
   const [toolActivity, setToolActivity] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [panelRect, setPanelRect] = useState<PanelRect | null>(null);
   const [compactViewport, setCompactViewport] = useState(compactViewportMatches);
   const messageListRef = useRef<HTMLDivElement>(null);
+  const followLatestMessageRef = useRef(true);
   currentSpaceIdRef.current = space?.id ?? null;
   selectedChatIdRef.current = selectedChatId;
 
@@ -97,6 +101,8 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
     setDraft("");
     setToolActivity(null);
     setStreamError(null);
+    setHasNewMessagesBelow(false);
+    followLatestMessageRef.current = true;
   }, [selectedChatId]);
 
   useEffect(() => {
@@ -335,7 +341,13 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
     if (!messageCount && !lastMessageContent) return;
     requestAnimationFrame(() => {
       const element = messageListRef.current;
-      if (element) element.scrollTop = element.scrollHeight;
+      if (!element) return;
+      if (followLatestMessageRef.current) {
+        element.scrollTop = element.scrollHeight;
+        setHasNewMessagesBelow(false);
+      } else {
+        setHasNewMessagesBelow(true);
+      }
     });
   }, [lastMessageContent, messageCount, toolActivity]);
 
@@ -366,8 +378,26 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
   function submitMessage() {
     const message = draft.trim();
     if (message && canSend && space && selectedChatId) {
+      followLatestMessageRef.current = true;
+      setHasNewMessagesBelow(false);
       sendMessageMutation.mutate({ spaceId: space.id, chatId: selectedChatId, message });
     }
+  }
+
+  function handleMessageListScroll() {
+    const element = messageListRef.current;
+    if (!element) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    followLatestMessageRef.current = distanceFromBottom <= 48;
+    if (followLatestMessageRef.current) setHasNewMessagesBelow(false);
+  }
+
+  function scrollToLatestMessage() {
+    const element = messageListRef.current;
+    if (!element) return;
+    followLatestMessageRef.current = true;
+    setHasNewMessagesBelow(false);
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
   function confirmDelete() {
@@ -474,6 +504,9 @@ export function AskSpacePanel({ space, open, onOpenChange }: AskSpacePanelProps)
               toolActivity={toolActivity}
               streamError={streamError}
               messageListRef={messageListRef}
+              hasNewMessagesBelow={hasNewMessagesBelow}
+              onMessageListScroll={handleMessageListScroll}
+              onScrollToLatest={scrollToLatestMessage}
               onNewChat={() => createChatMutation.mutate(space.id)}
               creatingChat={createChatMutation.isPending}
               onArchive={() => archiveMutation.mutate({ spaceId: space.id, chatId: selectedChatId })}
@@ -876,6 +909,9 @@ function ChatView(props: {
   toolActivity: string | null;
   streamError: string | null;
   messageListRef: React.RefObject<HTMLDivElement | null>;
+  hasNewMessagesBelow: boolean;
+  onMessageListScroll: () => void;
+  onScrollToLatest: () => void;
   onNewChat: () => void;
   creatingChat: boolean;
   onArchive: () => void;
@@ -935,29 +971,36 @@ function ChatView(props: {
         </div>
       ) : null}
 
-      <div className="ask-space-messages" ref={props.messageListRef} aria-live="polite">
-        {messages.length === 0 ? (
-          <div className="ask-space-empty conversation-empty">
-            <Bot size={29} />
-            <strong>Ask about this snapshot</strong>
-            <p>Architecture, flows, symbols, dependencies, or where behavior is implemented.</p>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <ChatMessage
-              key={message.id}
-              message={message}
-              turn={turns.find((turn) => turn.assistantMessageId === message.id) ?? null}
-              onRetry={props.onRetry}
-              retrying={props.retrying}
-            />
-          ))
-        )}
-        {props.toolActivity ? (
-          <div className="ask-space-tool-activity" role="status">
-            <Loader2 className="spin" size={15} />
-            <span>{props.toolActivity}</span>
-          </div>
+      <div className="ask-space-message-region">
+        <div className="ask-space-messages" ref={props.messageListRef} onScroll={props.onMessageListScroll} aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="ask-space-empty conversation-empty">
+              <Bot size={29} />
+              <strong>Ask about this snapshot</strong>
+              <p>Architecture, flows, symbols, dependencies, or where behavior is implemented.</p>
+            </div>
+          ) : (
+            messages.map((message) => (
+              <ChatMessage
+                key={message.id}
+                message={message}
+                turn={turns.find((turn) => turn.assistantMessageId === message.id) ?? null}
+                onRetry={props.onRetry}
+                retrying={props.retrying}
+              />
+            ))
+          )}
+          {props.toolActivity ? (
+            <div className="ask-space-tool-activity" role="status">
+              <Loader2 className="spin" size={15} />
+              <span>{props.toolActivity}</span>
+            </div>
+          ) : null}
+        </div>
+        {props.hasNewMessagesBelow ? (
+          <button className="ask-space-latest-message" type="button" onClick={props.onScrollToLatest}>
+            Latest answer
+          </button>
         ) : null}
       </div>
 
@@ -1024,6 +1067,23 @@ function ChatMessage({
   onRetry: (turnId: string) => void;
   retrying: boolean;
 }) {
+  const [copyState, setCopyState] = useState<"plain" | "markdown" | "error" | null>(null);
+
+  async function copyAnswer(format: "plain" | "markdown", button: HTMLButtonElement) {
+    const rendered = button.closest("article")?.querySelector<HTMLElement>(".ask-space-markdown");
+    const value = format === "markdown"
+      ? message.content
+      : (rendered?.innerText || markdownToPlainText(message.content)).trim();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyState(format);
+      if (format === "markdown") button.closest("details")?.removeAttribute("open");
+      window.setTimeout(() => setCopyState((current) => current === format ? null : current), 1_500);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
   return (
     <article className={`ask-space-message ${message.role}`}>
       <header>
@@ -1033,6 +1093,25 @@ function ChatMessage({
       {message.content ? (
         <div className="ask-space-message-content">
           {message.role === "assistant" ? <AgentMarkdown content={message.content} /> : message.content}
+        </div>
+      ) : null}
+      {message.role === "assistant" && message.content ? (
+        <div className="ask-space-message-actions">
+          <button
+            type="button"
+            onClick={(event) => void copyAnswer("plain", event.currentTarget)}
+            aria-label="Copy answer as plain text"
+          >
+            {copyState === "plain" ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copyState === "plain" ? "Copied" : "Copy"}</span>
+          </button>
+          <details>
+            <summary aria-label="Copy options"><ChevronDown size={14} /></summary>
+            <button type="button" onClick={(event) => void copyAnswer("markdown", event.currentTarget)}>
+              Copy Markdown
+            </button>
+          </details>
+          {copyState === "error" ? <span role="alert">Could not copy the answer.</span> : null}
         </div>
       ) : null}
       {message.error ? <div className="ask-space-message-error">{message.error}</div> : null}
@@ -1110,6 +1189,9 @@ function handleTurnEvent(
 ) {
   setStreamError(null);
   if (event.type === "state") {
+    if (isActiveTurn(event.turn)) {
+      setToolActivity(activityForPhase(event.turn.phase));
+    }
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
@@ -1125,6 +1207,7 @@ function handleTurnEvent(
     return;
   }
   if (event.type === "turn.started") {
+    setToolActivity("Planning the investigation…");
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
@@ -1140,6 +1223,7 @@ function handleTurnEvent(
     return;
   }
   if (event.type === "assistant.delta") {
+    setToolActivity("Writing the answer…");
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
@@ -1155,7 +1239,7 @@ function handleTurnEvent(
     return;
   }
   if (event.type === "turn.phase_changed") {
-    setToolActivity(event.phase === "finalizing" ? "Preparing the answer…" : event.phase === "recovering" ? "Recovering previous work…" : null);
+    setToolActivity(activityForPhase(event.phase));
     queryClient.setQueryData<ChatDetail>(key, (current) =>
       current
         ? {
@@ -1173,7 +1257,7 @@ function handleTurnEvent(
     return;
   }
   if (event.type === "tool.completed") {
-    setToolActivity(null);
+    setToolActivity(event.success ? friendlyToolCompleted(event.tool) : `Could not finish ${friendlyTool(event.tool)}; continuing…`);
     return;
   }
   setToolActivity(null);
@@ -1207,6 +1291,31 @@ function friendlyToolActivity(tool: string): string {
   if (tool.includes("call") || tool.includes("trace")) return "Following the call graph…";
   if (tool.includes("snippet") || tool.includes("code")) return "Reading indexed code…";
   return "Consulting the Space index…";
+}
+
+function friendlyToolCompleted(tool: string): string {
+  if (tool.includes("search")) return "Snapshot search completed; reviewing the results…";
+  if (tool.includes("architecture")) return "Architecture map reviewed…";
+  if (tool.includes("depend")) return "Dependency trace completed…";
+  if (tool.includes("call") || tool.includes("trace")) return "Call graph reviewed…";
+  if (tool.includes("snippet") || tool.includes("code")) return "Indexed code reviewed…";
+  return "Space index consulted…";
+}
+
+function activityForPhase(phase: string | null | undefined): string {
+  if (phase === "finalizing") return "Preparing the answer…";
+  if (phase === "recovering") return "Recovering previous work…";
+  return "Investigating the snapshot…";
+}
+
+function markdownToPlainText(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*\n([\s\S]*?)```/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
+    .replace(/[*_~`]/g, "")
+    .trim();
 }
 
 function friendlyTool(tool: string): string {

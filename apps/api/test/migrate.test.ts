@@ -13,6 +13,15 @@ test("migrate creates and versions a new database", () => {
     assert.ok(tableNames(sqlite).has("jobs"));
     assert.ok(tableNames(sqlite).has("github_oauth_credentials"));
     assert.ok(tableNames(sqlite).has("agent_account_sessions"));
+    assert.ok(tableNames(sqlite).has("agent_model_preferences"));
+    assert.deepEqual(
+      ["id", "provider_id", "model_id", "effort", "verbosity", "updated_at"].filter(
+        (column) => !columnNames(sqlite, "agent_model_preferences").has(column)
+      ),
+      []
+    );
+    assert.equal(columnNames(sqlite, "agent_model_preferences").has("credential"), false);
+    assert.equal(columnNames(sqlite, "agent_model_preferences").has("token"), false);
     assert.ok(tableNames(sqlite).has("agent_chats"));
     assert.ok(tableNames(sqlite).has("agent_messages"));
     assert.ok(tableNames(sqlite).has("agent_turns"));

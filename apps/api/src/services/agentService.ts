@@ -126,6 +126,13 @@ interface TurnRow {
   finishedAt: string | null;
 }
 
+interface AgentModelPreferenceRow {
+  providerId: string;
+  modelId: string;
+  effort: string | null;
+  verbosity: string | null;
+}
+
 export interface AgentSource {
   tool: string;
   repository?: string;
@@ -196,6 +203,7 @@ export class AgentService {
     private readonly modelSelection?: AgentModelSelectionPort,
     private readonly dashboardEvents?: DashboardEventBus
   ) {
+    this.restoreModelSelection();
     this.recoverInterruptedTurns();
     this.deleteOrphanedAccountSessions();
     void this.dispatchQueuedTurns();
@@ -215,8 +223,59 @@ export class AgentService {
     if (!this.modelSelection) throw httpError(503, "Agent model selection is unavailable");
     this.modelSelection.selectModel(providerId, modelId, settings);
     const catalog = this.modelSelection.catalog();
+    this.persistModelSelection(catalog);
     void this.dispatchQueuedTurns();
     return catalog;
+  }
+
+  private restoreModelSelection(): void {
+    if (!this.modelSelection) return;
+    const preference = this.database.sqlite
+      .prepare(
+        `SELECT provider_id AS providerId, model_id AS modelId, effort, verbosity
+         FROM agent_model_preferences WHERE id = 1`
+      )
+      .get() as AgentModelPreferenceRow | undefined;
+    if (!preference) return;
+
+    try {
+      if (preference.effort !== null && !isAgentEffort(preference.effort)) {
+        throw new Error("Saved agent effort is invalid");
+      }
+      if (preference.verbosity !== null && !isAgentVerbosity(preference.verbosity)) {
+        throw new Error("Saved agent verbosity is invalid");
+      }
+      this.modelSelection.selectModel(preference.providerId, preference.modelId, {
+        ...(isAgentEffort(preference.effort) ? { effort: preference.effort } : {}),
+        ...(isAgentVerbosity(preference.verbosity) ? { verbosity: preference.verbosity } : {})
+      });
+    } catch {
+      // The adapter starts with the configured selection, which remains the safe fallback
+      // if a saved provider, model, or capability disappears from the current catalog.
+      this.persistModelSelection(this.modelSelection.catalog());
+    }
+  }
+
+  private persistModelSelection(catalog: AgentModelCatalog): void {
+    this.database.sqlite
+      .prepare(
+        `INSERT INTO agent_model_preferences
+          (id, provider_id, model_id, effort, verbosity, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           provider_id = excluded.provider_id,
+           model_id = excluded.model_id,
+           effort = excluded.effort,
+           verbosity = excluded.verbosity,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        catalog.selected.providerId,
+        catalog.selected.modelId,
+        catalog.selected.settings.effort ?? null,
+        catalog.selected.settings.verbosity ?? null,
+        nowIso()
+      );
   }
 
   async status() {

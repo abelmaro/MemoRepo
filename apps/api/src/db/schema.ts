@@ -194,6 +194,15 @@ export const agentAccountSessions = sqliteTable("agent_account_sessions", {
   disconnectedAt: text("disconnected_at")
 });
 
+export const agentModelPreferences = sqliteTable("agent_model_preferences", {
+  id: integer("id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  effort: text("effort"),
+  verbosity: text("verbosity"),
+  updatedAt: text("updated_at").notNull()
+});
+
 export const agentChats = sqliteTable(
   "agent_chats",
   {
@@ -367,6 +376,7 @@ export const databaseTables = {
   mcp_connections: mcpConnections,
   mcp_tool_stats: mcpToolStats,
   agent_account_sessions: agentAccountSessions,
+  agent_model_preferences: agentModelPreferences,
   agent_chats: agentChats,
   agent_messages: agentMessages,
   agent_turns: agentTurns,
@@ -387,6 +397,7 @@ export const schema = {
   mcpConnections,
   mcpToolStats,
   agentAccountSessions,
+  agentModelPreferences,
   agentChats,
   agentMessages,
   agentTurns,
