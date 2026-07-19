@@ -1564,17 +1564,18 @@ test("replacement snapshots reuse an immutable source for the same repository co
 
 test("replacement snapshots rebuild a cached source changed with the same size and mtime", async () => {
   fs.mkdirSync(testsRoot, { recursive: true });
-  const testRoot = fs.mkdtempSync(path.join(testsRoot, "snapshot-source-integrity-rebuild-"));
+  // Keep this fixture path short enough for Git object paths on Windows runners.
+  const testRoot = fs.mkdtempSync(path.join(testsRoot, "integrity-rebuild-"));
   process.env.MEMOREPO_HOME = path.join(testRoot, "memorepo-home");
   process.env.API_PORT = "8787";
 
   const services = createServices();
   try {
-    const space = services.spaces.createSpace("Snapshot Source Integrity Rebuild Space");
+    const space = services.spaces.createSpace("Integrity Rebuild");
     createSnapshotReadySpaceRepository(services, space.id, {
       githubId: 4503,
       owner: "example",
-      name: "integrity-rebuild"
+      name: "rebuild"
     });
     stubCbmSnapshots(services);
     await services.snapshots.buildSpaceSnapshot(space.id);
