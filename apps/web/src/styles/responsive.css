@@ -164,9 +164,15 @@
   .repo-section-header,
   .management-header,
   .modal-intro,
+  .batch-selection-bar,
   .branch-confirmation {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .batch-selection-bar > div:last-child,
+  .batch-selection-bar .primary-button {
+    width: 100%;
   }
 
   .repo-section-header .secondary-button {

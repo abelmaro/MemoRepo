@@ -7,6 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add multi-repository selection with one atomic, idempotent ingestion request and grouped preparation and snapshot progress.
+- Add batch cancellation and state-aware retry actions that preserve completed repository preparation.
+- Add real sequential-versus-batch ingestion baselines and blobless no-tags cloning with a compatibility fallback.
+
+### Changed
+
+- Validate complete repository selections before creating space membership or background jobs.
+
 ## [0.3.1] - 2026-07-19
 
 ### Added

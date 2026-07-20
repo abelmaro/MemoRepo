@@ -48,6 +48,9 @@ export class JobRunner {
   private activeControllers = new Map<string, AbortController>();
   private pendingLogEvents = new Map<string, JobEventRecord[]>();
   private logFlushTimer: NodeJS.Timeout | null = null;
+  private atomicNotifications: Array<() => void> | null = null;
+  private deferTickDepth = 0;
+  private tickRequested = false;
 
   constructor(
     private readonly database: AppDatabase,
@@ -61,6 +64,29 @@ export class JobRunner {
 
   getConcurrency(): number {
     return this.concurrency;
+  }
+
+  runAtomically<T>(operation: () => T): T {
+    if (this.database.sqlite.inTransaction) return operation();
+
+    const previousNotifications = this.atomicNotifications;
+    const notifications: Array<() => void> = [];
+    this.atomicNotifications = notifications;
+    this.deferTickDepth += 1;
+    try {
+      const transaction = this.database.sqlite.transaction(operation);
+      const result = transaction.immediate();
+      this.atomicNotifications = previousNotifications;
+      for (const notify of notifications) notify();
+      return result;
+    } finally {
+      this.atomicNotifications = previousNotifications;
+      this.deferTickDepth = Math.max(0, this.deferTickDepth - 1);
+      if (this.deferTickDepth === 0 && this.tickRequested) {
+        this.tickRequested = false;
+        void this.tick();
+      }
+    }
   }
 
   start(): void {
@@ -118,12 +144,12 @@ export class JobRunner {
       for (const dependencyJobId of dependencyJobIds) dependencyInsert.run(record.id, dependencyJobId, timestamp);
       return { created: true, job: record };
     });
-    const result = enqueueTransaction.immediate();
+    const result = this.database.sqlite.inTransaction ? enqueueTransaction() : enqueueTransaction.immediate();
 
     if (result.created) {
       this.writeEvent(result.job.id, "status", "pending");
     }
-    void this.tick();
+    this.requestTick();
     return result.job;
   }
 
@@ -170,11 +196,11 @@ export class JobRunner {
       this.insertDependencies(record.id, dependencyJobIds, timestamp);
       return { created: true, updated: false, supersededId: null, job: record };
     });
-    const result = transaction.immediate();
+    const result = this.database.sqlite.inTransaction ? transaction() : transaction.immediate();
     if (result.created) this.writeEvent(result.job.id, "status", "pending");
     else if (result.updated) this.writeEvent(result.job.id, "coalesced", "Pending job updated to the latest requested inputs");
     if (result.supersededId) this.writeEvent(result.supersededId, "status", "cancelled");
-    void this.tick();
+    this.requestTick();
     return result.job;
   }
 
@@ -343,6 +369,14 @@ export class JobRunner {
     }
   }
 
+  private requestTick(): void {
+    if (this.deferTickDepth > 0) {
+      this.tickRequested = true;
+      return;
+    }
+    void this.tick();
+  }
+
   private nextRunnableJob(): JobRow | null {
     const candidates = this.database.sqlite
       .prepare(
@@ -495,8 +529,18 @@ export class JobRunner {
     }
     this.flushLogEvents(jobId);
     insertRecord(this.database, "job_events", record);
-    this.events.emit(jobId, record);
-    if (eventType === "status") this.publishJobInvalidation(jobId);
+    this.notifyAfterCommit(() => {
+      this.events.emit(jobId, record);
+      if (eventType === "status") this.publishJobInvalidation(jobId);
+    });
+  }
+
+  private notifyAfterCommit(notification: () => void): void {
+    if (this.atomicNotifications) {
+      this.atomicNotifications.push(notification);
+      return;
+    }
+    notification();
   }
 
   private publishJobInvalidation(jobId: string): void {

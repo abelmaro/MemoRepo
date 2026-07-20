@@ -97,18 +97,20 @@ analytics
 
 A space isolates repository membership, snapshots, and MCP connections.
 
-## 6. Add A Repository
+## 6. Add Repositories
 
 Click `Add repo`.
 
-Choose a synced repository or add one by URL:
+Search the synced catalog and select up to 50 repositories. Selections remain active while you search or change filters. Choose `Add N` once to prepare every selected repository and build one shared snapshot. The grouped progress view reports preparation and snapshot indexing for the complete batch, and lets you cancel active work or retry a failed batch without redoing repositories that are already ready.
+
+You can also add one repository by URL:
 
 ```text
 owner/repo
 https://github.com/owner/repo
 ```
 
-MemoRepo will enqueue jobs to clone, checkout, index, and build the first space snapshot. Open the job log to follow progress.
+MemoRepo validates the complete selection before adding anything. It then clones and checks out repositories independently, indexes them into one immutable snapshot, and activates that snapshot only after the whole batch succeeds. A failed build preserves the previously active snapshot.
 
 ## 7. Connect An Agent
 

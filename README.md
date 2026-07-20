@@ -57,7 +57,7 @@ For direct Node development, prefer setting `MEMOREPO_HOME` to a path outside th
 
 ### Performance baseline
 
-The baseline runner exercises the production API with two spaces, three sequential repository additions per space, an optional three-agent concurrency probe, and an idle dashboard event-stream sample. It records timings, job counts, usage totals, normal HTTP request aggregates, dashboard stream connections, events, heartbeats, bytes, and storage growth without retaining repository locators, event payloads, prompts, responses, tool payloads, or managed paths. Reports are written under the operating system temporary directory by default.
+The baseline runner exercises the production API with two spaces, three repository additions per space, an optional three-agent concurrency probe, and an idle dashboard event-stream sample. Ingestion defaults to the sequential workflow and can use the real batch endpoint for an equivalent comparison. It records timings, job counts, usage totals, normal HTTP request aggregates, dashboard stream connections, events, heartbeats, bytes, and storage growth without retaining repository locators, event payloads, prompts, responses, tool payloads, or managed paths. Reports are written under the operating system temporary directory by default.
 
 Start MemoRepo with an empty `MEMOREPO_HOME`, then run:
 
@@ -65,7 +65,7 @@ Start MemoRepo with an empty `MEMOREPO_HOME`, then run:
 pnpm perf:baseline -- --repositories owner/one,owner/two,owner/three --include-agents
 ```
 
-Use `--idle-seconds 0` for a fast pipeline-only run or `--output <path>` to choose another report location. `MEMOREPO_PERF_REPOSITORIES` can provide the three comma-separated locators without adding them to shell history. The idle sample opens the same authenticated SSE stream as the dashboard and observes it for the configured duration. Stream lifetime and byte metrics are reported separately so the long-lived connection does not distort normal HTTP latency. The runner does not launch a browser and therefore does not include browser-generated CORS preflights.
+Pass `--ingestion-mode batch` to submit all three repositories in one request and wait for the shared snapshot. Use `--idle-seconds 0` for a fast pipeline-only run or `--output <path>` to choose another report location. `MEMOREPO_PERF_REPOSITORIES` can provide the three comma-separated locators without adding them to shell history, and `MEMOREPO_PERF_INGESTION_MODE` can select `sequential` or `batch`. The idle sample opens the same authenticated SSE stream as the dashboard and observes it for the configured duration. Stream lifetime and byte metrics are reported separately so the long-lived connection does not distort normal HTTP latency. The runner does not launch a browser and therefore does not include browser-generated CORS preflights.
 
 ## Ask this Space
 

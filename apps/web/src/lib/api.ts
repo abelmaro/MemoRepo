@@ -151,6 +151,45 @@ export interface JobEvent {
   created_at: string;
 }
 
+export interface RepositoryBatchItem {
+  spaceRepositoryId: string;
+  githubRepositoryId: string;
+  fullName: string;
+  cloneStatus: string;
+  indexStatus: string;
+  status: string;
+}
+
+export interface RepositoryBatchJob {
+  stage: "clone" | "checkout" | "index" | "snapshot";
+  spaceRepositoryId: string | null;
+  job: Job | null;
+}
+
+export interface RepositoryBatch {
+  id: string;
+  spaceId: string;
+  requestId: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  phase: string;
+  repositoryCount: number;
+  preparedCount: number;
+  indexedCount: number;
+  failedCount: number;
+  snapshotJobId: string | null;
+  items: RepositoryBatchItem[];
+  jobs: RepositoryBatchJob[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RepositoryBatchSubmission {
+  batch: RepositoryBatch;
+  spaceRepositories: SpaceRepository[];
+  jobs: Job[];
+  snapshotJob: Job | null;
+}
+
 export interface McpConnection {
   id: string;
   space_id: string;

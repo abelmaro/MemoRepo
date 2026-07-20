@@ -164,6 +164,44 @@ export const jobEvents = sqliteTable(
   (table) => [index("job_events_job_created_idx").on(table.jobId, table.createdAt)]
 );
 
+export const repositoryBatches = sqliteTable(
+  "repository_batches",
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id")
+      .notNull()
+      .references(() => spaces.id, { onDelete: "cascade" }),
+    requestId: text("request_id").notNull(),
+    repositoryIdsJson: text("repository_ids_json").notNull(),
+    snapshotJobId: text("snapshot_job_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("repository_batches_space_request_unique").on(table.spaceId, table.requestId),
+    index("repository_batches_space_created_idx").on(table.spaceId, table.createdAt)
+  ]
+);
+
+export const repositoryBatchJobs = sqliteTable(
+  "repository_batch_jobs",
+  {
+    batchId: text("batch_id")
+      .notNull()
+      .references(() => repositoryBatches.id, { onDelete: "cascade" }),
+    jobId: text("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    stage: text("stage").notNull(),
+    spaceRepositoryId: text("space_repository_id")
+  },
+  (table) => [
+    primaryKey({ columns: [table.batchId, table.jobId] }),
+    index("repository_batch_jobs_job_idx").on(table.jobId),
+    index("repository_batch_jobs_repository_stage_idx").on(table.batchId, table.spaceRepositoryId, table.stage)
+  ]
+);
+
 export const mcpConnections = sqliteTable(
   "mcp_connections",
   {
@@ -479,6 +517,8 @@ export const databaseTables = {
   space_snapshots: spaceSnapshots,
   jobs,
   job_events: jobEvents,
+  repository_batches: repositoryBatches,
+  repository_batch_jobs: repositoryBatchJobs,
   mcp_connections: mcpConnections,
   mcp_tool_stats: mcpToolStats,
   cbm_operation_metrics: cbmOperationMetrics,
@@ -501,6 +541,8 @@ export const schema = {
   spaceSnapshots,
   jobs,
   jobEvents,
+  repositoryBatches,
+  repositoryBatchJobs,
   mcpConnections,
   mcpToolStats,
   cbmOperationMetrics,
