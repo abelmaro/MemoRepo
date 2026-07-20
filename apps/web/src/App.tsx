@@ -530,16 +530,24 @@ export function App() {
         </Modal>
       ) : null}
       {activeJobId ? (
-        <Modal title="Job details" onClose={() => setActiveJobId(null)} wide contained>
+        <Modal
+          title="Job details"
+          onClose={() => {
+            setActiveJobId(null);
+            setActiveBatchId(null);
+          }}
+          onBack={activeBatchId ? () => setActiveJobId(null) : undefined}
+          backLabel="Back to repository batch"
+          wide
+          contained
+        >
           <JobLog jobId={activeJobId} onJob={(jobId) => setActiveJobId(jobId)} />
         </Modal>
-      ) : null}
-      {activeBatchId ? (
+      ) : activeBatchId ? (
         <Modal title="Repository batch" onClose={() => setActiveBatchId(null)} wide contained>
           <RepositoryBatchProgress
             batchId={activeBatchId}
             onJob={(jobId) => {
-              setActiveBatchId(null);
               setActiveJobId(jobId);
             }}
           />

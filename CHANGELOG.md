@@ -16,6 +16,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Validate complete repository selections before creating space membership or background jobs.
+- Pass CBM CLI payloads through standard input to avoid operating-system command-line size limits.
+
+### Fixed
+
+- Skip redundant mutable indexing during snapshot-only update checks.
+- Show snapshot-included repositories as ready without requiring a legacy mutable index.
+- Preserve repository batch context while inspecting job details and distinguish queued work from running work.
 
 ## [0.3.1] - 2026-07-19
 

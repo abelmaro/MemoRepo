@@ -158,8 +158,8 @@ export class OperationsService {
         const selectedCommit = typeof repository.selected_commit === "string" ? repository.selected_commit : null;
         const indexStatus = String(repository.index_status);
         const commitChanged = selectedCommit !== remote.commit;
-        const needsIndex = commitChanged || indexStatus !== "indexed";
-        if (!needsIndex) {
+        const needsMutableIndex = !this.config.snapshotOnlyIndexing && (commitChanged || indexStatus !== "indexed");
+        if (!commitChanged && !needsMutableIndex) {
           context.log(`${fullName} is up to date at ${remote.commit.slice(0, 12)}`);
           continue;
         }
@@ -171,23 +171,27 @@ export class OperationsService {
         updateRecord(this.database, "space_repositories", { indexStatus: "stale", lastError: null, updatedAt: nowIso() }, "id", spaceRepositoryId);
         this.spaces.markSpaceStale(spaceId);
 
-        const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log, signal: context.signal });
-        updateRecord(
-          this.database,
-          "space_repositories",
-          {
-            selectedBranch: branch,
-            selectedCommit: commit,
-            remoteRef: `refs/remotes/origin/${branch}`,
-            cloneStatus: "cloned",
-            indexStatus: "stale",
-            lastError: null,
-            updatedAt: nowIso()
-          },
-          "id",
-          spaceRepositoryId
-        );
-        await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
+        if (commitChanged) {
+          const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log, signal: context.signal });
+          updateRecord(
+            this.database,
+            "space_repositories",
+            {
+              selectedBranch: branch,
+              selectedCommit: commit,
+              remoteRef: `refs/remotes/origin/${branch}`,
+              cloneStatus: "cloned",
+              indexStatus: "stale",
+              lastError: null,
+              updatedAt: nowIso()
+            },
+            "id",
+            spaceRepositoryId
+          );
+        }
+        if (needsMutableIndex) {
+          await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
+        }
         updatedRepositories += 1;
       }
 

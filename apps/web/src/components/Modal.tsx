@@ -1,16 +1,18 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 
 interface ModalProps {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  onBack?: (() => void) | undefined;
+  backLabel?: string | undefined;
   wide?: boolean;
   contained?: boolean;
 }
 
-export function Modal({ title, children, onClose, wide, contained }: ModalProps) {
+export function Modal({ title, children, onClose, onBack, backLabel = "Back", wide, contained }: ModalProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const titleId = useId();
 
@@ -84,7 +86,14 @@ export function Modal({ title, children, onClose, wide, contained }: ModalProps)
         tabIndex={-1}
       >
         <header className="modal-header">
-          <h2 id={titleId}>{title}</h2>
+          <div className="modal-heading">
+            {onBack ? (
+              <button className="icon-button" type="button" onClick={onBack} aria-label={backLabel}>
+                <ArrowLeft size={18} />
+              </button>
+            ) : null}
+            <h2 id={titleId}>{title}</h2>
+          </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>

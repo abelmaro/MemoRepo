@@ -13,6 +13,7 @@ export interface ProcessResult {
 export interface RunProcessOptions {
   command: string;
   args: string[];
+  stdin?: string | Buffer | undefined;
   cwd?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   inheritEnv?: boolean | undefined;
@@ -80,7 +81,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
               ...process.env,
               ...options.env
             },
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"]
     });
 
     let stdout = "";
@@ -91,6 +92,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
     let stderrTruncated = false;
     let timedOut = false;
     let aborted = false;
+    let stdinError: Error | null = null;
     const maxCaptureBytes = positiveLimit(options.maxCaptureBytes, DEFAULT_PROCESS_CAPTURE_MAX_BYTES);
     const maxLineBytes = positiveLimit(options.maxLineBytes, DEFAULT_PROCESS_LINE_MAX_BYTES);
 
@@ -151,8 +153,14 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       }
     }
 
-    child.stdout.on("data", (chunk: Buffer) => emit(chunk, "stdout"));
-    child.stderr.on("data", (chunk: Buffer) => emit(chunk, "stderr"));
+    child.stdout!.on("data", (chunk: Buffer) => emit(chunk, "stdout"));
+    child.stderr!.on("data", (chunk: Buffer) => emit(chunk, "stderr"));
+    if (options.stdin !== undefined && child.stdin) {
+      child.stdin.on("error", (error) => {
+        stdinError = error;
+      });
+      child.stdin.end(options.stdin);
+    }
 
     child.on("error", (error) => {
       clearTimers();
@@ -170,6 +178,10 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessResult> {
       }
       if (aborted) {
         reject(abortError(options.signal?.reason));
+        return;
+      }
+      if (stdinError && exitCode === 0) {
+        reject(stdinError);
         return;
       }
       resolve({ exitCode, signal, stdout, stderr, stdoutTruncated, stderrTruncated });

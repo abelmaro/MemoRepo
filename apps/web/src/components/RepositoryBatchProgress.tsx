@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Github, Loader2, RotateCcw, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, Github, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { api, type RepositoryBatch, type RepositoryBatchSubmission } from "../lib/api";
 import { QueryErrorState } from "./QueryErrorState";
 import { StatusBadge } from "./StatusBadge";
@@ -73,7 +73,8 @@ export function RepositoryBatchProgress({ batchId, onJob }: { batchId: string; o
                 </div>
                 {item.status === "succeeded" ? <CheckCircle2 className="batch-progress-success" size={18} aria-label="Ready" /> : null}
                 {["failed", "skipped", "cancelled"].includes(item.status) ? <XCircle className="batch-progress-failed" size={18} aria-label="Failed" /> : null}
-                {["pending", "running"].includes(item.status) ? <Loader2 className={item.status === "running" ? "spin" : ""} size={18} aria-label={item.status} /> : null}
+                {item.status === "pending" ? <Clock3 size={18} aria-label="Queued" /> : null}
+                {item.status === "running" ? <Loader2 className="spin" size={18} aria-label="Running" /> : null}
               </div>
             ))}
           </div>

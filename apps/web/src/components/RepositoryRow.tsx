@@ -165,7 +165,11 @@ export function RepositoryRow({ repository, snapshotState, onSnapshotJob, onJob,
 
       <div className="repo-indexed-cell" role="cell" data-label="Last indexed">
         <span title={repository.last_indexed_at ? new Date(repository.last_indexed_at).toLocaleString() : undefined}>
-          {repository.last_indexed_at ? formatRelativeTime(repository.last_indexed_at) : "Not indexed yet"}
+          {repository.last_indexed_at
+            ? formatRelativeTime(repository.last_indexed_at)
+            : booleanValue(repository.snapshot_included)
+              ? "Included in active snapshot"
+              : "Not indexed yet"}
         </span>
         {repository.selected_commit ? <code title={repository.selected_commit}>{repository.selected_commit.slice(0, 7)}</code> : null}
       </div>
@@ -359,7 +363,7 @@ function repositoryStatus(
   if ([cloneStatus, indexStatus].some((status) => ["pending", "running", "cloning", "indexing", "building"].includes(status))) {
     return { label: "Updating", tone: "amber", description: "Preparing agent context" };
   }
-  if (cloneStatus === "cloned" && indexStatus === "indexed" && booleanValue(repository.snapshot_included)) {
+  if (cloneStatus === "cloned" && booleanValue(repository.snapshot_included)) {
     return { label: "Ready", tone: "green", description: "Available to agents" };
   }
   if (cloneStatus === "cloned" && indexStatus === "indexed") {

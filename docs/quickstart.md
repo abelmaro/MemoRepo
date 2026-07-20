@@ -220,4 +220,4 @@ MemoRepo supports:
 
 Active cancellation is cooperative: MemoRepo signals the current subprocess, escalates if it does not stop, and records the job as cancelled after the handler exits. A running row recovered without an active process cannot be cancelled safely and is marked failed during startup recovery instead.
 
-Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's indexed commit. Repositories that are already current are skipped. Changed or incomplete indexes are rebuilt, and MemoRepo creates one replacement space snapshot only when needed.
+Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's recorded commit. Repositories that are already current are skipped. In snapshot-only mode, a stale mutable-index state is expected and does not trigger redundant work. Legacy mutable-index mode also repairs incomplete indexes. MemoRepo creates one replacement space snapshot only when needed.

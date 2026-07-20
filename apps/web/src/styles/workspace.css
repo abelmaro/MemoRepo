@@ -161,7 +161,8 @@
 .operation-notice {
   justify-self: start;
   width: fit-content;
-  max-width: 100%;
+  max-width: calc(100% - (var(--space-22) * 2));
+  margin: var(--space-0) var(--space-22) var(--space-16);
 }
 
 .query-error-state {

@@ -98,7 +98,7 @@ Under Docker Compose, managed agent OAuth credentials are stored in the existing
 - Indexes exact selected commits into immutable space snapshots with `codebase-memory-mcp`.
 - Searches and reads immutable snapshot text directly when a file is outside CBM coverage or an answer requires exact source verification.
 - Adds repositories in bounded batches with one primary snapshot index per repository and one coalesced rebuild.
-- Checks selected remote branch commits and updates only repositories whose commit or index state changed.
+- Checks selected remote branch commits and updates repositories whose commit changed; legacy mutable-index mode also repairs incomplete index state.
 - Builds immutable per-space snapshots from the selected repositories.
 - Exposes the active snapshot through read-only native `codebase-memory-mcp` tools under a space-scoped MCP gateway.
 - Prunes old inactive snapshots and cleans local maintenance artifacts.

@@ -75,6 +75,33 @@ test("CBM disables automatic indexing and watching before opening a snapshot cac
   }
 });
 
+test("CBM sends CLI input through stdin instead of deprecated raw JSON arguments", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-cbm-cli-stdin-"));
+  const calls: Array<{ args: string[]; stdin?: string | Buffer }> = [];
+  const service = new CbmService({ memorepoHome: root } as AppConfig, async (options) => {
+    calls.push({ args: options.args, stdin: options.stdin });
+    if (options.args[0] === "config") {
+      return processResult("Configuration:\n  auto_index = false\n  auto_watch = false\n");
+    }
+    return processResult(JSON.stringify({ status: "indexed" }));
+  });
+
+  try {
+    const input = { repo_path: "/tmp/example", mode: "fast", persistence: false };
+    const runCli = (service as unknown as {
+      cli<T>(tool: string, value: Record<string, unknown>, options: { cacheDir: string }): Promise<T>;
+    }).cli.bind(service);
+    await runCli("index_repository", input, { cacheDir: path.join(root, "cache") });
+
+    const cliCall = calls.find((call) => call.args[0] === "cli");
+    assert.deepEqual(cliCall?.args, ["cli", "index_repository"]);
+    assert.equal(cliCall?.stdin, JSON.stringify(input));
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CBM tool execution errors preserve plain-text feedback", () => {
   assert.throws(
     () => parseCbmToolResult("detect_changes", {

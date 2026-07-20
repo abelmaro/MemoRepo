@@ -53,6 +53,13 @@
   font-size: var(--font-size-heading-lg);
 }
 
+.modal-heading {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-10);
+  align-items: center;
+}
+
 .form-stack {
   display: grid;
   gap: var(--space-16);

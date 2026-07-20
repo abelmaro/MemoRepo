@@ -44,6 +44,31 @@ describe("RepositoryBatchProgress", () => {
     ));
     queryClient.clear();
   });
+
+  it("uses distinct indicators for queued and running repositories", async () => {
+    const runningBatch: RepositoryBatch = {
+      ...batchFixture("running"),
+      phase: "preparing",
+      failedCount: 0,
+      items: [
+        { spaceRepositoryId: "spr-a", githubRepositoryId: "repo-a", fullName: "demo/alpha", cloneStatus: "pending", indexStatus: "not_indexed", status: "pending" },
+        { spaceRepositoryId: "spr-b", githubRepositoryId: "repo-b", fullName: "demo/beta", cloneStatus: "cloning", indexStatus: "not_indexed", status: "running" }
+      ]
+    };
+    apiMock.mockResolvedValue({ batch: runningBatch });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepositoryBatchProgress batchId="bat-1" onJob={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    const queued = await screen.findByLabelText("Queued");
+    const running = screen.getByLabelText("Running");
+    expect(queued.classList.contains("spin")).toBe(false);
+    expect(running.classList.contains("spin")).toBe(true);
+    queryClient.clear();
+  });
 });
 
 function batchFixture(status: RepositoryBatch["status"]): RepositoryBatch {

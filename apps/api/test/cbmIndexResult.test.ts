@@ -214,7 +214,7 @@ test("CBM verifies index_status after both primary indexing and cross-repository
     const tool = options.args[1]!;
     cliCalls.push(tool);
     if (tool === "index_repository") {
-      const input = JSON.parse(options.args[2]!) as { mode?: string };
+      const input = JSON.parse(String(options.stdin)) as { mode?: string };
       return processResult(JSON.stringify({
         project: "sample-project",
         status: input.mode === "cross-repo-intelligence" ? "linked" : "indexed",
