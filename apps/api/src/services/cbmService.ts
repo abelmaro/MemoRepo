@@ -409,7 +409,8 @@ export class CbmService {
     try {
       result = await this.runCbmProcess({
         command: "codebase-memory-mcp",
-        args: ["cli", tool, JSON.stringify(input)],
+        args: ["cli", tool],
+        stdin: JSON.stringify(input),
         env: createCbmEnvironment(cacheDir),
         inheritEnv: false,
         timeoutMs: options.timeoutMs,

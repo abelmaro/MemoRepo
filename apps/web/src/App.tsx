@@ -14,6 +14,7 @@ import { PreflightPanel } from "./components/PreflightPanel";
 import { QueryErrorState } from "./components/QueryErrorState";
 import { RemovedRepositoryRow } from "./components/RemovedRepositoryRow";
 import { RepositoryRow } from "./components/RepositoryRow";
+import { RepositoryBatchProgress } from "./components/RepositoryBatchProgress";
 import { StatusStrip } from "./components/StatusStrip";
 import { api, type Job, type Space, type SpaceRepository } from "./lib/api";
 import { useDashboardEvents } from "./lib/dashboardEvents";
@@ -31,6 +32,7 @@ export function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [askSpaceOpenBySpace, setAskSpaceOpenBySpace] = useState<Record<string, boolean>>({});
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [repoSearch, setRepoSearch] = useState("");
   const [repoKindFilter, setRepoKindFilter] = useState<RepositoryKindFilter>("all");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
@@ -123,6 +125,8 @@ export function App() {
 
   function selectSpace(space: Space) {
     setSelectedSpaceId(space.id);
+    setActiveBatchId(null);
+    setActiveJobId(null);
     setRepoSearch("");
     setRepoKindFilter("all");
     setManagementView(null);
@@ -420,7 +424,7 @@ export function App() {
 
               {managementView ? (
                 <div className="management-content">
-                  {managementView === "activity" ? <JobsPanel onSelectJob={(jobId) => setActiveJobId(jobId)} /> : null}
+                  {managementView === "activity" ? <JobsPanel onSelectJob={(jobId) => { setActiveBatchId(null); setActiveJobId(jobId); }} /> : null}
                   {managementView === "system" ? (
                     <div className="system-panels">
                       <PreflightPanel />
@@ -487,11 +491,17 @@ export function App() {
       {addRepoOpen && selectedSpace ? (
         <AddRepoModal
           space={selectedSpace}
+          existingRepositoryIds={repositories.map((repository) => repository.github_repository_id)}
           onClose={() => setAddRepoOpen(false)}
           onJob={(jobId) => {
             setActiveJobId(jobId);
             setManagementView("activity");
             void queryClient.invalidateQueries({ queryKey: ["space", selectedSpace.id] });
+          }}
+          onBatch={(batchId) => {
+            setActiveJobId(null);
+            setActiveBatchId(batchId);
+            setManagementView("activity");
           }}
         />
       ) : null}
@@ -520,8 +530,27 @@ export function App() {
         </Modal>
       ) : null}
       {activeJobId ? (
-        <Modal title="Job details" onClose={() => setActiveJobId(null)} wide contained>
+        <Modal
+          title="Job details"
+          onClose={() => {
+            setActiveJobId(null);
+            setActiveBatchId(null);
+          }}
+          onBack={activeBatchId ? () => setActiveJobId(null) : undefined}
+          backLabel="Back to repository batch"
+          wide
+          contained
+        >
           <JobLog jobId={activeJobId} onJob={(jobId) => setActiveJobId(jobId)} />
+        </Modal>
+      ) : activeBatchId ? (
+        <Modal title="Repository batch" onClose={() => setActiveBatchId(null)} wide contained>
+          <RepositoryBatchProgress
+            batchId={activeBatchId}
+            onJob={(jobId) => {
+              setActiveJobId(jobId);
+            }}
+          />
         </Modal>
       ) : null}
       <AskSpacePanel space={selectedSpace} open={askSpaceOpen} onOpenChange={setAskSpaceOpen} />

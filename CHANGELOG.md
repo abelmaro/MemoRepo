@@ -7,6 +7,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-20
+
+### Added
+
+- Add multi-repository selection with one atomic, idempotent ingestion request and grouped preparation and snapshot progress.
+- Add batch cancellation and state-aware retry actions that preserve completed repository preparation.
+- Add real sequential-versus-batch ingestion baselines and blobless no-tags cloning with a compatibility fallback.
+- Add repository-grouped indexing details for skipped files and excluded directories to the snapshot lifecycle view.
+
+### Changed
+
+- Validate complete repository selections before creating space membership or background jobs.
+- Pass CBM CLI payloads through standard input to avoid operating-system command-line size limits.
+- Show the cached repository catalog immediately and refresh it automatically when the repository picker opens.
+
+### Fixed
+
+- Skip redundant mutable indexing during snapshot-only update checks.
+- Show snapshot-included repositories as ready without requiring a legacy mutable index.
+- Preserve repository batch context while inspecting job details and distinguish queued work from running work.
+- Keep adjacent snapshot status indicators visually separated.
+
 ## [0.3.1] - 2026-07-19
 
 ### Added
@@ -271,7 +293,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/abelmaro/MemoRepo/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/abelmaro/MemoRepo/compare/v0.2.0...v0.2.1

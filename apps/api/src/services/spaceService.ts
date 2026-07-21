@@ -271,7 +271,7 @@ export class SpaceService {
     }
   }
 
-  private assertNoActiveSpaceJobs(spaceId: string): void {
+  assertNoActiveSpaceJobs(spaceId: string): void {
     const activeJob = this.spaceJobRows(spaceId).find((job) => job.status === "pending" || job.status === "running");
     if (activeJob) {
       throw Object.assign(new Error("Space has pending or running jobs"), { statusCode: 409 });
@@ -601,6 +601,31 @@ export class SpaceService {
     insertRecord(this.database, "space_repositories", record);
     this.markSpaceStale(spaceId);
     return record;
+  }
+
+  assertRepositoriesCanBeAdded(spaceId: string, githubRepositoryIds: string[]): void {
+    this.assertSpaceAcceptsWork(spaceId);
+    if (githubRepositoryIds.length === 0) throw new Error("Repository batch must not be empty");
+
+    const placeholders = githubRepositoryIds.map(() => "?").join(", ");
+    const available = this.database.sqlite.prepare(
+      `SELECT id FROM github_repositories WHERE id IN (${placeholders})`
+    ).all(...githubRepositoryIds) as Array<{ id: string }>;
+    const availableIds = new Set(available.map((repository) => repository.id));
+    if (githubRepositoryIds.some((repositoryId) => !availableIds.has(repositoryId))) {
+      throw new NotFoundError("One or more GitHub repositories were not found");
+    }
+
+    const existing = this.database.sqlite.prepare(
+      `SELECT github_repository_id AS repositoryId
+       FROM space_repositories
+       WHERE space_id = ?
+         AND removed_at IS NULL
+         AND github_repository_id IN (${placeholders})`
+    ).all(spaceId, ...githubRepositoryIds) as Array<{ repositoryId: string }>;
+    if (existing.length > 0) {
+      throw Object.assign(new Error("One or more repositories are already in this space"), { statusCode: 409 });
+    }
   }
 
   listSpaceRepositories(spaceId: string) {

@@ -48,6 +48,22 @@ describe("shared accessible UI", () => {
     expect(appShell.inert).toBe(false);
   });
 
+  it("exposes an optional modal back action without changing close behavior", () => {
+    const onBack = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <Modal title="Job details" onClose={onClose} onBack={onBack} backLabel="Back to repository batch">
+        <span>Job output</span>
+      </Modal>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to repository batch" }));
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("has no detectable axe violations in shared modal and error states", async () => {
     render(
       <>

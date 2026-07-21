@@ -3,6 +3,7 @@ import type { AppConfig } from "../config.js";
 import type { AppDatabase } from "../db/connection.js";
 import { insertRecord, updateRecord } from "../db/sql.js";
 import { createId } from "../domain/ids.js";
+import { NotFoundError } from "../domain/errors.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
 import type { GitService } from "./gitService.js";
@@ -157,8 +158,8 @@ export class OperationsService {
         const selectedCommit = typeof repository.selected_commit === "string" ? repository.selected_commit : null;
         const indexStatus = String(repository.index_status);
         const commitChanged = selectedCommit !== remote.commit;
-        const needsIndex = commitChanged || indexStatus !== "indexed";
-        if (!needsIndex) {
+        const needsMutableIndex = !this.config.snapshotOnlyIndexing && (commitChanged || indexStatus !== "indexed");
+        if (!commitChanged && !needsMutableIndex) {
           context.log(`${fullName} is up to date at ${remote.commit.slice(0, 12)}`);
           continue;
         }
@@ -170,23 +171,27 @@ export class OperationsService {
         updateRecord(this.database, "space_repositories", { indexStatus: "stale", lastError: null, updatedAt: nowIso() }, "id", spaceRepositoryId);
         this.spaces.markSpaceStale(spaceId);
 
-        const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log, signal: context.signal });
-        updateRecord(
-          this.database,
-          "space_repositories",
-          {
-            selectedBranch: branch,
-            selectedCommit: commit,
-            remoteRef: `refs/remotes/origin/${branch}`,
-            cloneStatus: "cloned",
-            indexStatus: "stale",
-            lastError: null,
-            updatedAt: nowIso()
-          },
-          "id",
-          spaceRepositoryId
-        );
-        await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
+        if (commitChanged) {
+          const commit = await this.git.checkoutFetchedRemoteBranch(localPath, branch, { onOutput: context.log, signal: context.signal });
+          updateRecord(
+            this.database,
+            "space_repositories",
+            {
+              selectedBranch: branch,
+              selectedCommit: commit,
+              remoteRef: `refs/remotes/origin/${branch}`,
+              cloneStatus: "cloned",
+              indexStatus: "stale",
+              lastError: null,
+              updatedAt: nowIso()
+            },
+            "id",
+            spaceRepositoryId
+          );
+        }
+        if (needsMutableIndex) {
+          await this.indexSpaceRepository(spaceRepositoryId, context.log, context.signal);
+        }
         updatedRepositories += 1;
       }
 
@@ -212,44 +217,330 @@ export class OperationsService {
   }
 
   enqueueAddRepository(spaceId: string, githubRepositoryId: string) {
-    return this.enqueueAddRepositories(spaceId, [githubRepositoryId], true);
+    return this.enqueueRepositorySet(spaceId, [githubRepositoryId], true, null);
   }
 
-  enqueueAddRepositories(spaceId: string, githubRepositoryIds: string[], singleCompatibility = false) {
-    this.spaces.assertSpaceAcceptsWork(spaceId);
+  enqueueAddRepositories(spaceId: string, githubRepositoryIds: string[], requestId = createId("req")) {
+    return this.enqueueRepositorySet(spaceId, githubRepositoryIds, false, requestId);
+  }
+
+  private enqueueRepositorySet(
+    spaceId: string,
+    githubRepositoryIds: string[],
+    singleCompatibility: boolean,
+    requestId: string | null
+  ) {
     const uniqueIds = [...new Set(githubRepositoryIds)];
     if (uniqueIds.length === 0 || uniqueIds.length > 50 || uniqueIds.some((id) => !id)) {
       throw new Error("Repository batch must contain between 1 and 50 unique repository IDs");
     }
-    const spaceRepositories = uniqueIds.map((repositoryId) => this.spaces.addRepositoryToSpace(spaceId, repositoryId));
-    const repositoryJobs = spaceRepositories.map((spaceRepository) => {
+    const canonicalRepositoryIds = [...uniqueIds].sort((left, right) => left.localeCompare(right));
+
+    if (requestId) {
+      const existing = this.findRepositoryBatch(spaceId, requestId);
+      if (existing) {
+        if (existing.repository_ids_json !== JSON.stringify(canonicalRepositoryIds)) {
+          throw Object.assign(new Error("Repository batch request ID was already used with different repositories"), { statusCode: 409 });
+        }
+        return this.repositoryBatchSubmission(existing.id);
+      }
+    }
+
+    return this.jobs.runAtomically(() => {
+      if (requestId) {
+        const existing = this.findRepositoryBatch(spaceId, requestId);
+        if (existing) return this.repositoryBatchSubmission(existing.id);
+        this.spaces.assertNoActiveSpaceJobs(spaceId);
+      }
+      this.spaces.assertRepositoriesCanBeAdded(spaceId, uniqueIds);
+
+      const timestamp = nowIso();
+      const batchId = requestId ? createId("bat") : null;
+      if (batchId && requestId) {
+        insertRecord(this.database, "repository_batches", {
+          id: batchId,
+          spaceId,
+          requestId,
+          repositoryIdsJson: JSON.stringify(canonicalRepositoryIds),
+          snapshotJobId: null,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
+      }
+
+      const spaceRepositories = uniqueIds.map((repositoryId) => this.spaces.addRepositoryToSpace(spaceId, repositoryId));
+      const repositoryJobs = spaceRepositories.map((spaceRepository) =>
+        this.enqueueRepositoryPreparation(spaceId, spaceRepository, batchId)
+      );
+      const snapshotJob = this.enqueueSnapshotRebuild(spaceId, repositoryJobs.map((entry) => entry.terminal.id));
+      if (batchId) {
+        this.recordRepositoryBatchJob(batchId, snapshotJob.id, "snapshot", null);
+        updateRecord(this.database, "repository_batches", { snapshotJobId: snapshotJob.id, updatedAt: timestamp }, "id", batchId);
+      }
+      const jobs = [...repositoryJobs.flatMap((entry) => entry.jobs), snapshotJob];
+      if (singleCompatibility) return { spaceRepository: spaceRepositories[0]!, jobs };
+      return { spaceRepositories, jobs, snapshotJob, batch: this.getRepositoryBatch(batchId!) };
+    });
+  }
+
+  getRepositoryBatch(batchId: string) {
+    const batch = this.requireRepositoryBatch(batchId);
+    const repositoryIds = JSON.parse(batch.repository_ids_json) as string[];
+    const repositories = (this.spaces.listSpaceRepositories(batch.space_id) as Array<Record<string, unknown>>)
+      .filter((repository) => repositoryIds.includes(String(repository.github_repository_id)));
+    const links = this.repositoryBatchJobLinks(batchId);
+    const jobs = links.map((link) => ({
+      stage: link.stage,
+      spaceRepositoryId: link.space_repository_id,
+      job: this.jobs.getJob(link.job_id)
+    }));
+    const latestByRepositoryStage = new Map<string, { status: string }>();
+    for (const entry of jobs) {
+      if (!entry.spaceRepositoryId || !entry.job) continue;
+      latestByRepositoryStage.set(
+        `${entry.spaceRepositoryId}:${entry.stage}`,
+        entry.job as { status: string }
+      );
+    }
+    const terminalStage = this.config.snapshotOnlyIndexing ? "checkout" : "index";
+    const items = repositories.map((repository) => {
+      const id = String(repository.id);
+      const latest = latestByRepositoryStage.get(`${id}:${terminalStage}`);
+      const status = latest?.status ?? (this.repositoryReadyForSnapshot(repository) ? "succeeded" : "pending");
+      return {
+        spaceRepositoryId: id,
+        githubRepositoryId: String(repository.github_repository_id),
+        fullName: String(repository.full_name),
+        cloneStatus: String(repository.clone_status),
+        indexStatus: String(repository.index_status),
+        status
+      };
+    });
+    const snapshotJob = batch.snapshot_job_id ? this.jobs.getJob(batch.snapshot_job_id) as { status: string } | undefined : undefined;
+    const active = jobs.some((entry) => entry.job && ["pending", "running"].includes((entry.job as { status: string }).status));
+    const preparedCount = items.filter((item) => item.status === "succeeded").length;
+    const failedCount = items.filter((item) => ["failed", "skipped", "cancelled"].includes(item.status)).length;
+    const indexedCount = snapshotJob?.status === "succeeded"
+      ? items.length
+      : this.buildingSnapshotRepositoryCount(batch.space_id, new Set(items.map((item) => item.spaceRepositoryId)));
+    const status = active
+      ? "running"
+      : snapshotJob?.status === "succeeded"
+        ? "succeeded"
+        : snapshotJob?.status === "cancelled"
+          ? "cancelled"
+          : snapshotJob && ["failed", "skipped"].includes(snapshotJob.status)
+            ? "failed"
+            : "pending";
+    const phase = ["failed", "cancelled"].includes(status)
+      ? status
+      : preparedCount < items.length
+        ? "preparing"
+        : snapshotJob?.status === "running"
+          ? "indexing"
+          : snapshotJob?.status === "succeeded"
+            ? "complete"
+            : status;
+
+    return {
+      id: batch.id,
+      spaceId: batch.space_id,
+      requestId: batch.request_id,
+      status,
+      phase,
+      repositoryCount: items.length,
+      preparedCount,
+      indexedCount,
+      failedCount,
+      snapshotJobId: batch.snapshot_job_id,
+      items,
+      jobs,
+      createdAt: batch.created_at,
+      updatedAt: batch.updated_at
+    };
+  }
+
+  cancelRepositoryBatch(batchId: string) {
+    this.requireRepositoryBatch(batchId);
+    const links = this.repositoryBatchJobLinks(batchId).reverse();
+    for (const link of links) {
+      const job = this.jobs.getJob(link.job_id) as { status: string } | undefined;
+      if (job && ["pending", "running"].includes(job.status)) this.jobs.cancelJob(link.job_id);
+    }
+    updateRecord(this.database, "repository_batches", { updatedAt: nowIso() }, "id", batchId);
+    return this.getRepositoryBatch(batchId);
+  }
+
+  retryRepositoryBatch(batchId: string) {
+    const batch = this.requireRepositoryBatch(batchId);
+    const active = this.repositoryBatchJobLinks(batchId).some((link) => {
+      const job = this.jobs.getJob(link.job_id) as { status: string } | undefined;
+      return job && ["pending", "running"].includes(job.status);
+    });
+    if (active) return this.repositoryBatchSubmission(batchId);
+
+    return this.jobs.runAtomically(() => {
+      this.spaces.assertNoActiveSpaceJobs(batch.space_id);
+      const repositoryIds = JSON.parse(batch.repository_ids_json) as string[];
+      const repositories = (this.spaces.listSpaceRepositories(batch.space_id) as Array<Record<string, unknown>>)
+        .filter((repository) => repositoryIds.includes(String(repository.github_repository_id)));
+      if (repositories.length !== repositoryIds.length) {
+        throw Object.assign(new Error("Repository batch can no longer be retried because its membership changed"), { statusCode: 409 });
+      }
+      const terminalJobIds: string[] = [];
+      for (const repository of repositories) {
+        const preparation = this.enqueueRepositoryRecovery(batch.space_id, repository, batchId);
+        if (preparation) terminalJobIds.push(preparation.id);
+      }
+      const snapshotJob = this.enqueueSnapshotRebuild(batch.space_id, terminalJobIds);
+      this.recordRepositoryBatchJob(batchId, snapshotJob.id, "snapshot", null);
+      updateRecord(this.database, "repository_batches", { snapshotJobId: snapshotJob.id, updatedAt: nowIso() }, "id", batchId);
+      return this.repositoryBatchSubmission(batchId);
+    });
+  }
+
+  private enqueueRepositoryPreparation(
+    spaceId: string,
+    spaceRepository: { id: string },
+    batchId: string | null
+  ) {
+    const cloneJob = this.jobs.enqueue({
+      type: "clone_space_repository",
+      spaceId,
+      spaceRepositoryId: spaceRepository.id,
+      payload: { spaceRepositoryId: spaceRepository.id }
+    });
+    if (batchId) this.recordRepositoryBatchJob(batchId, cloneJob.id, "clone", spaceRepository.id);
+    const checkoutJob = this.jobs.enqueue({
+      type: "checkout_space_repository",
+      spaceId,
+      spaceRepositoryId: spaceRepository.id,
+      dependsOnJobId: cloneJob.id,
+      payload: { spaceRepositoryId: spaceRepository.id, useExistingFetch: true }
+    });
+    if (batchId) this.recordRepositoryBatchJob(batchId, checkoutJob.id, "checkout", spaceRepository.id);
+    if (this.config.snapshotOnlyIndexing) {
+      return { spaceRepository, jobs: [cloneJob, checkoutJob], terminal: checkoutJob };
+    }
+    const indexJob = this.jobs.enqueue({
+      type: "index_space_repository",
+      spaceId,
+      spaceRepositoryId: spaceRepository.id,
+      dependsOnJobId: checkoutJob.id,
+      payload: { spaceRepositoryId: spaceRepository.id }
+    });
+    if (batchId) this.recordRepositoryBatchJob(batchId, indexJob.id, "index", spaceRepository.id);
+    return { spaceRepository, jobs: [cloneJob, checkoutJob, indexJob], terminal: indexJob };
+  }
+
+  private enqueueRepositoryRecovery(
+    spaceId: string,
+    repository: Record<string, unknown>,
+    batchId: string
+  ) {
+    const spaceRepositoryId = String(repository.id);
+    let dependencyJobId: string | null = null;
+    if (String(repository.clone_status) !== "cloned") {
       const cloneJob = this.jobs.enqueue({
         type: "clone_space_repository",
         spaceId,
-        spaceRepositoryId: spaceRepository.id,
-        payload: { spaceRepositoryId: spaceRepository.id }
+        spaceRepositoryId,
+        payload: { spaceRepositoryId }
       });
+      this.recordRepositoryBatchJob(batchId, cloneJob.id, "clone", spaceRepositoryId);
+      dependencyJobId = cloneJob.id;
+    }
+
+    if (dependencyJobId || typeof repository.selected_commit !== "string" || repository.selected_commit.length === 0) {
       const checkoutJob = this.jobs.enqueue({
         type: "checkout_space_repository",
         spaceId,
-        spaceRepositoryId: spaceRepository.id,
-        dependsOnJobId: cloneJob.id,
-        payload: { spaceRepositoryId: spaceRepository.id, useExistingFetch: true }
+        spaceRepositoryId,
+        ...(dependencyJobId ? { dependsOnJobId: dependencyJobId } : {}),
+        payload: { spaceRepositoryId, useExistingFetch: Boolean(dependencyJobId) }
       });
-      if (this.config.snapshotOnlyIndexing) return { spaceRepository, jobs: [cloneJob, checkoutJob], terminal: checkoutJob };
+      this.recordRepositoryBatchJob(batchId, checkoutJob.id, "checkout", spaceRepositoryId);
+      dependencyJobId = checkoutJob.id;
+    }
+
+    if (!this.config.snapshotOnlyIndexing && (dependencyJobId || String(repository.index_status) !== "indexed")) {
       const indexJob = this.jobs.enqueue({
         type: "index_space_repository",
         spaceId,
-        spaceRepositoryId: spaceRepository.id,
-        dependsOnJobId: checkoutJob.id,
-        payload: { spaceRepositoryId: spaceRepository.id }
+        spaceRepositoryId,
+        ...(dependencyJobId ? { dependsOnJobId: dependencyJobId } : {}),
+        payload: { spaceRepositoryId }
       });
-      return { spaceRepository, jobs: [cloneJob, checkoutJob, indexJob], terminal: indexJob };
-    });
-    const snapshotJob = this.enqueueSnapshotRebuild(spaceId, repositoryJobs.map((entry) => entry.terminal.id));
-    const jobs = [...repositoryJobs.flatMap((entry) => entry.jobs), snapshotJob];
-    if (singleCompatibility) return { spaceRepository: spaceRepositories[0]!, jobs };
-    return { spaceRepositories, jobs, snapshotJob };
+      this.recordRepositoryBatchJob(batchId, indexJob.id, "index", spaceRepositoryId);
+      dependencyJobId = indexJob.id;
+    }
+    return dependencyJobId ? this.jobs.getJob(dependencyJobId) as { id: string } : null;
+  }
+
+  private repositoryBatchSubmission(batchId: string) {
+    const batch = this.getRepositoryBatch(batchId);
+    const jobs = batch.jobs.map((entry) => entry.job).filter((job): job is NonNullable<typeof job> => Boolean(job));
+    const snapshotJob = batch.snapshotJobId ? this.jobs.getJob(batch.snapshotJobId) : null;
+    const spaceRepositories = batch.items.map((item) => this.spaces.getSpaceRepository(item.spaceRepositoryId));
+    return { batch, spaceRepositories, jobs, snapshotJob };
+  }
+
+  private recordRepositoryBatchJob(
+    batchId: string,
+    jobId: string,
+    stage: "clone" | "checkout" | "index" | "snapshot",
+    spaceRepositoryId: string | null
+  ): void {
+    this.database.sqlite.prepare(
+      `INSERT OR IGNORE INTO repository_batch_jobs (batch_id, job_id, stage, space_repository_id)
+       VALUES (?, ?, ?, ?)`
+    ).run(batchId, jobId, stage, spaceRepositoryId);
+  }
+
+  private repositoryBatchJobLinks(batchId: string): RepositoryBatchJobLink[] {
+    return this.database.sqlite.prepare(
+      `SELECT rbj.job_id, rbj.stage, rbj.space_repository_id
+       FROM repository_batch_jobs rbj
+       JOIN jobs j ON j.id = rbj.job_id
+       WHERE rbj.batch_id = ?
+       ORDER BY j.created_at ASC, j.id ASC`
+    ).all(batchId) as RepositoryBatchJobLink[];
+  }
+
+  private findRepositoryBatch(spaceId: string, requestId: string): RepositoryBatchRow | null {
+    return (this.database.sqlite.prepare(
+      "SELECT * FROM repository_batches WHERE space_id = ? AND request_id = ?"
+    ).get(spaceId, requestId) as RepositoryBatchRow | undefined) ?? null;
+  }
+
+  private requireRepositoryBatch(batchId: string): RepositoryBatchRow {
+    const batch = this.database.sqlite.prepare("SELECT * FROM repository_batches WHERE id = ?").get(batchId) as
+      | RepositoryBatchRow
+      | undefined;
+    if (!batch) throw new NotFoundError("Repository batch not found");
+    return batch;
+  }
+
+  private repositoryReadyForSnapshot(repository: Record<string, unknown>): boolean {
+    return String(repository.clone_status) === "cloned"
+      && typeof repository.selected_commit === "string"
+      && repository.selected_commit.length > 0
+      && (this.config.snapshotOnlyIndexing || String(repository.index_status) === "indexed");
+  }
+
+  private buildingSnapshotRepositoryCount(spaceId: string, batchRepositoryIds: Set<string>): number {
+    const row = this.database.sqlite.prepare(
+      "SELECT manifest_json FROM space_snapshots WHERE space_id = ? AND status = 'building' ORDER BY created_at DESC LIMIT 1"
+    ).get(spaceId) as { manifest_json: string } | undefined;
+    if (!row) return 0;
+    try {
+      const manifest = JSON.parse(row.manifest_json) as { repositories?: Array<{ spaceRepositoryId?: unknown }> };
+      return Array.isArray(manifest.repositories)
+        ? manifest.repositories.filter((repository) => batchRepositoryIds.has(String(repository.spaceRepositoryId))).length
+        : 0;
+    } catch {
+      return 0;
+    }
   }
 
   enqueueCheckout(spaceRepositoryId: string, branch: string) {
@@ -452,4 +743,20 @@ function throwIfAborted(signal: AbortSignal): void {
 function formatDuration(durationMs: number): string {
   if (durationMs < 1_000) return `${durationMs}ms`;
   return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+interface RepositoryBatchRow {
+  id: string;
+  space_id: string;
+  request_id: string;
+  repository_ids_json: string;
+  snapshot_job_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RepositoryBatchJobLink {
+  job_id: string;
+  stage: "clone" | "checkout" | "index" | "snapshot";
+  space_repository_id: string | null;
 }

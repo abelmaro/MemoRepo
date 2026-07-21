@@ -14,6 +14,7 @@ export interface BaselineConfig {
   apiUrl: string;
   controlToken: string;
   repositories: [string, string, string];
+  ingestionMode: "sequential" | "batch";
   outputPath: string;
   storageRoot: string | null;
   includeAgents: boolean;
@@ -24,14 +25,15 @@ export interface BaselineConfig {
 }
 
 export interface BaselineReport {
-  schemaVersion: 2;
+  schemaVersion: 3;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
   scenario: {
     repositoryCount: 3;
     spaceCount: 2;
-    sequentialRepositoryAdds: true;
+    sequentialRepositoryAdds: boolean;
+    ingestionMode: "sequential" | "batch";
     agentConcurrencyRequested: number;
     idleProbeSeconds: number;
   };
@@ -427,6 +429,7 @@ export function parseBaselineArguments(
     apiUrl: (options.get("api-url") ?? environment.MEMOREPO_PUBLIC_API_URL ?? DEFAULT_API_URL).replace(/\/+$/, ""),
     controlToken,
     repositories: repositories as [string, string, string],
+    ingestionMode: ingestionMode(options.get("ingestion-mode") ?? environment.MEMOREPO_PERF_INGESTION_MODE),
     outputPath,
     storageRoot: storageValue ? path.resolve(storageValue) : null,
     includeAgents: options.has("include-agents"),
@@ -442,6 +445,9 @@ export async function runPerformanceBaseline(config: BaselineConfig): Promise<Ba
   const startedAt = new Date();
   const storageBefore = await measureStorage(config.storageRoot);
   await client.required("/api/health", "/api/health");
+  const batchRepositoryIds = config.ingestionMode === "batch"
+    ? await resolveBenchmarkRepositoryIds(client, config.repositories)
+    : null;
   const runSuffix = startedAt.toISOString().replace(/\D/g, "").slice(0, 14);
   const spaces = await Promise.all(
     ["A", "B"].map(async (label) => {
@@ -459,21 +465,37 @@ export async function runPerformanceBaseline(config: BaselineConfig): Promise<Ba
   for (const space of spaces) {
     const spaceStartedAt = performance.now();
     const additions: SpaceRunReport["additions"] = [];
-    for (const [repositoryIndex, locator] of config.repositories.entries()) {
+    if (config.ingestionMode === "batch") {
       const additionStartedAt = performance.now();
       const response = await client.required<{ jobs: JobView[] }>(
-        "/api/spaces/:spaceId/repositories",
-        `/api/spaces/${encodeURIComponent(space.id)}/repositories`,
-        { method: "POST", body: JSON.stringify({ locator }) }
+        "/api/spaces/:spaceId/repositories/batch",
+        `/api/spaces/${encodeURIComponent(space.id)}/repositories/batch`,
+        {
+          method: "POST",
+          body: JSON.stringify({ repositoryIds: batchRepositoryIds, requestId: `perf-${runSuffix}-${space.label}` })
+        }
       );
       const finalJobs = await waitForJobs(client, response.jobs.map((job) => job.id), config);
       const jobs = finalJobs.map(measureJob);
       allJobs.push(...jobs);
-      additions.push({
-        repositoryLabel: `repository-${repositoryIndex + 1}`,
-        durationMs: Math.round(performance.now() - additionStartedAt),
-        jobs
-      });
+      additions.push({ repositoryLabel: "repository-batch", durationMs: Math.round(performance.now() - additionStartedAt), jobs });
+    } else {
+      for (const [repositoryIndex, locator] of config.repositories.entries()) {
+        const additionStartedAt = performance.now();
+        const response = await client.required<{ jobs: JobView[] }>(
+          "/api/spaces/:spaceId/repositories",
+          `/api/spaces/${encodeURIComponent(space.id)}/repositories`,
+          { method: "POST", body: JSON.stringify({ locator }) }
+        );
+        const finalJobs = await waitForJobs(client, response.jobs.map((job) => job.id), config);
+        const jobs = finalJobs.map(measureJob);
+        allJobs.push(...jobs);
+        additions.push({
+          repositoryLabel: `repository-${repositoryIndex + 1}`,
+          durationMs: Math.round(performance.now() - additionStartedAt),
+          jobs
+        });
+      }
     }
     const snapshotResponse = await client.required<{ snapshots: Array<{ active: boolean }>; totalSizeBytes: number }>(
       "/api/spaces/:spaceId/snapshots",
@@ -497,14 +519,15 @@ export async function runPerformanceBaseline(config: BaselineConfig): Promise<Ba
   const finishedAt = new Date();
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
     durationMs: finishedAt.getTime() - startedAt.getTime(),
     scenario: {
       repositoryCount: 3,
       spaceCount: 2,
-      sequentialRepositoryAdds: true,
+      sequentialRepositoryAdds: config.ingestionMode === "sequential",
+      ingestionMode: config.ingestionMode,
       agentConcurrencyRequested: config.includeAgents ? 3 : 0,
       idleProbeSeconds: config.idleSeconds
     },
@@ -524,6 +547,28 @@ export async function runPerformanceBaseline(config: BaselineConfig): Promise<Ba
     },
     http: client.summary()
   };
+}
+
+async function resolveBenchmarkRepositoryIds(
+  client: ApiClient,
+  repositories: [string, string, string]
+): Promise<[string, string, string]> {
+  const ids: string[] = [];
+  for (const locator of repositories) {
+    const fullName = normalizeGitHubLocator(locator);
+    const response = await client.required<{ repositories: Array<{ id: string; full_name?: string; fullName?: string }> }>(
+      "/api/github/repositories",
+      `/api/github/repositories?query=${encodeURIComponent(fullName)}&kind=all`
+    );
+    const match = response.repositories.find((repository) =>
+      (repository.full_name ?? repository.fullName ?? "").toLocaleLowerCase("en-US") === fullName.toLocaleLowerCase("en-US")
+    );
+    if (!match) {
+      throw new BaselineInputError(`Repository ${fullName} is not present in the synced GitHub catalog`);
+    }
+    ids.push(match.id);
+  }
+  return ids as [string, string, string];
 }
 
 export async function writeBaselineReport(report: BaselineReport, outputPath: string): Promise<void> {
@@ -882,6 +927,26 @@ function emptyAgentTotals() {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function ingestionMode(value: string | undefined): "sequential" | "batch" {
+  if (!value || value === "sequential") return "sequential";
+  if (value === "batch") return "batch";
+  throw new BaselineInputError("--ingestion-mode must be sequential or batch");
+}
+
+function normalizeGitHubLocator(locator: string): string {
+  const trimmed = locator.trim().replace(/\.git$/i, "").replace(/\/+$/, "");
+  try {
+    const parsed = new URL(trimmed);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length >= 2) return `${segments.at(-2)}/${segments.at(-1)}`;
+  } catch {
+    // owner/name locators are handled below.
+  }
+  const segments = trimmed.split("/").filter(Boolean);
+  if (segments.length === 2) return `${segments[0]}/${segments[1]}`;
+  throw new BaselineInputError(`Invalid GitHub repository locator: ${locator}`);
 }
 
 function emptyTurn(id: string): TurnView {

@@ -31,6 +31,22 @@ test("runProcess resolves with captured, line-split output", async () => {
   assert.deepEqual(lines, ["first", "second"]);
 });
 
+test("runProcess writes bounded command input through stdin", async () => {
+  const input = JSON.stringify({ repo_path: "/tmp/example", mode: "fast" });
+  const result = await runProcess({
+    command: process.execPath,
+    args: [
+      "-e",
+      "let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { input += chunk; }); process.stdin.on('end', () => process.stdout.write(input));"
+    ],
+    stdin: input,
+    timeoutMs: 30_000
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, input);
+});
+
 test("runProcess can replace the inherited environment", async () => {
   const secretName = "MEMOREPO_TEST_PARENT_SECRET";
   const previousSecret = process.env[secretName];

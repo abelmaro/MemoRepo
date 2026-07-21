@@ -7,7 +7,8 @@ import {
   type MaintenanceSummary,
   type SnapshotListResponse,
   type SnapshotPruneResult,
-  type Space
+  type Space,
+  type SpaceSnapshot
 } from "../lib/api";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
@@ -30,6 +31,7 @@ export function LifecyclePanel({
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [detailsSnapshot, setDetailsSnapshot] = useState<SpaceSnapshot | null>(null);
 
   const snapshotsQuery = useQuery({
     queryKey: ["space-snapshots", space.id],
@@ -133,27 +135,43 @@ export function LifecyclePanel({
             </div>
           </div>
           <div className="snapshot-list">
-            {snapshots.map((snapshot) => (
-              <article className="snapshot-row" key={snapshot.id}>
-                <div>
-                  <strong>v{snapshot.version.toString().padStart(6, "0")}</strong>
-                  <span>{snapshot.repositoryCount} repos · {formatBytes(snapshot.sizeBytes)} · {formatSnapshotTime(snapshot.createdAt)}</span>
-                  <span>
-                    CBM {snapshot.engineVersions?.join(", ") || "unknown"} · {snapshot.indexModes?.join(", ") || "unknown"} mode
-                    {snapshot.coveragePercent === null ? "" : ` · ${snapshot.coveragePercent}% source coverage`}
-                    {snapshot.indexDurationMs === null ? "" : ` · ${formatDuration(snapshot.indexDurationMs)}`}
-                  </span>
-                  <span>
-                    {snapshot.sourceFileCount ?? 0} source files · {snapshot.skippedCount ?? 0} skipped · {snapshot.excludedDirectoryCount ?? 0} excluded directories
-                  </span>
-                  {snapshot.reason ? <small className={snapshot.error ? "snapshot-error" : undefined}>{snapshot.reason}</small> : null}
-                </div>
-                <div className="repo-badges">
-                  {snapshot.active ? <StatusBadge status="active" tone="green" /> : <StatusBadge status={snapshot.status} />}
-                  <StatusBadge status={snapshot.quality} />
-                </div>
-              </article>
-            ))}
+            {snapshots.map((snapshot) => {
+              const versionLabel = snapshotVersionLabel(snapshot.version);
+              const hasIndexingDetails = snapshot.skippedCount > 0 || snapshot.excludedDirectoryCount > 0;
+              return (
+                <article className="snapshot-row" key={snapshot.id}>
+                  <div>
+                    <strong>{versionLabel}</strong>
+                    <span>{snapshot.repositoryCount} repos · {formatBytes(snapshot.sizeBytes)} · {formatSnapshotTime(snapshot.createdAt)}</span>
+                    <span>
+                      CBM {snapshot.engineVersions?.join(", ") || "unknown"} · {snapshot.indexModes?.join(", ") || "unknown"} mode
+                      {snapshot.coveragePercent === null ? "" : ` · ${snapshot.coveragePercent}% source coverage`}
+                      {snapshot.indexDurationMs === null ? "" : ` · ${formatDuration(snapshot.indexDurationMs)}`}
+                    </span>
+                    <span>
+                      {snapshot.sourceFileCount ?? 0} source files · {snapshot.skippedCount ?? 0} skipped · {snapshot.excludedDirectoryCount ?? 0} excluded directories
+                    </span>
+                    {snapshot.reason ? <small className={snapshot.error ? "snapshot-error" : undefined}>{snapshot.reason}</small> : null}
+                    {hasIndexingDetails ? (
+                      <button
+                        className="text-button snapshot-details-trigger"
+                        type="button"
+                        aria-label={`View indexing details for snapshot ${versionLabel}`}
+                        aria-haspopup="dialog"
+                        aria-expanded={detailsSnapshot === snapshot}
+                        onClick={() => setDetailsSnapshot(snapshot)}
+                      >
+                        View indexing details
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="repo-badges">
+                    {snapshot.active ? <StatusBadge status="active" tone="green" /> : <StatusBadge status={snapshot.status} />}
+                    <StatusBadge status={snapshot.quality} />
+                  </div>
+                </article>
+              );
+            })}
             {snapshots.length === 0 ? <div className="empty-inline">No snapshots yet.</div> : null}
           </div>
         </div>
@@ -205,6 +223,10 @@ export function LifecyclePanel({
       </div>
       </section>
 
+      {detailsSnapshot ? (
+        <SnapshotIndexingDetailsDialog snapshot={detailsSnapshot} onClose={() => setDetailsSnapshot(null)} />
+      ) : null}
+
       {deleteOpen ? (
         <Modal title="Delete space" onClose={() => !deleteManagedMutation.isPending && setDeleteOpen(false)}>
           <div className="confirmation-dialog">
@@ -244,6 +266,79 @@ export function LifecyclePanel({
       ) : null}
     </>
   );
+}
+
+function SnapshotIndexingDetailsDialog({ snapshot, onClose }: { snapshot: SpaceSnapshot; onClose: () => void }) {
+  const details = snapshot.indexingDetails ?? [];
+  const versionLabel = snapshotVersionLabel(snapshot.version);
+  return (
+    <Modal title={`${versionLabel} indexing details`} onClose={onClose} wide>
+      <div className="snapshot-details-dialog">
+        <p className="snapshot-details-summary">
+          {snapshot.skippedCount} skipped {snapshot.skippedCount === 1 ? "file" : "files"} and {snapshot.excludedDirectoryCount} excluded {snapshot.excludedDirectoryCount === 1 ? "directory" : "directories"}, grouped by repository.
+        </p>
+        {details.length === 0 ? (
+          <div className="empty-inline">Detailed paths were not reported for this snapshot.</div>
+        ) : (
+          <div className="snapshot-details-repositories">
+            {details.map((detail) => (
+              <section className="snapshot-detail-repository" key={detail.repository}>
+                <h3>{detail.repository}</h3>
+                <div className="snapshot-detail-grid">
+                  {detail.skippedCount > 0 ? (
+                    <section className="snapshot-detail-section">
+                      <div className="snapshot-detail-heading">
+                        <h4>Skipped files</h4>
+                        <span>{detail.skippedCount}</span>
+                      </div>
+                      {detail.skippedFiles.length > 0 ? (
+                        <ul className="snapshot-path-list">
+                          {detail.skippedFiles.map((file) => (
+                            <li key={`${file.path}:${file.phase}:${file.reason}`}>
+                              <code>{file.path}</code>
+                              <span>{file.reason} · {file.phase}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="snapshot-detail-note">No file paths were reported.</p>
+                      )}
+                      {detail.skippedTruncated ? (
+                        <p className="snapshot-detail-note">Showing {detail.skippedFiles.length} of {detail.skippedCount} reported files.</p>
+                      ) : null}
+                    </section>
+                  ) : null}
+
+                  {detail.excludedDirectoryCount > 0 ? (
+                    <section className="snapshot-detail-section">
+                      <div className="snapshot-detail-heading">
+                        <h4>Excluded directories</h4>
+                        <span>{detail.excludedDirectoryCount}</span>
+                      </div>
+                      {detail.excludedDirectories.length > 0 ? (
+                        <ul className="snapshot-path-list directories">
+                          {detail.excludedDirectories.map((directory) => <li key={directory}><code>{directory}</code></li>)}
+                        </ul>
+                      ) : (
+                        <p className="snapshot-detail-note">No directory paths were reported.</p>
+                      )}
+                      {detail.excludedDirectoriesTruncated ? (
+                        <p className="snapshot-detail-note">Showing {detail.excludedDirectories.length} of {detail.excludedDirectoryCount} reported directories.</p>
+                      ) : null}
+                    </section>
+                  ) : null}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function snapshotVersionLabel(version: number): string {
+  return `v${version.toString().padStart(6, "0")}`;
 }
 
 function formatSnapshotTime(value: string): string {

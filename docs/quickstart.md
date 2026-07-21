@@ -97,18 +97,20 @@ analytics
 
 A space isolates repository membership, snapshots, and MCP connections.
 
-## 6. Add A Repository
+## 6. Add Repositories
 
 Click `Add repo`.
 
-Choose a synced repository or add one by URL:
+The picker shows the cached catalog immediately and refreshes it automatically in the background. Select up to 50 repositories; selections remain active while you search or change filters. Choose `Add N` once to prepare every selected repository and build one shared snapshot. The grouped progress view reports preparation and snapshot indexing for the complete batch, and lets you cancel active work or retry a failed batch without redoing repositories that are already ready.
+
+You can also add one repository by URL:
 
 ```text
 owner/repo
 https://github.com/owner/repo
 ```
 
-MemoRepo will enqueue jobs to clone, checkout, index, and build the first space snapshot. Open the job log to follow progress.
+MemoRepo validates the complete selection before adding anything. It then clones and checks out repositories independently, indexes them into one immutable snapshot, and activates that snapshot only after the whole batch succeeds. A failed build preserves the previously active snapshot.
 
 ## 7. Connect An Agent
 
@@ -182,7 +184,7 @@ If the `memorepo-secrets` Docker volume is lost or replaced, the encryption key 
 
 Use the `Data lifecycle` panel inside a space to:
 
-- inspect snapshots and their approximate index-artifact size; shared immutable revision trees are counted separately as garbage-collection candidates when no retained snapshot references them;
+- inspect snapshots, their approximate index-artifact size, and repository-grouped details for skipped files and excluded directories; shared immutable revision trees are counted separately as garbage-collection candidates when no retained snapshot references them;
 - prune inactive snapshots while always keeping the active snapshot;
 - run garbage collection for failed snapshot artifacts, removed clones, stale repo index records, orphan repo index directories, unreferenced revision trees, and old terminal jobs;
 - delete a space together with its space-scoped MemoRepo data; revision trees still referenced by another retained snapshot remain shared, and newly unreferenced trees are removed by garbage collection.
@@ -202,7 +204,7 @@ MEMOREPO_BATCH_REPOSITORY_OPERATIONS=true
 MEMOREPO_SNAPSHOT_ONLY_INDEXING=true
 ```
 
-Keep quality enforcement and snapshot-only indexing enabled for normal Docker Compose use. Set `MEMOREPO_CBM_INDEX_MODE=full` and restart the API when semantic graph retrieval is worth the additional indexing time, memory, and storage; then rebuild each space snapshot because retained snapshots preserve their original mode. Accepted values are `fast`, `moderate`, and `full`, and invalid values prevent API startup. To diagnose or immediately roll back the indexing flow without removing stored artifacts, set `MEMOREPO_SNAPSHOT_ONLY_INDEXING=false` and restart the API. The snapshot list reports CBM engine versions, index modes, source coverage, skipped files, indexing duration, artifact size, and any degraded-quality reason so rollout regressions are visible without reading server logs.
+Keep quality enforcement and snapshot-only indexing enabled for normal Docker Compose use. Set `MEMOREPO_CBM_INDEX_MODE=full` and restart the API when semantic graph retrieval is worth the additional indexing time, memory, and storage; then rebuild each space snapshot because retained snapshots preserve their original mode. Accepted values are `fast`, `moderate`, and `full`, and invalid values prevent API startup. To diagnose or immediately roll back the indexing flow without removing stored artifacts, set `MEMOREPO_SNAPSHOT_ONLY_INDEXING=false` and restart the API. The snapshot list reports CBM engine versions, index modes, source coverage, skipped files, indexing duration, artifact size, and any degraded-quality reason so rollout regressions are visible without reading server logs. When indexing reports skipped files or excluded directories, choose **View indexing details** to inspect the safe relative paths grouped by repository.
 
 ## 13. Manage Jobs
 
@@ -218,4 +220,4 @@ MemoRepo supports:
 
 Active cancellation is cooperative: MemoRepo signals the current subprocess, escalates if it does not stop, and records the job as cancelled after the handler exits. A running row recovered without an active process cannot be cancelled safely and is marked failed during startup recovery instead.
 
-Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's indexed commit. Repositories that are already current are skipped. Changed or incomplete indexes are rebuilt, and MemoRepo creates one replacement space snapshot only when needed.
+Use `Check & update` in a space to fetch each selected remote branch and compare its commit with MemoRepo's recorded commit. Repositories that are already current are skipped. In snapshot-only mode, a stale mutable-index state is expected and does not trigger redundant work. Legacy mutable-index mode also repairs incomplete indexes. MemoRepo creates one replacement space snapshot only when needed.

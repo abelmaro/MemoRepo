@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 interface Migration {
   version: number;
@@ -23,6 +23,7 @@ const migrations: Migration[] = [
   { version: 13, up: addJobDependencies },
   { version: 14, up: addOperationalMetrics },
   { version: 15, up: addAgentAttemptDiagnostics },
+  { version: 16, up: addRepositoryBatches },
 ];
 
 export function migrate(sqlite: Database.Database): void {
@@ -326,6 +327,35 @@ function addAgentAttemptDiagnostics(sqlite: Database.Database): void {
   for (const [name, definition] of additions) {
     if (!columns.has(name)) sqlite.exec(`ALTER TABLE agent_turn_attempts ADD COLUMN ${definition};`);
   }
+}
+
+function addRepositoryBatches(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS repository_batches (
+      id TEXT PRIMARY KEY,
+      space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL,
+      repository_ids_json TEXT NOT NULL,
+      snapshot_job_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(space_id, request_id)
+    );
+    CREATE INDEX IF NOT EXISTS repository_batches_space_created_idx
+      ON repository_batches(space_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS repository_batch_jobs (
+      batch_id TEXT NOT NULL REFERENCES repository_batches(id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      stage TEXT NOT NULL,
+      space_repository_id TEXT,
+      PRIMARY KEY (batch_id, job_id)
+    );
+    CREATE INDEX IF NOT EXISTS repository_batch_jobs_job_idx
+      ON repository_batch_jobs(job_id);
+    CREATE INDEX IF NOT EXISTS repository_batch_jobs_repository_stage_idx
+      ON repository_batch_jobs(batch_id, space_repository_id, stage);
+  `);
 }
 
 function normalizeSnapshotStatuses(sqlite: Database.Database): void {

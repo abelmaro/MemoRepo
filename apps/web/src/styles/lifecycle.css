@@ -103,6 +103,118 @@
   overflow-wrap: anywhere;
 }
 
+.snapshot-details-trigger {
+  position: relative;
+  z-index: var(--z-index-raised);
+  justify-self: start;
+  padding: var(--space-3) var(--space-0);
+  font-size: var(--font-size-label);
+}
+
+.snapshot-details-dialog {
+  display: grid;
+  gap: var(--space-18);
+  padding: var(--space-20) var(--space-22) var(--space-22);
+}
+
+.snapshot-details-summary,
+.snapshot-detail-note {
+  margin: var(--space-0);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-normal);
+}
+
+.snapshot-details-repositories {
+  display: grid;
+  gap: var(--space-14);
+}
+
+.snapshot-detail-repository {
+  display: grid;
+  gap: var(--space-14);
+  padding: var(--space-16);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
+}
+
+.snapshot-detail-repository h3,
+.snapshot-detail-section h4 {
+  margin: var(--space-0);
+}
+
+.snapshot-detail-repository h3 {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-body-lg);
+}
+
+.snapshot-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: var(--space-12);
+}
+
+.snapshot-detail-section {
+  display: grid;
+  align-content: start;
+  gap: var(--space-10);
+  min-width: 0;
+  padding: var(--space-12);
+  border: var(--border-width-default) solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-primary);
+}
+
+.snapshot-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-10);
+}
+
+.snapshot-detail-heading h4 {
+  font-size: var(--font-size-body);
+}
+
+.snapshot-detail-heading > span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-bold);
+}
+
+.snapshot-path-list {
+  display: grid;
+  gap: var(--space-0);
+  margin: var(--space-0);
+  padding: var(--space-0);
+  list-style: none;
+}
+
+.snapshot-path-list li {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-8) var(--space-0);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
+}
+
+.snapshot-path-list li:last-child {
+  border-bottom: var(--border-width-none);
+}
+
+.snapshot-path-list code {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+  overflow-wrap: anywhere;
+}
+
+.snapshot-path-list span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
 .compact-controls {
   display: flex;
   gap: var(--space-10);

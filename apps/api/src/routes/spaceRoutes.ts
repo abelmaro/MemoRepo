@@ -3,6 +3,7 @@ import { z } from "zod";
 
 const paramsWithSpaceId = z.object({ spaceId: z.string().min(1) });
 const paramsWithSpaceRepositoryId = z.object({ spaceRepositoryId: z.string().min(1) });
+const paramsWithRepositoryBatchId = z.object({ batchId: z.string().min(1) });
 const paramsWithConnectionId = z.object({ connectionId: z.string().min(1) });
 
 export async function spaceRoutes(app: FastifyInstance) {
@@ -83,8 +84,30 @@ export async function spaceRoutes(app: FastifyInstance) {
       throw Object.assign(new Error("Batch repository operations are disabled"), { statusCode: 404 });
     }
     const { spaceId } = paramsWithSpaceId.parse(request.params);
-    const body = z.object({ repositoryIds: z.array(z.string().min(1)).min(1).max(50) }).parse(request.body);
-    return app.services.operations.enqueueAddRepositories(spaceId, body.repositoryIds);
+    const body = z.object({
+      repositoryIds: z.array(z.string().min(1)).min(1).max(50),
+      requestId: z.string().min(8).max(128).optional()
+    }).parse(request.body);
+    return app.services.operations.enqueueAddRepositories(spaceId, body.repositoryIds, body.requestId);
+  });
+
+  app.get("/api/repository-batches/:batchId", async (request) => {
+    const { batchId } = paramsWithRepositoryBatchId.parse(request.params);
+    return { batch: app.services.operations.getRepositoryBatch(batchId) };
+  });
+
+  app.post("/api/repository-batches/:batchId/cancel", async (request) => {
+    const { batchId } = paramsWithRepositoryBatchId.parse(request.params);
+    const batch = app.services.operations.cancelRepositoryBatch(batchId);
+    app.services.dashboardEvents.publish({ type: "jobs" }, { type: "space", spaceId: batch.spaceId });
+    return { batch };
+  });
+
+  app.post("/api/repository-batches/:batchId/retry", async (request) => {
+    const { batchId } = paramsWithRepositoryBatchId.parse(request.params);
+    const result = app.services.operations.retryRepositoryBatch(batchId);
+    app.services.dashboardEvents.publish({ type: "jobs" }, { type: "space", spaceId: result.batch.spaceId });
+    return result;
   });
 
   app.post("/api/spaces/:spaceId/reindex", async (request) => {

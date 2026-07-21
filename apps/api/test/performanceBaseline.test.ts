@@ -25,6 +25,7 @@ test("performance baseline arguments require exactly three repositories", () => 
   );
 
   assert.deepEqual(config.repositories, ["owner/one", "owner/two", "owner/three"]);
+  assert.equal(config.ingestionMode, "sequential");
   assert.equal(config.includeAgents, true);
   assert.equal(config.idleSeconds, 0);
   assert.equal(config.storageRoot, path.resolve("./managed-data"));
@@ -58,6 +59,22 @@ test("performance baseline accepts environment-backed repository configuration",
   assert.deepEqual(config.repositories, ["owner/one", "owner/two", "owner/three"]);
   assert.equal(config.apiUrl, "http://127.0.0.1:9999");
   assert.equal(config.includeAgents, false);
+  assert.equal(config.ingestionMode, "sequential");
+});
+
+test("performance baseline supports real batch ingestion mode", () => {
+  const config = parseBaselineArguments(
+    ["--repositories", "owner/one,owner/two,owner/three", "--ingestion-mode", "batch"],
+    { MEMOREPO_CONTROL_TOKEN: TOKEN }
+  );
+  assert.equal(config.ingestionMode, "batch");
+  assert.throws(
+    () => parseBaselineArguments(
+      ["--repositories", "owner/one,owner/two,owner/three", "--ingestion-mode", "parallel"],
+      { MEMOREPO_CONTROL_TOKEN: TOKEN }
+    ),
+    /sequential or batch/
+  );
 });
 
 test("job aggregation reports duration distributions without retaining identifiers", () => {

@@ -13,8 +13,15 @@ test("snapshot-only batch proves one rebuild, N primary indexes, and at least 50
     assert.equal(value.batch.primaryIndexCount, value.repositories);
     assert.equal(value.legacy.snapshotRebuildCount, 1);
     assert.equal(value.batch.snapshotRebuildCount, 1);
+    assert.equal(value.sequential.snapshotRebuildCount, value.repositories);
+    assert.equal(value.sequential.primaryIndexCount, value.repositories * (value.repositories + 1) / 2);
     assert.equal(value.ingestionReduction, 0.5);
+    assert.equal(
+      value.workflowReduction,
+      (value.sequential.primaryIndexCount - value.batch.primaryIndexCount) / value.sequential.primaryIndexCount
+    );
     assert.ok(value.batch.simulatedElapsedMs < value.legacy.simulatedElapsedMs);
     assert.ok(value.legacy.realElapsedMs > 0 && value.batch.realElapsedMs > 0);
   }
+  assert.equal(report.gates.workflowReductionAtFiveAtLeast60Percent, true);
 });

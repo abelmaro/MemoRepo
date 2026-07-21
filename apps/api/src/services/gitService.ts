@@ -38,11 +38,20 @@ export class GitService {
     }
 
     fs.mkdirSync(path.dirname(safeTarget), { recursive: true });
-    await this.git(["clone", remoteUrl, safeTarget], {
+    const cloneContext = {
       onOutput: context.onOutput,
       timeoutMs: context.timeoutMs ?? 30 * 60_000,
       signal: context.signal
-    });
+    };
+    try {
+      context.onOutput?.("Using a blobless partial clone to avoid downloading historical file contents.");
+      await this.git(["clone", "--filter=blob:none", "--no-tags", remoteUrl, safeTarget], cloneContext);
+    } catch (error) {
+      if (!isPartialCloneCompatibilityError(error)) throw error;
+      context.onOutput?.("The remote does not support partial clone filters; retrying with a full clone.");
+      fs.rmSync(safeTarget, { recursive: true, force: true });
+      await this.git(["clone", "--no-tags", remoteUrl, safeTarget], cloneContext);
+    }
   }
 
   async fetchBranches(repoPath: string, context: GitCommandContext = {}): Promise<string[]> {
@@ -177,6 +186,11 @@ export class GitService {
     this.askPassPath = scriptPath;
     return scriptPath;
   }
+}
+
+function isPartialCloneCompatibilityError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /filtering not recognized|does not support.*filter|unsupported filter|filter.*not supported/i.test(message);
 }
 
 function parseCheckoutStatus(output: string): { branch: string | null; commit: string | null; clean: boolean } {

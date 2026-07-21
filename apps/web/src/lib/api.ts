@@ -151,6 +151,45 @@ export interface JobEvent {
   created_at: string;
 }
 
+export interface RepositoryBatchItem {
+  spaceRepositoryId: string;
+  githubRepositoryId: string;
+  fullName: string;
+  cloneStatus: string;
+  indexStatus: string;
+  status: string;
+}
+
+export interface RepositoryBatchJob {
+  stage: "clone" | "checkout" | "index" | "snapshot";
+  spaceRepositoryId: string | null;
+  job: Job | null;
+}
+
+export interface RepositoryBatch {
+  id: string;
+  spaceId: string;
+  requestId: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  phase: string;
+  repositoryCount: number;
+  preparedCount: number;
+  indexedCount: number;
+  failedCount: number;
+  snapshotJobId: string | null;
+  items: RepositoryBatchItem[];
+  jobs: RepositoryBatchJob[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RepositoryBatchSubmission {
+  batch: RepositoryBatch;
+  spaceRepositories: SpaceRepository[];
+  jobs: Job[];
+  snapshotJob: Job | null;
+}
+
 export interface McpConnection {
   id: string;
   space_id: string;
@@ -162,6 +201,16 @@ export interface McpConnection {
 }
 
 export type SnapshotQuality = "complete" | "partial" | "degraded" | "unknown";
+
+export interface SnapshotRepositoryIndexingDetails {
+  repository: string;
+  skippedFiles: Array<{ path: string; reason: string; phase: string }>;
+  skippedCount: number;
+  skippedTruncated: boolean;
+  excludedDirectories: string[];
+  excludedDirectoryCount: number;
+  excludedDirectoriesTruncated: boolean;
+}
 
 export interface SpaceSnapshot {
   id: string;
@@ -177,6 +226,7 @@ export interface SpaceSnapshot {
   excludedDirectoryCount: number;
   coveragePercent: number | null;
   skipReasons: Array<{ reason: string; count: number }>;
+  indexingDetails?: SnapshotRepositoryIndexingDetails[];
   indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;

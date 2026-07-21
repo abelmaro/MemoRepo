@@ -44,3 +44,106 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-body-sm);
 }
+
+.batch-progress {
+  display: grid;
+  gap: var(--space-16);
+  padding: var(--space-22);
+}
+
+.batch-progress-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  min-height: 180px;
+  justify-content: center;
+  color: var(--color-text-secondary);
+}
+
+.batch-progress-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-16);
+  align-items: flex-start;
+}
+
+.batch-progress-summary h3,
+.batch-progress-summary p {
+  margin: var(--space-0);
+}
+
+.batch-progress-summary p {
+  margin-top: var(--space-6);
+  color: var(--color-text-secondary);
+}
+
+.batch-progress-meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-tertiary);
+}
+
+.batch-progress-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-action-primary);
+}
+
+.batch-progress-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-16);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.batch-progress-items {
+  display: grid;
+  max-height: 330px;
+  overflow: auto;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.batch-progress-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: var(--space-10);
+  min-height: 58px;
+  padding: var(--space-8) var(--space-14);
+  border-bottom: var(--border-width-default) solid var(--color-border-subtle);
+}
+
+.batch-progress-item:last-child {
+  border-bottom: var(--border-width-none);
+}
+
+.batch-progress-item > div {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.batch-progress-item strong,
+.batch-progress-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-progress-item span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  text-transform: capitalize;
+}
+
+.batch-progress-success {
+  color: var(--color-status-success);
+}
+
+.batch-progress-failed {
+  color: var(--color-status-danger);
+}
