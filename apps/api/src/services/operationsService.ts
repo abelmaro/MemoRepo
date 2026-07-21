@@ -362,7 +362,14 @@ export class OperationsService {
 
   cancelRepositoryBatch(batchId: string) {
     this.requireRepositoryBatch(batchId);
-    const links = this.repositoryBatchJobLinks(batchId).reverse();
+    const cancellationOrder: Record<RepositoryBatchJobLink["stage"], number> = {
+      snapshot: 0,
+      index: 1,
+      checkout: 2,
+      clone: 3
+    };
+    const links = this.repositoryBatchJobLinks(batchId)
+      .sort((left, right) => cancellationOrder[left.stage] - cancellationOrder[right.stage]);
     for (const link of links) {
       const job = this.jobs.getJob(link.job_id) as { status: string } | undefined;
       if (job && ["pending", "running"].includes(job.status)) this.jobs.cancelJob(link.job_id);
