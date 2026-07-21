@@ -77,6 +77,15 @@ describe("LifecyclePanel layout", () => {
             id: "snapshot-1", version: 7, status: "active", active: true, quality: "partial",
             repositoryCount: 2, engineVersions: ["0.9.0"], indexModes: ["fast"], sourceFileCount: 200,
             skippedCount: 4, excludedDirectoryCount: 3, coveragePercent: 98, skipReasons: [{ reason: "syntax", count: 4 }],
+            indexingDetails: [{
+              repository: "demo/service",
+              skippedFiles: [{ path: "src/broken.ts", reason: "syntax", phase: "parse" }],
+              skippedCount: 4,
+              skippedTruncated: true,
+              excludedDirectories: ["vendor"],
+              excludedDirectoryCount: 3,
+              excludedDirectoriesTruncated: true
+            }],
             indexDurationMs: 2_500, sizeBytes: 2048, createdAt: "2026-07-19T12:00:00.000Z", activatedAt: null,
             error: null, reason: "4 source files were skipped during indexing"
           }],
@@ -100,6 +109,17 @@ describe("LifecyclePanel layout", () => {
     expect(await screen.findByText(/CBM 0\.9\.0 · fast mode · 98% source coverage · 2\.5 s/)).toBeTruthy();
     expect(screen.getByText("200 source files · 4 skipped · 3 excluded directories")).toBeTruthy();
     expect(screen.getByText("4 source files were skipped during indexing")).toBeTruthy();
+    const detailsButton = screen.getByRole("button", { name: "View indexing details for snapshot v000007" });
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(detailsButton);
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("dialog", { name: "v000007 indexing details" })).toBeTruthy();
+    expect(screen.getByText("demo/service")).toBeTruthy();
+    expect(screen.getByText("src/broken.ts")).toBeTruthy();
+    expect(screen.getByText("syntax · parse")).toBeTruthy();
+    expect(screen.getByText("vendor")).toBeTruthy();
+    expect(screen.getByText("Showing 1 of 4 reported files.")).toBeTruthy();
+    expect(screen.getByText("Showing 1 of 3 reported directories.")).toBeTruthy();
     queryClient.clear();
   });
 });

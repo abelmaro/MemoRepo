@@ -26,14 +26,13 @@ export function AddRepoModal({
   const [syncJobId, setSyncJobId] = useState<string | null>(null);
   const [selectedRepositoryIds, setSelectedRepositoryIds] = useState<Set<string>>(() => new Set());
   const batchRequestRef = useRef<{ key: string; requestId: string } | null>(null);
+  const automaticSyncStartedRef = useRef(false);
   const normalizedQuery = query.trim();
-  const searchReady = normalizedQuery.length >= 2;
 
   const repositoriesQuery = useQuery({
     queryKey: ["github-repositories", normalizedQuery, kindFilter],
     queryFn: () =>
-      api<{ repositories: GitHubRepository[] }>(`/api/github/repositories?query=${encodeURIComponent(normalizedQuery)}&kind=${kindFilter}`),
-    enabled: searchReady
+      api<{ repositories: GitHubRepository[] }>(`/api/github/repositories?query=${encodeURIComponent(normalizedQuery)}&kind=${kindFilter}`)
   });
 
   const addMutation = useMutation({
@@ -77,6 +76,12 @@ export function AddRepoModal({
   });
 
   useEffect(() => {
+    if (automaticSyncStartedRef.current) return;
+    automaticSyncStartedRef.current = true;
+    syncMutation.mutate();
+  }, [syncMutation.mutate]);
+
+  useEffect(() => {
     if (syncJobQuery.data?.job.status === "succeeded") {
       void queryClient.invalidateQueries({ queryKey: ["github-repositories"] });
     }
@@ -88,6 +93,7 @@ export function AddRepoModal({
   const selectedCount = selectedRepositoryIds.size;
   const mutationError = addMutation.error ?? batchMutation.error ?? syncMutation.error;
   const syncActive = ["pending", "running"].includes(syncJobQuery.data?.job.status ?? "");
+  const syncPending = syncMutation.isPending || syncActive;
 
   function toggleRepository(repositoryId: string): void {
     if (existingIds.has(repositoryId)) return;
@@ -115,8 +121,8 @@ export function AddRepoModal({
         <div className="modal-intro">
           <p>Select up to 50 repositories for <strong>{space.name}</strong>. MemoRepo prepares them together and activates one shared snapshot.</p>
           <button className="text-button with-icon" type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending || syncActive}>
-            {syncMutation.isPending || syncActive ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            <span>{syncActive ? "Refreshing GitHub catalog…" : "Refresh GitHub catalog"}</span>
+            {syncPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            <span>{syncPending ? "Refreshing GitHub catalog…" : "Refresh GitHub catalog"}</span>
           </button>
         </div>
 
@@ -143,17 +149,11 @@ export function AddRepoModal({
           ))}
         </div>
 
-        <div className="repo-picker" aria-live="polite" aria-busy={repositoriesQuery.isFetching}>
-          {!searchReady ? (
-            <div className="picker-empty-state">
-              <Search size={28} />
-              <strong>Find a repository</strong>
-              <span>Enter at least two characters. MemoRepo will search repositories already synced from GitHub.</span>
-            </div>
-          ) : repositoriesQuery.isFetching ? (
+        <div className="repo-picker" aria-live="polite" aria-busy={repositoriesQuery.isFetching || syncPending}>
+          {repositoriesQuery.isPending ? (
             <div className="picker-empty-state">
               <Loader2 className="spin" size={28} />
-              <strong>Searching GitHub catalog…</strong>
+              <strong>Loading GitHub catalog…</strong>
             </div>
           ) : repositoriesQuery.isError ? (
             <div className="picker-empty-state error" role="alert">
@@ -163,8 +163,14 @@ export function AddRepoModal({
           ) : visibleRepositories.length === 0 ? (
             <div className="picker-empty-state">
               <Github size={28} />
-              <strong>No repositories match “{normalizedQuery}”</strong>
-              <span>Try another name, change the type filter, or add a repository by URL below.</span>
+              <strong>{normalizedQuery ? `No repositories match “${normalizedQuery}”` : syncPending ? "Refreshing GitHub catalog…" : "No repositories available"}</strong>
+              <span>
+                {normalizedQuery
+                  ? "Try another name, change the type filter, or add a repository by URL below."
+                  : syncPending
+                    ? "Synced repositories will appear here as soon as the refresh finishes."
+                    : "Refresh the GitHub catalog or add a repository by URL below."}
+              </span>
             </div>
           ) : (
             <>

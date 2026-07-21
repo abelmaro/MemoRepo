@@ -787,6 +787,7 @@ function toPublicSnapshot(
   indexDurationMs: number | null
 ): PublicSnapshot {
   const observability = snapshotObservability(row.manifestJson);
+  const indexingDetails = snapshotIndexingDetails(row.manifestJson, memorepoHome);
   const error = row.error ? sanitizePublicMessage(row.error, [memorepoHome]) : null;
   return {
     id: row.id,
@@ -795,6 +796,7 @@ function toPublicSnapshot(
     active: row.id === activeSnapshotId,
     repositoryCount: snapshotRepositoryCount(row.manifestJson),
     ...observability,
+    indexingDetails,
     indexDurationMs,
     sizeBytes: row.sizeBytes ?? 0,
     createdAt: row.createdAt,
@@ -851,6 +853,80 @@ export function snapshotObservability(manifestJson: string): SnapshotObservabili
       skipReasons: []
     };
   }
+}
+
+export function snapshotIndexingDetails(
+  manifestJson: string,
+  memorepoHome: string
+): SnapshotRepositoryIndexingDetails[] {
+  try {
+    const manifest = JSON.parse(manifestJson) as SnapshotManifest;
+    const repositories = Array.isArray(manifest.repositories) ? manifest.repositories : [];
+    return repositories.flatMap((repository) => {
+      const index = repository?.cbmIndex;
+      if (!index) return [];
+
+      const rawSkippedFiles = Array.isArray(index.skipped?.files) ? index.skipped.files : [];
+      const skippedFiles = rawSkippedFiles.flatMap((candidate) => {
+        const file = candidate && typeof candidate === "object"
+          ? candidate as { path?: unknown; reason?: unknown; phase?: unknown }
+          : null;
+        const safePath = safeSnapshotDetailPath(file?.path);
+        if (!safePath) return [];
+        return [{
+          path: safePath,
+          reason: publicSnapshotDetailText(file?.reason, "unspecified", memorepoHome),
+          phase: publicSnapshotDetailText(file?.phase, "unknown", memorepoHome)
+        }];
+      });
+      const skippedCount = Math.max(0, index.skippedCount ?? 0, index.skipped?.count ?? 0, rawSkippedFiles.length);
+
+      const rawExcludedDirectories = Array.isArray(index.excluded?.dirs) ? index.excluded.dirs : [];
+      const excludedDirectories = rawExcludedDirectories.flatMap((candidate) => {
+        const safePath = safeSnapshotDetailPath(candidate);
+        return safePath ? [safePath] : [];
+      });
+      const excludedDirectoryCount = Math.max(0, index.excluded?.count ?? 0, rawExcludedDirectories.length);
+
+      if (skippedCount === 0 && excludedDirectoryCount === 0) return [];
+      const repositoryName = typeof repository.fullName === "string" && repository.fullName.trim()
+        ? repository.fullName.trim()
+        : "Unknown repository";
+
+      return [{
+        repository: repositoryName,
+        skippedFiles,
+        skippedCount,
+        skippedTruncated: Boolean(index.skipped?.truncated)
+          || skippedFiles.length < skippedCount
+          || skippedFiles.length < rawSkippedFiles.length,
+        excludedDirectories,
+        excludedDirectoryCount,
+        excludedDirectoriesTruncated: Boolean(index.excluded?.truncated)
+          || excludedDirectories.length < excludedDirectoryCount
+          || excludedDirectories.length < rawExcludedDirectories.length
+      }];
+    }).sort((left, right) => left.repository.localeCompare(right.repository));
+  } catch {
+    return [];
+  }
+}
+
+function safeSnapshotDetailPath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replaceAll("\\", "/");
+  if (!normalized || normalized.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    return null;
+  }
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment === "..")) return null;
+  const relative = segments.filter((segment) => segment && segment !== ".").join("/");
+  return relative || (normalized === "." ? "." : null);
+}
+
+function publicSnapshotDetailText(value: unknown, fallback: string, memorepoHome: string): string {
+  const text = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  return sanitizePublicMessage(text, [memorepoHome]);
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
@@ -1352,6 +1428,7 @@ interface PublicSnapshot {
   excludedDirectoryCount: number;
   coveragePercent: number | null;
   skipReasons: Array<{ reason: string; count: number }>;
+  indexingDetails: SnapshotRepositoryIndexingDetails[];
   indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;
@@ -1369,4 +1446,14 @@ export interface SnapshotObservability {
   excludedDirectoryCount: number;
   coveragePercent: number | null;
   skipReasons: Array<{ reason: string; count: number }>;
+}
+
+export interface SnapshotRepositoryIndexingDetails {
+  repository: string;
+  skippedFiles: Array<{ path: string; reason: string; phase: string }>;
+  skippedCount: number;
+  skippedTruncated: boolean;
+  excludedDirectories: string[];
+  excludedDirectoryCount: number;
+  excludedDirectoriesTruncated: boolean;
 }

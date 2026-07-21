@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
-import { snapshotObservability } from "../src/services/snapshotService.js";
+import { snapshotIndexingDetails, snapshotObservability } from "../src/services/snapshotService.js";
 
 test("snapshot observability summarizes engine, mode, coverage, and skip reasons", () => {
   const summary = snapshotObservability(JSON.stringify({
@@ -55,4 +56,47 @@ test("snapshot observability fails closed for malformed legacy manifests", () =>
     coveragePercent: null,
     skipReasons: []
   });
+});
+
+test("snapshot indexing details group safe relative paths by repository", () => {
+  const managedRoot = path.resolve("managed-home");
+  const unsafeAbsolutePath = path.join(managedRoot, "sources", "secret.ts");
+  const details = snapshotIndexingDetails(JSON.stringify({
+    repositories: [
+      {
+        fullName: "example/service",
+        cbmIndex: {
+          skippedCount: 2,
+          skipped: {
+            files: [
+              { path: "src/broken.ts", reason: "syntax", phase: "parse" },
+              { path: unsafeAbsolutePath, reason: `failed below ${managedRoot}`, phase: "read" }
+            ],
+            count: 2,
+            truncated: false
+          },
+          excluded: { dirs: ["vendor", "../outside"], count: 2, truncated: false }
+        }
+      },
+      {
+        fullName: "example/clean",
+        cbmIndex: { skippedCount: 0 }
+      }
+    ]
+  }), managedRoot);
+
+  assert.deepEqual(details, [{
+    repository: "example/service",
+    skippedFiles: [{ path: "src/broken.ts", reason: "syntax", phase: "parse" }],
+    skippedCount: 2,
+    skippedTruncated: true,
+    excludedDirectories: ["vendor"],
+    excludedDirectoryCount: 2,
+    excludedDirectoriesTruncated: true
+  }]);
+  assert.equal(JSON.stringify(details).includes(managedRoot), false);
+});
+
+test("snapshot indexing details fail closed for malformed manifests", () => {
+  assert.deepEqual(snapshotIndexingDetails("not-json", path.resolve("managed-home")), []);
 });

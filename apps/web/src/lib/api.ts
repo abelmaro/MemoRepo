@@ -202,6 +202,16 @@ export interface McpConnection {
 
 export type SnapshotQuality = "complete" | "partial" | "degraded" | "unknown";
 
+export interface SnapshotRepositoryIndexingDetails {
+  repository: string;
+  skippedFiles: Array<{ path: string; reason: string; phase: string }>;
+  skippedCount: number;
+  skippedTruncated: boolean;
+  excludedDirectories: string[];
+  excludedDirectoryCount: number;
+  excludedDirectoriesTruncated: boolean;
+}
+
 export interface SpaceSnapshot {
   id: string;
   version: number;
@@ -216,6 +226,7 @@ export interface SpaceSnapshot {
   excludedDirectoryCount: number;
   coveragePercent: number | null;
   skipReasons: Array<{ reason: string; count: number }>;
+  indexingDetails?: SnapshotRepositoryIndexingDetails[];
   indexDurationMs: number | null;
   sizeBytes: number;
   createdAt: string;

@@ -124,6 +124,14 @@
   text-transform: capitalize;
 }
 
+.repo-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-6);
+}
+
 .status-green {
   background: var(--color-status-success-surface);
   color: var(--color-status-success);
