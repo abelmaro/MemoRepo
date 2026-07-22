@@ -1,0 +1,20 @@
+---
+import { withBase } from "../../site.config.mjs";
+
+interface Props {
+  compact?: boolean;
+}
+
+const { compact = false } = Astro.props;
+---
+
+<span class:list={["brand", { "brand--compact": compact }]}>
+  <img
+    class="brand__mark"
+    src={withBase("/android-chrome-192x192.png")}
+    width="192"
+    height="192"
+    alt=""
+  />
+  <span class="brand__wordmark">MemoRepo</span>
+</span>

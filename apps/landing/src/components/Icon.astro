@@ -1,0 +1,106 @@
+---
+import {
+  LuArrowRight,
+  LuBookOpen,
+  LuBot,
+  LuBoxes,
+  LuCodeXml,
+  LuFileText,
+  LuFolderGit2,
+  LuGitCompareArrows,
+  LuGitFork,
+  LuHistory,
+  LuKeyRound,
+  LuLayers3,
+  LuMenu,
+  LuMonitor,
+  LuMousePointerClick,
+  LuNetwork,
+  LuPlug,
+  LuRotateCcw,
+  LuShield,
+  LuShieldAlert,
+  LuShieldCheck,
+  LuShieldX,
+  LuSlidersHorizontal,
+  LuSparkles,
+  LuWaypoints,
+  LuX,
+} from "react-icons/lu";
+import type { IconType } from "react-icons";
+
+export type IconName =
+  | "access"
+  | "agent"
+  | "arrow"
+  | "book"
+  | "close"
+  | "connect"
+  | "consent"
+  | "contract"
+  | "control"
+  | "credentials"
+  | "execution"
+  | "fragmented"
+  | "gateway"
+  | "graph"
+  | "history"
+  | "local"
+  | "menu"
+  | "moving"
+  | "policy"
+  | "recovery"
+  | "repositories"
+  | "snapshot"
+  | "space"
+  | "sparkles"
+  | "tools"
+  | "validated";
+
+interface Props {
+  name: IconName;
+  size?: number;
+  label?: string;
+  class?: string;
+}
+
+const icons = {
+  access: LuShieldAlert,
+  agent: LuBot,
+  arrow: LuArrowRight,
+  book: LuBookOpen,
+  close: LuX,
+  connect: LuPlug,
+  consent: LuMousePointerClick,
+  contract: LuFileText,
+  control: LuSlidersHorizontal,
+  credentials: LuKeyRound,
+  execution: LuShieldX,
+  fragmented: LuGitFork,
+  gateway: LuNetwork,
+  graph: LuWaypoints,
+  history: LuHistory,
+  local: LuMonitor,
+  menu: LuMenu,
+  moving: LuGitCompareArrows,
+  policy: LuShield,
+  recovery: LuRotateCcw,
+  repositories: LuFolderGit2,
+  snapshot: LuLayers3,
+  space: LuBoxes,
+  sparkles: LuSparkles,
+  tools: LuCodeXml,
+  validated: LuShieldCheck,
+} satisfies Record<IconName, IconType>;
+
+const { name, size = 24, label, class: className } = Astro.props;
+const SelectedIcon = icons[name];
+---
+
+<SelectedIcon
+  className={["icon", className].filter(Boolean).join(" ")}
+  size={size}
+  role={label ? "img" : undefined}
+  aria-label={label}
+  aria-hidden={label ? undefined : true}
+/>

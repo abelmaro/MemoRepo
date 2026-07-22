@@ -1,0 +1,126 @@
+---
+import Icon from "./Icon.astro";
+---
+
+<div class="hero-map" aria-hidden="true">
+  <svg class="hero-map__wires" viewBox="0 0 720 510" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="wire-gradient" x1="0" x2="1">
+        <stop offset="0" stop-color="var(--color-accent)" stop-opacity=".2" />
+        <stop offset=".45" stop-color="var(--color-brand)" />
+        <stop offset="1" stop-color="var(--color-accent)" stop-opacity=".32" />
+      </linearGradient>
+      <linearGradient id="wire-gradient-vertical" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="var(--color-accent)" stop-opacity=".2" />
+        <stop offset=".45" stop-color="var(--color-brand)" />
+        <stop offset="1" stop-color="var(--color-accent)" stop-opacity=".32" />
+      </linearGradient>
+      <filter id="wire-glow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="4" result="blur" />
+        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+      </filter>
+    </defs>
+    <path data-wire-from="repo-api" data-wire-to="space" />
+    <path data-wire-from="repo-web" data-wire-to="space" />
+    <path data-wire-from="repo-shared" data-wire-to="space" />
+    <path data-wire-from="space" data-wire-to="snapshot-commits" />
+    <path data-wire-from="space" data-wire-to="snapshot-active" />
+    <path data-wire-from="space" data-wire-to="snapshot-reproducible" />
+    <path data-wire-from="space" data-wire-to="gateway" data-wire-gradient="vertical" />
+    <path data-wire-from="gateway" data-wire-to="consumer-ide" data-wire-axis="fanout" data-wire-from-port=".24" />
+    <path data-wire-from="gateway" data-wire-to="consumer-agents" data-wire-axis="fanout" data-wire-from-port=".76" />
+  </svg>
+
+  <div class="hero-map__cluster hero-map__repositories">
+    <span class="hero-map__label">GitHub repositories</span>
+    <span data-wire-anchor="repo-api"><Icon name="repositories" size={16} /> api-service</span>
+    <span data-wire-anchor="repo-web"><Icon name="repositories" size={16} /> web-app</span>
+    <span data-wire-anchor="repo-shared"><Icon name="repositories" size={16} /> shared-lib</span>
+  </div>
+
+  <div class="hero-map__core" data-wire-anchor="space">
+    <span class="hero-map__label">Space</span>
+    <strong>my-projects</strong>
+    <Icon name="space" size={76} />
+    <small>one shared graph</small>
+  </div>
+
+  <div class="hero-map__cluster hero-map__snapshots">
+    <span class="hero-map__label">Immutable snapshots</span>
+    <span data-wire-anchor="snapshot-commits"><Icon name="snapshot" size={16} /> exact commits</span>
+    <span data-wire-anchor="snapshot-active"><Icon name="snapshot" size={16} /> active snapshot</span>
+    <span data-wire-anchor="snapshot-reproducible"><Icon name="snapshot" size={16} /> reproducible</span>
+  </div>
+
+  <div class="hero-map__gateway" data-wire-anchor="gateway">
+    <Icon name="gateway" size={28} />
+    <span><strong>MCP gateway</strong><small>read-only · bounded</small></span>
+  </div>
+
+  <div class="hero-map__consumer hero-map__consumer--left" data-wire-anchor="consumer-ide">
+    <Icon name="tools" size={22} /><span>IDE tools</span>
+  </div>
+  <div class="hero-map__consumer hero-map__consumer--right" data-wire-anchor="consumer-agents">
+    <Icon name="agent" size={22} /><span>Coding agents</span>
+  </div>
+</div>
+
+<script>
+  const updateHeroMapWires = (map: HTMLElement) => {
+    const svg = map.querySelector<SVGSVGElement>(".hero-map__wires");
+    if (!svg) return;
+
+    const mapRect = map.getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${mapRect.width} ${mapRect.height}`);
+
+    const pointOn = (element: Element, side: "left" | "right" | "top" | "bottom", fraction = 0.5) => {
+      const rect = element.getBoundingClientRect();
+      const x = side === "left" ? rect.left : side === "right" ? rect.right : rect.left + rect.width * fraction;
+      const y = side === "top" ? rect.top : side === "bottom" ? rect.bottom : rect.top + rect.height * fraction;
+      return { x: x - mapRect.left, y: y - mapRect.top };
+    };
+
+    svg.querySelectorAll<SVGPathElement>("path[data-wire-from]").forEach((path) => {
+      const fromName = path.dataset.wireFrom;
+      const toName = path.dataset.wireTo;
+      const from = fromName && map.querySelector(`[data-wire-anchor="${fromName}"]`);
+      const to = toName && map.querySelector(`[data-wire-anchor="${toName}"]`);
+      if (!from || !to) return;
+
+      const fromRect = from.getBoundingClientRect();
+      const toRect = to.getBoundingClientRect();
+      if (path.dataset.wireAxis === "fanout") {
+        const start = pointOn(from, "bottom", Number(path.dataset.wireFromPort) || 0.5);
+        const end = pointOn(to.querySelector(".icon") ?? to, "top");
+        path.setAttribute("d", `M${start.x} ${start.y} L${end.x} ${end.y}`);
+        return;
+      }
+
+      const horizontal = path.dataset.wireAxis === "vertical"
+        ? false
+        : Math.abs((toRect.left + toRect.right - fromRect.left - fromRect.right) / 2) >=
+          Math.abs((toRect.top + toRect.bottom - fromRect.top - fromRect.bottom) / 2);
+
+      if (horizontal) {
+        const goesRight = toRect.left >= fromRect.right;
+        const start = pointOn(from, goesRight ? "right" : "left");
+        const end = pointOn(to, goesRight ? "left" : "right");
+        const bend = Math.max(24, Math.abs(end.x - start.x) * 0.48);
+        path.setAttribute("d", `M${start.x} ${start.y} C${start.x + (goesRight ? bend : -bend)} ${start.y} ${end.x + (goesRight ? -bend : bend)} ${end.y} ${end.x} ${end.y}`);
+      } else {
+        const goesDown = toRect.top >= fromRect.bottom;
+        const start = pointOn(from, goesDown ? "bottom" : "top");
+        const end = pointOn(to, goesDown ? "top" : "bottom");
+        const bend = Math.abs(end.y - start.y) * 0.48;
+        path.setAttribute("d", `M${start.x} ${start.y} C${start.x} ${start.y + (goesDown ? bend : -bend)} ${end.x} ${end.y + (goesDown ? -bend : bend)} ${end.x} ${end.y}`);
+      }
+    });
+  };
+
+  document.querySelectorAll<HTMLElement>(".hero-map").forEach((map) => {
+    const update = () => updateHeroMapWires(map);
+    new ResizeObserver(update).observe(map);
+    document.fonts.ready.then(update);
+    update();
+  });
+</script>

@@ -1,0 +1,23 @@
+---
+import { withBase } from "../../site.config.mjs";
+import Brand from "../components/Brand.astro";
+import SiteHeader from "../components/SiteHeader.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="Page not found — MemoRepo"
+  description="The requested MemoRepo page could not be found."
+  noindex
+>
+  <SiteHeader />
+  <main id="main-content" class="not-found" tabindex="-1">
+    <div class="container not-found__inner">
+      <Brand />
+      <p class="eyebrow">404 · PAGE NOT FOUND</p>
+      <h1>This snapshot has no record of that page.</h1>
+      <p>The address may have changed, or the link may point outside the published MemoRepo site.</p>
+      <a class="button button--primary" href={withBase("/")}>Return to MemoRepo</a>
+    </div>
+  </main>
+</BaseLayout>
