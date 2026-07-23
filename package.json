@@ -1,16 +1,19 @@
 {
   "name": "memorepo",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "pnpm --filter @memorepo/api dev",
     "dev:api": "pnpm --filter @memorepo/api dev",
+    "dev:landing": "pnpm --filter @memorepo/landing dev",
     "dev:web": "pnpm --filter @memorepo/web dev",
     "perf:baseline": "pnpm --filter @memorepo/api perf:baseline",
-    "build": "pnpm --filter @memorepo/agent-runtime build && pnpm --filter @memorepo/api build && pnpm --filter @memorepo/web build",
-    "test": "pnpm --filter @memorepo/agent-runtime test && pnpm --filter @memorepo/api test && pnpm --filter @memorepo/web test",
-    "typecheck": "pnpm --filter @memorepo/agent-runtime typecheck && pnpm --filter @memorepo/api typecheck && pnpm --filter @memorepo/web typecheck"
+    "build": "pnpm --filter @memorepo/agent-runtime build && pnpm --filter @memorepo/api build && pnpm --filter @memorepo/web build && pnpm --filter @memorepo/landing build",
+    "build:landing": "pnpm --filter @memorepo/landing build",
+    "test": "pnpm --filter @memorepo/agent-runtime test && pnpm --filter @memorepo/api test && pnpm --filter @memorepo/web test && pnpm --filter @memorepo/landing test",
+    "test:landing": "pnpm --filter @memorepo/landing test",
+    "typecheck": "pnpm --filter @memorepo/agent-runtime typecheck && pnpm --filter @memorepo/api typecheck && pnpm --filter @memorepo/web typecheck && pnpm --filter @memorepo/landing typecheck"
   },
   "engines": {
     "node": ">=22.19.0"

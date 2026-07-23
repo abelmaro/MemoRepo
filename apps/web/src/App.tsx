@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Boxes, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
+import { Activity, Boxes, Check, Filter, HeartPulse, Layers, Loader2, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
 import { AddRepoModal } from "./components/AddRepoModal";
 import { AskSpacePanel } from "./components/AskSpacePanel";
 import { GitHubConnectionPanel, type GitHubSignInRequest } from "./components/GitHubConnectionPanel";
@@ -559,5 +559,5 @@ export function App() {
 }
 
 function CheckCircleMarker() {
-  return <span className="filter-check" aria-hidden="true">✓</span>;
+  return <Check className="filter-check" size={16} aria-hidden="true" />;
 }

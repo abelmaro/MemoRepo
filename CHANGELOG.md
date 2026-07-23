@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-22
+
+### Added
+
+- Add the public MemoRepo landing page with product, architecture, quickstart, documentation, and operating-contract sections.
+- Add accessible Motion animations with reduced-motion support and responsive browser coverage across Chromium, Firefox, and WebKit.
+
+### Changed
+
+- Refine landing-page navigation, card alignment, architecture connectors, dashboard presentation, and animation pacing across desktop, tablet, and mobile layouts.
+- Publish the landing page through the GitHub Pages workflow after validation on the main branch.
+
 ## [0.3.2] - 2026-07-20
 
 ### Added

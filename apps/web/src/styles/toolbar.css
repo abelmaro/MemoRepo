@@ -68,8 +68,8 @@
 }
 
 .filter-check {
+  flex: 0 0 auto;
   color: var(--color-link);
-  font-size: var(--font-size-body);
 }
 
 .filter-control {

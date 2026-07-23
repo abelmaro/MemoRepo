@@ -1,0 +1,36 @@
+---
+import { siteContent } from "../content/site";
+
+interface Props {
+  id: string;
+  title: string;
+  language: string;
+  code: string;
+  description?: string;
+}
+
+const { id, title, language, code, description } = Astro.props;
+---
+
+<section class="code-sample" aria-labelledby={`${id}-title`} data-motion-item>
+  <header class="code-sample__header">
+    <div>
+      <h3 id={`${id}-title`}>{title}</h3>
+      <span>{language}</span>
+    </div>
+    <button
+      class="copy-button"
+      type="button"
+      data-copy-button
+      data-copy-target={id}
+      data-copy-label={siteContent.ui.copyCode}
+      data-copied-label={siteContent.ui.copied}
+      data-copy-failed-label={siteContent.ui.copyFailed}
+      data-analytics="copy_install_command"
+    >
+      <span data-copy-button-label>{siteContent.ui.copyCode}</span>
+    </button>
+  </header>
+  {description ? <p class="code-sample__description">{description}</p> : null}
+  <pre tabindex="0" aria-label={`${title} code`}><code id={id}>{code}</code></pre>
+</section>

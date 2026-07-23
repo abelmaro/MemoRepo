@@ -1,0 +1,64 @@
+---
+import { withBase } from "../../site.config.mjs";
+import { siteContent } from "../content/site";
+import Brand from "./Brand.astro";
+import Icon from "./Icon.astro";
+
+function anchoredHome(href: string) {
+  return href.startsWith("#") ? withBase(`/${href}`) : href;
+}
+
+function eventFor(label: string) {
+  if (label === "Quickstart") return "quickstart_click";
+  return undefined;
+}
+---
+
+<a class="skip-link" href="#main-content">{siteContent.ui.skipToContent}</a>
+
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="brand-link" href={withBase("/")} aria-label={siteContent.header.brandLinkLabel}>
+      <Brand />
+    </a>
+
+    <nav class="desktop-nav" aria-label={siteContent.header.navigationLabel}>
+      {siteContent.header.navigation.map((item) => (
+        <a href={anchoredHome(item.href)} data-analytics={eventFor(item.label)}>{item.label}</a>
+      ))}
+    </nav>
+
+    <a
+      class="button button--primary desktop-cta"
+      href={siteContent.header.cta.href}
+      data-analytics="github_primary_click"
+    >
+      {siteContent.header.cta.label}
+    </a>
+
+    <details class="mobile-nav" data-mobile-nav>
+      <summary
+        aria-label={siteContent.ui.openNavigation}
+        data-open-label={siteContent.ui.openNavigation}
+        data-close-label={siteContent.ui.closeNavigation}
+      >
+        <span class="mobile-nav__icon" aria-hidden="true">
+          <Icon name="menu" size={22} class="mobile-nav__menu-icon" />
+          <Icon name="close" size={22} class="mobile-nav__close-icon" />
+        </span>
+      </summary>
+      <nav aria-label={siteContent.header.navigationLabel}>
+        {siteContent.header.navigation.map((item) => (
+          <a href={anchoredHome(item.href)} data-analytics={eventFor(item.label)}>{item.label}</a>
+        ))}
+        <a
+          class="button button--primary"
+          href={siteContent.header.cta.href}
+          data-analytics="github_primary_click"
+        >
+          {siteContent.header.cta.label}
+        </a>
+      </nav>
+    </details>
+  </div>
+</header>

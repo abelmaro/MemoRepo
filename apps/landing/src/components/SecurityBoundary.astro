@@ -1,0 +1,30 @@
+---
+import { withBase } from "../../site.config.mjs";
+import Icon from "./Icon.astro";
+---
+
+<div class="security-boundary" aria-hidden="true">
+  <div class="security-boundary__stage security-boundary__stage--local" data-motion-item>
+    <img src={withBase("/android-chrome-192x192.png")} width="192" height="192" alt="" />
+    <strong>Local control plane</strong>
+    <span>Dashboard · state · credentials</span>
+  </div>
+
+  <span class="security-boundary__arrow"><i></i><b>bounded request</b></span>
+
+  <div class="security-boundary__stage security-boundary__stage--gateway" data-motion-item>
+    <Icon name="gateway" size={30} />
+    <strong>Read-only gateway</strong>
+    <span>One Space · one active snapshot</span>
+  </div>
+
+  <span class="security-boundary__arrow"><i></i><b>verified context</b></span>
+
+  <div class="security-boundary__stage security-boundary__stage--agent" data-motion-item>
+    <Icon name="agent" size={30} />
+    <strong>Coding agent</strong>
+    <span>No source mutation</span>
+  </div>
+
+  <p class="security-boundary__rule" data-motion-item>Control stays local. Only bounded snapshot queries cross the gateway.</p>
+</div>
