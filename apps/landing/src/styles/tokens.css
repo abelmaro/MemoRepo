@@ -32,4 +32,8 @@
   --radius-lg: 1.25rem;
   --shadow-card: 0 18px 40px color-mix(in srgb, var(--color-canvas) 68%, transparent);
   --shadow-raised: 0 24px 80px color-mix(in srgb, var(--color-canvas) 52%, transparent);
+
+  --motion-fast: 180ms;
+  --motion-base: 520ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }

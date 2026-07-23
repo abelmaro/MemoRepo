@@ -2,7 +2,7 @@
 import Icon from "./Icon.astro";
 ---
 
-<div class="hero-map" aria-hidden="true">
+<div class="hero-map" aria-hidden="true" data-motion-group data-motion-kind="hero-map">
   <svg class="hero-map__wires" viewBox="0 0 720 510" preserveAspectRatio="none">
     <defs>
       <linearGradient id="wire-gradient" x1="0" x2="1">
@@ -10,57 +10,57 @@ import Icon from "./Icon.astro";
         <stop offset=".45" stop-color="var(--color-brand)" />
         <stop offset="1" stop-color="var(--color-accent)" stop-opacity=".32" />
       </linearGradient>
-      <linearGradient id="wire-gradient-vertical" x1="0" y1="0" x2="0" y2="1">
+      <linearGradient id="wire-gradient-vertical" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="510">
         <stop offset="0" stop-color="var(--color-accent)" stop-opacity=".2" />
         <stop offset=".45" stop-color="var(--color-brand)" />
         <stop offset="1" stop-color="var(--color-accent)" stop-opacity=".32" />
       </linearGradient>
-      <filter id="wire-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <filter id="wire-glow" filterUnits="userSpaceOnUse" x="-40" y="-40" width="800" height="590">
         <feGaussianBlur stdDeviation="4" result="blur" />
         <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
       </filter>
     </defs>
-    <path data-wire-from="repo-api" data-wire-to="space" />
-    <path data-wire-from="repo-web" data-wire-to="space" />
-    <path data-wire-from="repo-shared" data-wire-to="space" />
-    <path data-wire-from="space" data-wire-to="snapshot-commits" />
-    <path data-wire-from="space" data-wire-to="snapshot-active" />
-    <path data-wire-from="space" data-wire-to="snapshot-reproducible" />
-    <path data-wire-from="space" data-wire-to="gateway" data-wire-gradient="vertical" />
-    <path data-wire-from="gateway" data-wire-to="consumer-ide" data-wire-axis="fanout" data-wire-from-port=".24" />
-    <path data-wire-from="gateway" data-wire-to="consumer-agents" data-wire-axis="fanout" data-wire-from-port=".76" />
+    <path data-wire-from="repo-api" data-wire-to="space" data-motion-wire />
+    <path data-wire-from="repo-web" data-wire-to="space" data-motion-wire />
+    <path data-wire-from="repo-shared" data-wire-to="space" data-motion-wire />
+    <path data-wire-from="space" data-wire-to="snapshot-commits" data-motion-wire />
+    <path data-wire-from="space" data-wire-to="snapshot-active" data-motion-wire />
+    <path data-wire-from="space" data-wire-to="snapshot-reproducible" data-motion-wire />
+    <path data-wire-from="space" data-wire-to="gateway" data-wire-axis="vertical" data-wire-gradient="vertical" data-motion-wire />
+    <path data-wire-from="gateway" data-wire-to="consumer-ide" data-wire-axis="fanout" data-wire-from-port=".24" data-motion-wire />
+    <path data-wire-from="gateway" data-wire-to="consumer-agents" data-wire-axis="fanout" data-wire-from-port=".76" data-motion-wire />
   </svg>
 
-  <div class="hero-map__cluster hero-map__repositories">
+  <div class="hero-map__cluster hero-map__repositories" data-motion-stage="1">
     <span class="hero-map__label">GitHub repositories</span>
     <span data-wire-anchor="repo-api"><Icon name="repositories" size={16} /> api-service</span>
     <span data-wire-anchor="repo-web"><Icon name="repositories" size={16} /> web-app</span>
     <span data-wire-anchor="repo-shared"><Icon name="repositories" size={16} /> shared-lib</span>
   </div>
 
-  <div class="hero-map__core" data-wire-anchor="space">
+  <div class="hero-map__core" data-wire-anchor="space" data-motion-stage="2">
     <span class="hero-map__label">Space</span>
     <strong>my-projects</strong>
     <Icon name="space" size={76} />
     <small>one shared graph</small>
   </div>
 
-  <div class="hero-map__cluster hero-map__snapshots">
+  <div class="hero-map__cluster hero-map__snapshots" data-motion-stage="3">
     <span class="hero-map__label">Immutable snapshots</span>
     <span data-wire-anchor="snapshot-commits"><Icon name="snapshot" size={16} /> exact commits</span>
     <span data-wire-anchor="snapshot-active"><Icon name="snapshot" size={16} /> active snapshot</span>
     <span data-wire-anchor="snapshot-reproducible"><Icon name="snapshot" size={16} /> reproducible</span>
   </div>
 
-  <div class="hero-map__gateway" data-wire-anchor="gateway">
+  <div class="hero-map__gateway" data-wire-anchor="gateway" data-motion-stage="4">
     <Icon name="gateway" size={28} />
     <span><strong>MCP gateway</strong><small>read-only · bounded</small></span>
   </div>
 
-  <div class="hero-map__consumer hero-map__consumer--left" data-wire-anchor="consumer-ide">
+  <div class="hero-map__consumer hero-map__consumer--left" data-wire-anchor="consumer-ide" data-motion-stage="5">
     <Icon name="tools" size={22} /><span>IDE tools</span>
   </div>
-  <div class="hero-map__consumer hero-map__consumer--right" data-wire-anchor="consumer-agents">
+  <div class="hero-map__consumer hero-map__consumer--right" data-wire-anchor="consumer-agents" data-motion-stage="5">
     <Icon name="agent" size={22} /><span>Coding agents</span>
   </div>
 </div>
@@ -72,6 +72,10 @@ import Icon from "./Icon.astro";
 
     const mapRect = map.getBoundingClientRect();
     svg.setAttribute("viewBox", `0 0 ${mapRect.width} ${mapRect.height}`);
+    svg.querySelector("#wire-gradient-vertical")?.setAttribute("y2", `${mapRect.height}`);
+    const glow = svg.querySelector("#wire-glow");
+    glow?.setAttribute("width", `${mapRect.width + 80}`);
+    glow?.setAttribute("height", `${mapRect.height + 80}`);
 
     const pointOn = (element: Element, side: "left" | "right" | "top" | "bottom", fraction = 0.5) => {
       const rect = element.getBoundingClientRect();

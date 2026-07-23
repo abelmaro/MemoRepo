@@ -12,7 +12,7 @@ interface Props {
 const { id, title, language, code, description } = Astro.props;
 ---
 
-<section class="code-sample" aria-labelledby={`${id}-title`}>
+<section class="code-sample" aria-labelledby={`${id}-title`} data-motion-item>
   <header class="code-sample__header">
     <div>
       <h3 id={`${id}-title`}>{title}</h3>

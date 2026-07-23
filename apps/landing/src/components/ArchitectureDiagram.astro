@@ -15,7 +15,7 @@ const nodeIcons = ["repositories", "connect", "snapshot", "space", "graph", "gat
     </span>
     <ol>
       {architecture.nodes.map((node, index) => (
-        <li class:list={[{ "is-inside": node.boundary === "inside" }]}>
+        <li class:list={[{ "is-inside": node.boundary === "inside" }]} data-motion-item>
           <span class="architecture-flow__index">{String(index + 1).padStart(2, "0")}</span>
           <span class:list={["architecture-flow__icon", { "architecture-flow__icon--brand": index === 3 }]}>
             {index === 3 ? (
@@ -31,7 +31,7 @@ const nodeIcons = ["repositories", "connect", "snapshot", "space", "graph", "gat
   </div>
 
   <figcaption id="architecture-caption">
-    {architecture.statements.map((statement) => <p>{statement}</p>)}
+    {architecture.statements.map((statement) => <p data-motion-item>{statement}</p>)}
   </figcaption>
   <p class="sr-only"><strong>{architecture.textAlternativeLabel}:</strong> {architecture.textAlternative}</p>
 </figure>

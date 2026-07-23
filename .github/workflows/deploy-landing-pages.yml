@@ -56,9 +56,9 @@ jobs:
         run: pnpm --filter @memorepo/landing build
       - name: Run landing unit tests
         run: pnpm --filter @memorepo/landing test:unit
-      - name: Install browser for accessibility checks
-        run: pnpm --filter @memorepo/landing exec playwright install --with-deps chromium
-      - name: Run accessibility and interaction smoke tests
+      - name: Install browsers for landing checks
+        run: pnpm --filter @memorepo/landing exec playwright install --with-deps chromium firefox webkit
+      - name: Run motion, responsive, accessibility, and interaction checks
         run: pnpm --filter @memorepo/landing test:browser
       - name: Upload GitHub Pages artifact
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

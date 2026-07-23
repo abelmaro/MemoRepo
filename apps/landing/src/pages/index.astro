@@ -113,11 +113,11 @@ function analyticsFor(label: string) {
         <source src={withBase("/media/hero-ocean-loop.mp4")} type="video/mp4" />
       </video>
       <div class="container hero__grid">
-        <div class="hero__copy">
-          <p class="eyebrow">{hero.eyebrow}</p>
-          <h1>{heroTitleBefore}<span>{heroAccent}</span>{heroTitleAfter}</h1>
-          <p class="hero__lead">{hero.body}</p>
-          <div class="button-row">
+        <div class="hero__copy" data-motion-group data-motion-kind="hero-copy" data-motion-distance="18" data-motion-stagger="0.07">
+          <p class="eyebrow" data-motion-item>{hero.eyebrow}</p>
+          <h1 data-motion-item>{heroTitleBefore}<span>{heroAccent}</span>{heroTitleAfter}</h1>
+          <p class="hero__lead" data-motion-item>{hero.body}</p>
+          <div class="button-row" data-motion-item>
             <a class="button button--primary" href={hero.primaryCta.href} data-analytics="github_primary_click">
               {hero.primaryCta.label}
             </a>
@@ -125,14 +125,15 @@ function analyticsFor(label: string) {
               {hero.secondaryCta.label}
             </a>
           </div>
-          <p class="hero__support"><Icon name="local" size={19} />{hero.support}</p>
+          <p class="hero__support" data-motion-item><Icon name="local" size={19} />{hero.support}</p>
         </div>
 
         <HeroMap />
       </div>
 
       <div class="container product-shot-wrap">
-        <figure class="product-shot">
+        <div class="product-shot-motion" data-motion-group data-motion-distance="36">
+        <figure class="product-shot" data-motion-item>
           <Picture
             src={dashboardImage}
             formats={["avif", "webp"]}
@@ -145,18 +146,19 @@ function analyticsFor(label: string) {
           />
           <figcaption><Icon name="sparkles" size={18} />{hero.visualCaption}</figcaption>
         </figure>
+        </div>
       </div>
     </section>
 
     <section class="section section--alternate" id={problems.id}>
-      <div class="container narrow-intro">
-        <p class="eyebrow">{problems.eyebrow}</p>
-        <h2>{problems.title}</h2>
-        <p class="section-lead">{problems.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{problems.eyebrow}</p>
+        <h2 data-motion-item>{problems.title}</h2>
+        <p class="section-lead" data-motion-item>{problems.intro}</p>
       </div>
-      <div class="container problem-grid">
+      <div class="container problem-grid" data-motion-group data-motion-stagger="0.08">
         {problems.items.map((item, index) => (
-          <article class="problem-item">
+          <article class="problem-item" data-motion-item>
             <span class="item-icon"><Icon name={problemIcons[index] ?? "fragmented"} size={30} /></span>
             <span class="item-index" aria-hidden="true">0{index + 1}</span>
             <h3>{item.title}</h3>
@@ -168,14 +170,14 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section" aria-labelledby="features-title">
-      <div class="container narrow-intro">
-        <p class="eyebrow">{features.eyebrow}</p>
-        <h2 id="features-title">{features.title}</h2>
-        <p class="section-lead">{features.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{features.eyebrow}</p>
+        <h2 id="features-title" data-motion-item>{features.title}</h2>
+        <p class="section-lead" data-motion-item>{features.intro}</p>
       </div>
-      <div class="container feature-grid">
+      <div class="container feature-grid" data-motion-group data-motion-stagger="0.065">
         {features.items.map((item, index) => (
-          <article class:list={["feature-item", { "feature-item--featured": index < 2 }]}>
+          <article class:list={["feature-item", { "feature-item--featured": index < 2 }]} data-motion-item>
             <span class="item-icon"><Icon name={featureIcons[index] ?? "graph"} size={31} /></span>
             <span class="item-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
             <h3>{item.title}</h3>
@@ -186,15 +188,15 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section section--alternate workflow-section" id={workflow.id}>
-      <div class="container narrow-intro">
-        <p class="eyebrow">{workflow.eyebrow}</p>
-        <h2>{workflow.title}</h2>
-        <p class="section-lead">{workflow.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{workflow.eyebrow}</p>
+        <h2 data-motion-item>{workflow.title}</h2>
+        <p class="section-lead" data-motion-item>{workflow.intro}</p>
       </div>
-      <div class="container">
+      <div class="container" data-motion-group data-motion-kind="workflow" data-motion-stagger="0.09">
         <ol class="workflow-list">
           {workflow.steps.map((step, index) => (
-            <li>
+            <li data-motion-item>
               <span class="workflow-list__number"><Icon name={workflowIcons[index] ?? "connect"} size={28} /></span>
               <span class="workflow-list__index" aria-hidden="true">{step.number}</span>
               <div>
@@ -204,7 +206,7 @@ function analyticsFor(label: string) {
             </li>
           ))}
         </ol>
-        <aside class="provider-note">
+        <aside class="provider-note" data-motion-item>
           <Icon name="sparkles" size={28} />
           <div><p class="eyebrow">{workflow.optionalNoteTitle}</p><p>{workflow.optionalNote}</p></div>
         </aside>
@@ -212,27 +214,27 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section architecture-section" aria-labelledby="architecture-title">
-      <div class="container narrow-intro">
-        <p class="eyebrow">{architecture.eyebrow}</p>
-        <h2 id="architecture-title">{architecture.title}</h2>
-        <p class="section-lead">{architecture.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{architecture.eyebrow}</p>
+        <h2 id="architecture-title" data-motion-item>{architecture.title}</h2>
+        <p class="section-lead" data-motion-item>{architecture.intro}</p>
       </div>
-      <div class="container">
+      <div class="container" data-motion-group data-motion-kind="architecture" data-motion-stagger="0.075">
         <ArchitectureDiagram />
       </div>
     </section>
 
     <section class="section section--alternate security-section" id={security.id}>
-      <div class="container narrow-intro">
-        <p class="eyebrow">{security.eyebrow}</p>
-        <h2>{security.title}</h2>
-        <p class="section-lead">{security.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{security.eyebrow}</p>
+        <h2 data-motion-item>{security.title}</h2>
+        <p class="section-lead" data-motion-item>{security.intro}</p>
       </div>
-      <div class="container security-layout">
+      <div class="container security-layout" data-motion-group data-motion-kind="security" data-motion-stagger="0.075">
         <SecurityBoundary />
         <div class="security-grid">
           {security.controls.map((control, index) => (
-            <article class="security-control">
+            <article class="security-control" data-motion-item>
               <span class="security-control__icon"><Icon name={securityIcons[index] ?? "validated"} size={24} /></span>
               <div>
                 <h3>{control.title}</h3>
@@ -242,12 +244,12 @@ function analyticsFor(label: string) {
           ))}
         </div>
       </div>
-      <div class="container boundary-callout">
+      <div class="container boundary-callout" data-motion-group>
         <div>
-          <p class="eyebrow">{security.calloutTitle}</p>
-          <p>{security.callout}</p>
+          <p class="eyebrow" data-motion-item>{security.calloutTitle}</p>
+          <p data-motion-item>{security.callout}</p>
         </div>
-        <div class="text-link-row">
+        <div class="text-link-row" data-motion-item>
           {security.actions.map((action) => (
             <a href={action.href} data-analytics={analyticsFor(action.label)}>{action.label}</a>
           ))}
@@ -256,16 +258,16 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section scope-section" aria-labelledby="scope-title">
-      <div class="container narrow-intro">
-        <h2 id="scope-title">{scope.title}</h2>
-        <p class="section-lead">{scope.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <h2 id="scope-title" data-motion-item>{scope.title}</h2>
+        <p class="section-lead" data-motion-item>{scope.intro}</p>
       </div>
-      <div class="container scope-grid">
-        <article class="scope-column scope-column--included">
+      <div class="container scope-grid" data-motion-group data-motion-stagger="0.1">
+        <article class="scope-column scope-column--included" data-motion-item>
           <h3>{scope.builtForTitle}</h3>
           <ul>{scope.builtFor.map((item) => <li>{item}</li>)}</ul>
         </article>
-        <article class="scope-column scope-column--excluded">
+        <article class="scope-column scope-column--excluded" data-motion-item>
           <h3>{scope.notBuiltForTitle}</h3>
           <ul>{scope.notBuiltFor.map((item) => <li>{item}</li>)}</ul>
         </article>
@@ -274,8 +276,8 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section section--alternate quickstart" id={quickstart.id}>
-      <div class="container quickstart__layout">
-        <div class="quickstart__intro">
+      <div class="container quickstart__layout" data-motion-group data-motion-stagger="0.065">
+        <div class="quickstart__intro" data-motion-item>
           <p class="eyebrow">{quickstart.eyebrow}</p>
           <h2>{quickstart.title}</h2>
           <p class="section-lead">{quickstart.intro}</p>
@@ -291,19 +293,19 @@ function analyticsFor(label: string) {
           ))}
           <p class="quickstart__note">{quickstart.tokenNote}</p>
           <CodeBlock id="quickstart-4" {...quickstart.blocks[3]} />
-          <details class="platform-details">
+          <details class="platform-details" data-motion-item>
             <summary><span>{quickstart.powershellTitle}</span><span class="details-marker" aria-hidden="true">+</span></summary>
             <p>{quickstart.powershellIntro}</p>
             {quickstart.powershellBlocks.map((block, index) => (
               <CodeBlock id={`powershell-${index + 1}`} {...block} />
             ))}
           </details>
-          <details class="platform-details">
+          <details class="platform-details" data-motion-item>
             <summary><span>{quickstart.optionalTokenTitle}</span><span class="details-marker" aria-hidden="true">+</span></summary>
             <p>{quickstart.optionalTokenBody}</p>
             <CodeBlock id="optional-token" {...quickstart.optionalTokenBlock} />
           </details>
-          <p class="after-start">
+          <p class="after-start" data-motion-item>
             Open <a href={siteContent.links.localDashboard}>{siteContent.links.localDashboard}</a>, {afterStartInstructions}
           </p>
         </div>
@@ -312,13 +314,13 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section" id={faq.id}>
-      <div class="container narrow-intro">
-        <h2>{faq.title}</h2>
-        <p class="section-lead">{faq.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <h2 data-motion-item>{faq.title}</h2>
+        <p class="section-lead" data-motion-item>{faq.intro}</p>
       </div>
-      <div class="container faq-list">
+      <div class="container faq-list" data-motion-group data-motion-stagger="0.055">
         {faq.items.map((item) => (
-          <details>
+          <details data-motion-item>
             <summary><span>{item.question}</span><span class="details-marker" aria-hidden="true">+</span></summary>
             <p>{item.answer}</p>
           </details>
@@ -327,14 +329,14 @@ function analyticsFor(label: string) {
     </section>
 
     <section class="section section--alternate docs-section" id={docs.id}>
-      <div class="container narrow-intro">
-        <p class="eyebrow">{docs.eyebrow}</p>
-        <h2>{docs.title}</h2>
-        <p class="section-lead">{docs.intro}</p>
+      <div class="container narrow-intro" data-motion-group>
+        <p class="eyebrow" data-motion-item>{docs.eyebrow}</p>
+        <h2 data-motion-item>{docs.title}</h2>
+        <p class="section-lead" data-motion-item>{docs.intro}</p>
       </div>
-      <div class="container docs-grid">
+      <div class="container docs-grid" data-motion-group data-motion-stagger="0.06">
         {docs.items.map((item, index) => (
-          <a class="doc-link" href={item.href} data-analytics={analyticsFor(item.label)}>
+          <a class="doc-link" href={item.href} data-analytics={analyticsFor(item.label)} data-motion-item>
             <span class="doc-link__icon"><Icon name={docsIcons[index] ?? "book"} size={24} /></span>
             <span class="doc-link__copy"><strong>{item.label}</strong><span>{item.description}</span></span>
             <Icon name="arrow" size={21} />
@@ -343,21 +345,23 @@ function analyticsFor(label: string) {
       </div>
     </section>
 
-    <section class="section final-cta" aria-labelledby="final-cta-title">
-      <img
-        class="final-cta__octopus"
-        src={ctaOctopus.src}
-        width="640"
-        height="640"
-        alt=""
-        loading="lazy"
-        decoding="async"
-      />
+    <section class="section final-cta" aria-labelledby="final-cta-title" data-motion-group data-motion-distance="20">
+      <div class="final-cta__art" data-motion-item>
+        <img
+          class="final-cta__octopus"
+          src={ctaOctopus.src}
+          width="640"
+          height="640"
+          alt=""
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
       <div class="container final-cta__inner">
-        <p class="eyebrow">{finalCta.eyebrow}</p>
-        <h2 id="final-cta-title">{finalCta.title}</h2>
-        <p>{finalCta.body}</p>
-        <div class="button-row">
+        <p class="eyebrow" data-motion-item>{finalCta.eyebrow}</p>
+        <h2 id="final-cta-title" data-motion-item>{finalCta.title}</h2>
+        <p data-motion-item>{finalCta.body}</p>
+        <div class="button-row" data-motion-item>
           <a class="button button--primary" href={finalCta.primaryCta.href} data-analytics="github_primary_click">
             {finalCta.primaryCta.label}
           </a>
@@ -370,18 +374,19 @@ function analyticsFor(label: string) {
   </main>
 
   <footer class="site-footer">
-    <div class="container site-footer__grid">
-      <div>
+    <div class="container site-footer__grid" data-motion-group>
+      <div data-motion-item>
         <a class="brand-link" href={withBase("/")} aria-label="MemoRepo home"><Brand compact /></a>
         <p>{footer.tagline}</p>
         <p class="site-footer__meta"><a href={siteContent.links.license}>{footer.licenseNotice}</a></p>
         <p class="site-footer__meta">{footer.versionLabel} v{footer.version}</p>
       </div>
-      <nav aria-label={footer.navigationLabel}>
+      <nav aria-label={footer.navigationLabel} data-motion-item>
         {footer.navigation.map((item) => (
           <a href={item.href} data-analytics={analyticsFor(item.label)}>{item.label}</a>
         ))}
       </nav>
     </div>
   </footer>
+  <script src="../scripts/motion.ts"></script>
 </BaseLayout>

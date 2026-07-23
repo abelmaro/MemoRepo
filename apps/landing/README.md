@@ -22,7 +22,7 @@ pnpm --filter @memorepo/landing test:unit
 pnpm --filter @memorepo/landing test:browser
 ```
 
-The browser smoke test expects a completed build and checks desktop and mobile accessibility, keyboard interactions, console errors, horizontal overflow, and the JavaScript-disabled page.
+The browser smoke test expects a completed build and checks the full Motion journey, reduced-motion behavior, breakpoint boundaries, orientation changes, accessibility, keyboard interactions, console errors, horizontal overflow, and the JavaScript-disabled page across Chromium, Firefox, and WebKit.
 
 The production output is written to `apps/landing/dist`.
 

@@ -7,7 +7,7 @@
 html {
   min-width: 20rem;
   scroll-behavior: smooth;
-  scroll-padding-top: calc(var(--header-height) + 1rem);
+  scroll-padding-top: calc(var(--header-height) + 1px);
   background: var(--color-canvas);
 }
 
@@ -99,10 +99,6 @@ a:hover {
 :where(a, button, summary):focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 3px;
-}
-
-[id] {
-  scroll-margin-top: calc(var(--header-height) + 1.25rem);
 }
 
 .sr-only {
@@ -589,7 +585,7 @@ a:hover {
 .architecture-sequence {
   display: grid;
   grid-template-columns: minmax(9rem, 0.8fr) minmax(20rem, 2fr) minmax(9rem, 0.8fr);
-  align-items: center;
+  align-items: start;
   gap: 1rem;
 }
 
@@ -684,7 +680,6 @@ a:hover {
 .architecture-figure figcaption p {
   margin: 0;
   padding: 1rem;
-  border-left: 2px solid var(--color-brand);
   background: var(--color-surface);
   font-size: var(--text-sm);
 }
@@ -893,7 +888,6 @@ a:hover {
 .after-start {
   margin: 0;
   padding: 1rem 1.1rem;
-  border-left: 2px solid var(--color-brand);
   background: var(--color-surface);
   font-size: var(--text-sm);
 }
@@ -1395,7 +1389,8 @@ body {
   width: 3.6rem;
   height: 3.6rem;
   margin-bottom: 1.5rem;
-  place-items: center;
+  align-items: center;
+  justify-items: start;
   color: var(--color-brand-soft);
   filter: drop-shadow(0 0 12px color-mix(in srgb, var(--color-brand) 46%, transparent));
 }
@@ -1510,6 +1505,7 @@ body {
   fill: none;
   stroke: url(#wire-gradient);
   stroke-width: 2;
+  stroke-linecap: round;
   filter: url(#wire-glow);
 }
 
@@ -1657,6 +1653,10 @@ body {
   perspective: 90rem;
 }
 
+.product-shot-motion {
+  transform-origin: center top;
+}
+
 .product-shot {
   position: relative;
   max-width: 68rem;
@@ -1798,6 +1798,8 @@ body {
   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--color-brand) 70%, transparent));
   content: "";
   pointer-events: none;
+  transform: scaleX(var(--motion-connector-progress, 1));
+  transform-origin: left center;
 }
 
 .workflow-list__number {
@@ -2066,7 +2068,6 @@ body {
   margin: 0;
   padding: 1.25rem 1.5rem;
   border: 0;
-  border-left: 2px solid var(--color-brand);
   background: transparent;
 }
 
@@ -2300,7 +2301,7 @@ body {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 1.2rem;
   min-height: 5.75rem;
-  align-items: center;
+  align-items: start;
   padding: 1rem 0.4rem;
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--color-brand-soft) 20%, transparent);
@@ -2319,8 +2320,9 @@ body {
 .doc-link__icon {
   display: grid;
   width: 3rem;
-  height: 3rem;
-  place-items: center;
+  min-height: 1.5rem;
+  padding-top: 0.1rem;
+  place-items: start center;
   color: var(--color-brand-soft);
   filter: drop-shadow(0 0 10px color-mix(in srgb, var(--color-brand) 48%, transparent));
 }
@@ -2340,6 +2342,7 @@ body {
 }
 
 .doc-link > .icon {
+  align-self: center;
   color: var(--color-brand-soft);
   transition: transform 180ms ease;
 }
@@ -2454,6 +2457,8 @@ body {
     height: calc(100% - 4.3rem);
     background: repeating-linear-gradient(180deg, var(--color-brand) 0 3px, transparent 3px 7px);
     filter: none;
+    transform: scaleY(var(--motion-connector-progress, 1));
+    transform-origin: center top;
   }
 
   .workflow-list__index {
@@ -2570,7 +2575,12 @@ body {
   .hero-map__consumer--right { right: 2rem; }
 
   .product-shot {
+    border-radius: 0;
     transform: none;
+  }
+
+  .product-shot img {
+    border-radius: 0;
   }
 
   .problem-grid,
@@ -2783,6 +2793,8 @@ body {
   background: linear-gradient(90deg, var(--color-accent), var(--color-brand) 22% 78%, var(--color-accent));
   box-shadow: 0 0 14px color-mix(in srgb, var(--color-brand) 48%, transparent);
   content: "";
+  transform: scaleX(var(--motion-line-progress, 1));
+  transform-origin: left center;
 }
 
 .architecture-flow li {
@@ -2795,7 +2807,7 @@ body {
 
 .architecture-flow__index {
   position: absolute;
-  top: -1.15rem;
+  top: -1.75rem;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -2945,6 +2957,13 @@ body {
   pointer-events: none;
 }
 
+.final-cta__art {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+}
+
 .final-cta__octopus {
   position: absolute;
   z-index: 0;
@@ -3015,23 +3034,25 @@ body {
   .architecture-flow ol::before {
     top: 2rem;
     bottom: 2rem;
-    left: 2.25rem;
+    left: 5.05rem;
     width: 2px;
     height: auto;
+    transform: scaleY(var(--motion-line-progress, 1));
+    transform-origin: center top;
   }
 
   .architecture-flow li {
-    grid-template-columns: 4.6rem minmax(0, 1fr);
-    gap: 1rem;
+    grid-template-columns: 2rem 4.6rem minmax(0, 1fr);
+    gap: 0.75rem;
     align-items: center;
     justify-items: start;
     text-align: left;
   }
 
   .architecture-flow__index {
-    top: 0.15rem;
-    left: 0.1rem;
+    position: static;
     z-index: 2;
+    justify-self: start;
   }
 
   .architecture-flow li > strong {
@@ -3096,5 +3117,37 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .hero__video {
     display: none;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .button,
+  .problem-item,
+  .feature-item,
+  .doc-link,
+  .item-icon,
+  .security-control__icon {
+    transition:
+      transform var(--motion-fast) var(--motion-ease-out),
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease,
+      filter var(--motion-fast) ease;
+  }
+
+  .problem-item:hover,
+  .feature-item:hover {
+    transform: translateY(-3px);
+  }
+
+  .problem-item:hover .item-icon,
+  .feature-item:hover .item-icon,
+  .security-control:hover .security-control__icon {
+    transform: scale(1.04);
+    filter: drop-shadow(0 0 16px color-mix(in srgb, var(--color-brand) 58%, transparent));
+  }
+
+  .button:active {
+    transform: translateY(0) scale(0.985);
   }
 }

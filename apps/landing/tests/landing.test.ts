@@ -295,6 +295,29 @@ describe("landing build output", () => {
     expect(startIndex).toBeGreaterThan(setTokenIndex);
   });
 
+  it("ships motion as progressive enhancement over complete static content", async () => {
+    const groups = indexPage.document.querySelectorAll<HTMLElement>("[data-motion-group]");
+    const items = indexPage.document.querySelectorAll<HTMLElement>("[data-motion-item]");
+    const wires = indexPage.document.querySelectorAll<SVGPathElement>("[data-motion-wire]");
+    const motionSource = await readFile(join(APP_ROOT, "src/scripts/motion.ts"), "utf8");
+    const hiddenInitialItems = Array.from(items).filter((item) => {
+      const style = item.getAttribute("style") ?? "";
+      return /(?:opacity\s*:\s*0|visibility\s*:\s*hidden|display\s*:\s*none)/i.test(style);
+    });
+
+    expect(groups.length).toBeGreaterThanOrEqual(15);
+    expect(items.length).toBeGreaterThanOrEqual(40);
+    expect(wires).toHaveLength(9);
+    expect(hiddenInitialItems).toHaveLength(0);
+    expect(motionSource).not.toMatch(/strokeDash(?:array|offset)/);
+    expect(motionSource).toContain("opacity: [0.8, 1]");
+    expect(indexPage.document.querySelector('[data-wire-from="space"][data-wire-to="gateway"]')?.getAttribute("data-wire-axis")).toBe("vertical");
+    expect(indexPage.document.querySelector("#wire-gradient-vertical")?.getAttribute("gradientUnits")).toBe("userSpaceOnUse");
+    expect(indexPage.document.querySelector("#wire-glow")?.getAttribute("filterUnits")).toBe("userSpaceOnUse");
+    expect(indexPage.document.querySelector('script[type="module"][src^="/MemoRepo/assets/"]')).not.toBeNull();
+    expect(notFoundPage.document.querySelector('script[type="module"][src]')).toBeNull();
+  });
+
   it("keeps generated asset and internal-link URLs under the Pages base path", async () => {
     expectBaseAwareAssets(indexPage.document);
     expectBaseAwareAssets(notFoundPage.document);
