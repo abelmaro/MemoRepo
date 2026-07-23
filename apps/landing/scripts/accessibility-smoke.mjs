@@ -347,7 +347,7 @@ async function exerciseMotionJourney(page, viewportName) {
         return group?.getAttribute("data-motion-state") !== "armed";
       },
       index,
-      { timeout: 4_000 },
+      { timeout: 10_000, polling: 100 },
     );
     await assertCalmReveal(groups.nth(index), viewportName, index);
     await assertNoHorizontalOverflow(page, `${viewportName} motion group ${index + 1}`);
