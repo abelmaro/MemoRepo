@@ -421,7 +421,8 @@ async function exerciseAnchorNavigation(page, viewport) {
     try {
       await page.waitForFunction(
         (expectedScrollY) => {
-          return Math.abs(window.scrollY - expectedScrollY) <= 2;
+          // Leave room for subpixel rounding before asserting target alignment.
+          return Math.abs(window.scrollY - expectedScrollY) <= 1;
         },
         expectedAlignment.expectedScrollY,
         { timeout: 4_000 },

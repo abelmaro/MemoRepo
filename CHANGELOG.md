@@ -24,6 +24,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Disable automatic indexing, background watchers, and the engine UI for immutable snapshot caches; stop owned daemons during snapshot and service shutdown.
 - Require rebuilding pre-0.11 indexes without opening or modifying them; retain source access for historical snapshots.
 - Include the engine version in rebuild fingerprints and fix nightly benchmark argument forwarding and artifact permissions.
+- Support optional corporate CA certificates with TLS verification enabled and compile native dependencies in the build stage.
+- Keep local dashboard authentication on the same hostname as the API and distinguish connection failures from invalid credentials.
+- Wait for tighter scroll alignment before checking landing-page anchor navigation across browsers.
 
 ### Upgrade notes
 
