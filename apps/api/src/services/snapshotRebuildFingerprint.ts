@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CbmIndexMode } from "./cbmService.js";
+import { CBM_V0110_ADAPTER_VERSION } from "./cbmV0110Capabilities.js";
 
 export interface SnapshotRebuildInput {
   spaceId: string;
@@ -13,6 +14,6 @@ export function createSnapshotRebuildFingerprint(input: SnapshotRebuildInput): s
     .sort(([leftId, leftCommit], [rightId, rightCommit]) =>
       leftId.localeCompare(rightId, "en") || (leftCommit ?? "").localeCompare(rightCommit ?? "", "en"));
   return createHash("sha256")
-    .update(JSON.stringify([input.spaceId, input.mode, repositories]))
+    .update(JSON.stringify([input.spaceId, input.mode, repositories, CBM_V0110_ADAPTER_VERSION]))
     .digest("hex");
 }

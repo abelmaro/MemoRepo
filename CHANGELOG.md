@@ -7,6 +7,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-20
+
+### Changed
+
+- Upgrade CBM to 0.11.0 with independent snapshot runtime directories, explicit structured output, and compact-table decoding.
+- Refresh application dependencies, the package manager, container images, and pinned CI actions.
+
+### Added
+
+- Verify concurrent snapshot queries, background indexing, and independent engine restart against the real CBM binary.
+- Add scheduled dependency updates and high/critical container vulnerability checks.
+
+### Fixed
+
+- Disable automatic indexing, background watchers, and the engine UI for immutable snapshot caches; stop owned daemons during snapshot and service shutdown.
+- Require rebuilding pre-0.11 indexes without opening or modifying them; retain source access for historical snapshots.
+- Include the engine version in rebuild fingerprints and fix nightly benchmark argument forwarding and artifact permissions.
+- Support optional corporate CA certificates with TLS verification enabled and compile native dependencies in the build stage.
+- Keep local dashboard authentication on the same hostname as the API and distinguish connection failures from invalid credentials.
+- Wait for tighter scroll alignment before checking landing-page anchor navigation across browsers.
+
+### Upgrade notes
+
+- Back up managed data and secrets before upgrading. Rebuild each space's snapshot and start new chats on the rebuilt snapshot for graph queries. Existing chats remain pinned to their historical snapshot and retain source tools.
+- Custom CBM version and checksum overrides must match the new defaults in `.env.example`. See `docs/quickstart.md` for migration and native Windows directory requirements.
+
 ## [0.3.3] - 2026-07-22
 
 ### Added

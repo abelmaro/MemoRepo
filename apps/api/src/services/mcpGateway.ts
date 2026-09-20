@@ -9,7 +9,7 @@ import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { createId, createSecretToken, sha256 } from "../domain/ids.js";
 import { nowIso } from "../domain/time.js";
 import type { CbmService } from "./cbmService.js";
-import type { CbmV090Capabilities } from "./cbmV090Capabilities.js";
+import type { CbmV0110Capabilities } from "./cbmV0110Capabilities.js";
 import {
   annotateTraceEdge,
   classifyRouteEvidence,
@@ -1230,6 +1230,7 @@ export class McpGateway {
 
   private async filterAvailableTools(snapshot: SnapshotRow | null) {
     const manifest = snapshot ? this.manifestFor(snapshot) : null;
+    if (this.requiresIndexRebuild(manifest)) return this.tools().filter((tool) => MEMOREPO_SOURCE_TOOLS.has(tool.name));
     const capabilities = await this.cbm.capabilities(snapshot?.artifactPath ?? this.config.memorepoHome);
     const declared = (await this.capabilityAwareTools(snapshot, manifest, capabilities))
       .filter((candidate) => !MUTABLE_SNAPSHOT_TOOLS.has(candidate.name));
@@ -1323,8 +1324,11 @@ export class McpGateway {
   private async capabilityAwareTools(
     snapshot: SnapshotRow | null,
     manifest: SnapshotManifest | null,
-    knownCapabilities?: CbmV090Capabilities
+    knownCapabilities?: CbmV0110Capabilities
   ) {
+    if (this.requiresIndexRebuild(manifest)) {
+      throw new Error("This snapshot requires an index rebuild for CBM 0.11.0. Rebuild the space and start a chat on the new snapshot; source tools remain available on this snapshot.");
+    }
     const capabilities = knownCapabilities
       ?? await this.cbm.capabilities(snapshot?.artifactPath ?? this.config.memorepoHome);
     const semanticIndex = manifest?.repositories.some((repository) =>
@@ -1336,6 +1340,12 @@ export class McpGateway {
       );
     }
     return this.tools(capabilities, semanticIndex);
+  }
+
+  private requiresIndexRebuild(manifest: SnapshotManifest | null): boolean {
+    return manifest?.repositories.some((repository) =>
+      !/(?:^|\s)v?0\.11\.0(?:\s|$)/u.test(repository.cbmIndex?.engineVersion ?? "")
+    ) ?? false;
   }
 
   private listSnapshotFiles(
@@ -1809,7 +1819,7 @@ export class McpGateway {
     return this.withSnapshotMeta(space, snapshot, manifest, isRecord(response) ? response : { result: response });
   }
 
-  private tools(capabilities?: CbmV090Capabilities, semanticIndex = false) {
+  private tools(capabilities?: CbmV0110Capabilities, semanticIndex = false) {
     const definitions = [
       tool(
         "list_space_repositories",
@@ -2093,7 +2103,7 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
 
 function restrictNativeCapabilityFields(
   definition: ReturnType<typeof tool>,
-  capabilities: CbmV090Capabilities,
+  capabilities: CbmV0110Capabilities,
   semanticIndex: boolean
 ): ReturnType<typeof tool> {
   const fields = nativeOptionalFields(definition.name, capabilities, semanticIndex);
@@ -2112,7 +2122,7 @@ function restrictNativeCapabilityFields(
 
 function nativeOptionalFields(
   toolName: string,
-  capabilities: CbmV090Capabilities,
+  capabilities: CbmV0110Capabilities,
   semanticIndex: boolean
 ): Record<string, boolean> | null {
   switch (toolName) {

@@ -1,8 +1,8 @@
 import type { McpToolDescriptor } from "./cbmService.js";
 
-export const CBM_V090_ADAPTER_VERSION = "0.9.0" as const;
+export const CBM_V0110_ADAPTER_VERSION = "0.11.0" as const;
 
-export const CBM_V090_REQUIRED_TOOLS = [
+export const CBM_V0110_REQUIRED_TOOLS = [
   "list_projects",
   "index_status",
   "get_architecture",
@@ -14,12 +14,12 @@ export const CBM_V090_REQUIRED_TOOLS = [
   "query_graph"
 ] as const;
 
-export const CBM_V090_OPTIONAL_TOOLS = [
+export const CBM_V0110_OPTIONAL_TOOLS = [
   "detect_changes",
   "index_repository"
 ] as const;
 
-const CBM_V090_NATIVE_FIELDS = {
+const CBM_V0110_NATIVE_FIELDS = {
   get_architecture: ["path"],
   search_graph: [
     "semantic_query",
@@ -32,10 +32,10 @@ const CBM_V090_NATIVE_FIELDS = {
   trace_path: ["mode", "parameter_name", "edge_types", "risk_labels", "include_tests"]
 } as const;
 
-type RequiredTool = typeof CBM_V090_REQUIRED_TOOLS[number];
-type OptionalTool = typeof CBM_V090_OPTIONAL_TOOLS[number];
-type NativeFieldTool = keyof typeof CBM_V090_NATIVE_FIELDS;
-type NativeField<T extends NativeFieldTool> = typeof CBM_V090_NATIVE_FIELDS[T][number];
+type RequiredTool = typeof CBM_V0110_REQUIRED_TOOLS[number];
+type OptionalTool = typeof CBM_V0110_OPTIONAL_TOOLS[number];
+type NativeFieldTool = keyof typeof CBM_V0110_NATIVE_FIELDS;
+type NativeField<T extends NativeFieldTool> = typeof CBM_V0110_NATIVE_FIELDS[T][number];
 
 export interface CbmCapabilityDiagnostic {
   severity: "error" | "warning";
@@ -44,8 +44,8 @@ export interface CbmCapabilityDiagnostic {
   tool?: string | undefined;
 }
 
-export interface CbmV090Capabilities {
-  adapterVersion: typeof CBM_V090_ADAPTER_VERSION;
+export interface CbmV0110Capabilities {
+  adapterVersion: typeof CBM_V0110_ADAPTER_VERSION;
   reportedVersion: string;
   detectedVersion: string | null;
   compatible: boolean;
@@ -65,10 +65,10 @@ export interface CbmV090Capabilities {
   summary: string;
 }
 
-export function inspectCbmV090Capabilities(
+export function inspectCbmV0110Capabilities(
   reportedVersion: string,
   descriptors: readonly McpToolDescriptor[]
-): CbmV090Capabilities {
+): CbmV0110Capabilities {
   const detectedVersion = detectCbmVersion(reportedVersion);
   const diagnostics: CbmCapabilityDiagnostic[] = [];
   const descriptorByName = new Map<string, McpToolDescriptor>();
@@ -86,25 +86,25 @@ export function inspectCbmV090Capabilities(
     descriptorByName.set(descriptor.name, descriptor);
   }
 
-  if (detectedVersion !== CBM_V090_ADAPTER_VERSION) {
+  if (detectedVersion !== CBM_V0110_ADAPTER_VERSION) {
     diagnostics.push({
       severity: "error",
       code: "unsupported_version",
       message: detectedVersion === null
-        ? `CBM version could not be detected from '${reportedVersion}'. This adapter requires ${CBM_V090_ADAPTER_VERSION}.`
-        : `CBM ${detectedVersion} is incompatible with the ${CBM_V090_ADAPTER_VERSION} adapter.`
+        ? `CBM version could not be detected from '${reportedVersion}'. This adapter requires ${CBM_V0110_ADAPTER_VERSION}.`
+        : `CBM ${detectedVersion} is incompatible with the ${CBM_V0110_ADAPTER_VERSION} adapter.`
     });
   }
 
-  const requiredTools = partitionTools(CBM_V090_REQUIRED_TOOLS, descriptorByName);
+  const requiredTools = partitionTools(CBM_V0110_REQUIRED_TOOLS, descriptorByName);
   if (requiredTools.missing.length > 0) {
     diagnostics.push({
       severity: "error",
       code: "missing_required_tools",
-      message: `CBM ${CBM_V090_ADAPTER_VERSION} is missing required tools: ${requiredTools.missing.join(", ")}.`
+      message: `CBM ${CBM_V0110_ADAPTER_VERSION} is missing required tools: ${requiredTools.missing.join(", ")}.`
     });
   }
-  const optionalTools = partitionTools(CBM_V090_OPTIONAL_TOOLS, descriptorByName);
+  const optionalTools = partitionTools(CBM_V0110_OPTIONAL_TOOLS, descriptorByName);
 
   const nativeFields = {
     get_architecture: detectToolFields("get_architecture", descriptorByName, diagnostics),
@@ -115,7 +115,7 @@ export function inspectCbmV090Capabilities(
   const compatible = !diagnostics.some((diagnostic) => diagnostic.severity === "error");
 
   return {
-    adapterVersion: CBM_V090_ADAPTER_VERSION,
+    adapterVersion: CBM_V0110_ADAPTER_VERSION,
     reportedVersion,
     detectedVersion,
     compatible,
@@ -128,19 +128,19 @@ export function inspectCbmV090Capabilities(
   };
 }
 
-export class CbmV090CompatibilityError extends Error {
-  constructor(readonly capabilities: CbmV090Capabilities) {
+export class CbmV0110CompatibilityError extends Error {
+  constructor(readonly capabilities: CbmV0110Capabilities) {
     super(capabilities.summary);
-    this.name = "CbmV090CompatibilityError";
+    this.name = "CbmV0110CompatibilityError";
   }
 }
 
-export function assertCbmV090Compatible(
+export function assertCbmV0110Compatible(
   reportedVersion: string,
   descriptors: readonly McpToolDescriptor[]
-): CbmV090Capabilities {
-  const capabilities = inspectCbmV090Capabilities(reportedVersion, descriptors);
-  if (!capabilities.compatible) throw new CbmV090CompatibilityError(capabilities);
+): CbmV0110Capabilities {
+  const capabilities = inspectCbmV0110Capabilities(reportedVersion, descriptors);
+  if (!capabilities.compatible) throw new CbmV0110CompatibilityError(capabilities);
   return capabilities;
 }
 
@@ -178,7 +178,7 @@ function detectToolFields<T extends NativeFieldTool>(
   }
 
   return Object.fromEntries(
-    CBM_V090_NATIVE_FIELDS[tool].map((field) => [field, properties !== null && Object.hasOwn(properties, field)])
+    CBM_V0110_NATIVE_FIELDS[tool].map((field) => [field, properties !== null && Object.hasOwn(properties, field)])
   ) as Record<NativeField<T>, boolean>;
 }
 
@@ -198,14 +198,14 @@ function compatibilitySummary(
 ): string {
   if (!compatible) {
     const reasons = [
-      detectedVersion === CBM_V090_ADAPTER_VERSION
+      detectedVersion === CBM_V0110_ADAPTER_VERSION
         ? null
-        : `expected version ${CBM_V090_ADAPTER_VERSION}, detected ${detectedVersion ?? "unknown"}`,
+        : `expected version ${CBM_V0110_ADAPTER_VERSION}, detected ${detectedVersion ?? "unknown"}`,
       missingRequired.length > 0 ? `missing required tools: ${missingRequired.join(", ")}` : null
     ].filter((reason): reason is string => reason !== null);
-    return `CBM is incompatible with the ${CBM_V090_ADAPTER_VERSION} adapter (${reasons.join("; ")}).`;
+    return `CBM is incompatible with the ${CBM_V0110_ADAPTER_VERSION} adapter (${reasons.join("; ")}).`;
   }
   return missingOptional.length === 0
-    ? `CBM ${CBM_V090_ADAPTER_VERSION} is compatible; all known optional tools are available.`
-    : `CBM ${CBM_V090_ADAPTER_VERSION} is compatible; optional tools unavailable: ${missingOptional.join(", ")}.`;
+    ? `CBM ${CBM_V0110_ADAPTER_VERSION} is compatible; all known optional tools are available.`
+    : `CBM ${CBM_V0110_ADAPTER_VERSION} is compatible; optional tools unavailable: ${missingOptional.join(", ")}.`;
 }

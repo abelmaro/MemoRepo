@@ -40,7 +40,7 @@ GH_TOKEN=your-github-token
 
 Official builds already include MemoRepo's public GitHub OAuth Client ID. Fork maintainers and contributors can optionally set `GITHUB_OAUTH_CLIENT_ID` to use a different OAuth App during development.
 
-Docker Compose includes the supported `codebase-memory-mcp` release. If you run the Node workspaces directly for development, install `codebase-memory-mcp` v0.9.0 on `PATH`. MemoRepo fails closed when the runtime cannot verify that `auto_index` and `auto_watch` are both disabled for immutable snapshot caches.
+Docker Compose includes the supported `codebase-memory-mcp` release. If you run the Node workspaces directly for development, install `codebase-memory-mcp` v0.11.0 on `PATH`. MemoRepo fails closed when the runtime cannot verify that `auto_index` and `auto_watch` are both disabled for immutable snapshot caches.
 
 New Docker Compose installations use the `memorepo-data` named volume from `.env.example`. This avoids Docker Desktop bind-mount overhead during the many small reads and writes performed by Git and the indexer. For direct Node development, set `MEMOREPO_HOME` to a path outside this repository.
 
@@ -169,6 +169,24 @@ Do not interpret an empty CBM result as proof of absence when coverage is partia
 For multi-repository spaces, omit `project` when you want CBM to use cross-repo intelligence across the whole space snapshot. Pass `project` only when you want to narrow a call to one indexed project.
 
 ## 10. When Something Fails
+
+### Upgrading to 0.3.4 / CBM 0.11
+
+Back up the managed data directory and secrets volume together before upgrading. Update any custom `CODEBASE_MEMORY_MCP_VERSION` and checksum overrides to the values in `.env.example`, then rebuild the images. Do not run the new engine directly against old snapshot indexes.
+
+Rebuild each space's snapshot from the dashboard. New snapshots use CBM 0.11; existing snapshots and their source trees are retained. Start a new chat on the rebuilt snapshot to use graph tools. Historical chats remain pinned to their original snapshot: source reading, file listing, coverage, and literal search remain available, but graph tools require a compatible index. Rolling back requires the previous application image and its matching backup, not opening new indexes with the old engine.
+
+MemoRepo assigns a separate CBM runtime directory to every index cache. On Unix it uses a short, user-private temporary path to respect socket path limits; on Windows it uses `.cbm-runtime` inside the index cache. No extra containers or system accounts are required. Automatic indexing, watchers, and the engine UI are disabled for these managed caches.
+
+Native Windows installations require a managed-data path whose ancestors pass CBM's private-directory checks. A directory writable by another untrusted account can be refused even when MemoRepo itself can write there. The error includes the engine diagnostic. Choose a suitably protected data location or use Docker Compose; do not weaken permissions or disable CBM's checks to bypass the refusal.
+
+Native Windows development also has a cold-start limitation: CBM text search launches Windows PowerShell with an internal 30-second deadline. Hosted validation observed initial shell startup exceeding that deadline; the native contract passes after shell initialization. This does not establish cold-start reliability. Docker Compose remains the supported deployment path and does not use this Windows search subprocess.
+
+### Troubleshooting
+
+If a Docker build reports **self-signed certificate in certificate chain**, your network may use HTTPS inspection. Add the public CA certificates already trusted by your computer to `docker/certs/` as described in [corporate CA setup](../docker/certs/README.md), then rebuild the containers. MemoRepo uses these certificates for build downloads and API runtime HTTPS requests. Native dependencies can also compile from source using the build image's Python, C++ tools, and bundled Node headers.
+
+If unlocking shows **Failed to fetch**, open `http://127.0.0.1:5173` and retry. Older dashboard builds call `127.0.0.1` even when opened through `localhost`, which the API rejects as a cross-site request before checking the token. Rebuild the dashboard with `docker compose up -d --build --no-deps web` to support both local hostnames. If the error persists, check `docker compose ps` and `http://127.0.0.1:8787/api/health` (use your configured ports). An invalid control token is reported separately from a connection failure.
 
 Use the preflight panel first. It checks GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
 

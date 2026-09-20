@@ -2,28 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { McpToolDescriptor } from "../src/services/cbmService.js";
 import {
-  assertCbmV090Compatible,
-  CBM_V090_OPTIONAL_TOOLS,
-  CBM_V090_REQUIRED_TOOLS,
-  CbmV090CompatibilityError,
-  inspectCbmV090Capabilities
-} from "../src/services/cbmV090Capabilities.js";
+  assertCbmV0110Compatible,
+  CBM_V0110_OPTIONAL_TOOLS,
+  CBM_V0110_REQUIRED_TOOLS,
+  CbmV0110CompatibilityError,
+  inspectCbmV0110Capabilities
+} from "../src/services/cbmV0110Capabilities.js";
 
-test("CBM v0.9.0 capabilities accept the pinned runtime and detect every native field", () => {
-  const capabilities = inspectCbmV090Capabilities(
-    "codebase-memory-mcp 0.9.0",
+test("CBM v0.11.0 capabilities accept the pinned runtime and detect every native field", () => {
+  const capabilities = inspectCbmV0110Capabilities(
+    "codebase-memory-mcp 0.11.0",
     completeDescriptors()
   );
 
   assert.equal(capabilities.compatible, true);
-  assert.equal(capabilities.adapterVersion, "0.9.0");
-  assert.equal(capabilities.detectedVersion, "0.9.0");
+  assert.equal(capabilities.adapterVersion, "0.11.0");
+  assert.equal(capabilities.detectedVersion, "0.11.0");
   assert.deepEqual(capabilities.requiredTools, {
-    available: [...CBM_V090_REQUIRED_TOOLS],
+    available: [...CBM_V0110_REQUIRED_TOOLS],
     missing: []
   });
   assert.deepEqual(capabilities.optionalTools, {
-    available: [...CBM_V090_OPTIONAL_TOOLS],
+    available: [...CBM_V0110_OPTIONAL_TOOLS],
     missing: []
   });
   assert.deepEqual(capabilities.nativeFields, {
@@ -51,14 +51,14 @@ test("CBM v0.9.0 capabilities accept the pinned runtime and detect every native 
   });
   assert.equal(capabilities.semanticSearch, true);
   assert.deepEqual(capabilities.diagnostics, []);
-  assert.equal(capabilities.summary, "CBM 0.9.0 is compatible; all known optional tools are available.");
+  assert.equal(capabilities.summary, "CBM 0.11.0 is compatible; all known optional tools are available.");
 });
 
-test("CBM v0.9.0 reports missing optional tools without making the runtime incompatible", () => {
-  const descriptors = completeDescriptors().filter(({ name }) => !CBM_V090_OPTIONAL_TOOLS.includes(
-    name as typeof CBM_V090_OPTIONAL_TOOLS[number]
+test("CBM v0.11.0 reports missing optional tools without making the runtime incompatible", () => {
+  const descriptors = completeDescriptors().filter(({ name }) => !CBM_V0110_OPTIONAL_TOOLS.includes(
+    name as typeof CBM_V0110_OPTIONAL_TOOLS[number]
   ));
-  const capabilities = assertCbmV090Compatible("v0.9.0", descriptors);
+  const capabilities = assertCbmV0110Compatible("v0.11.0", descriptors);
 
   assert.equal(capabilities.compatible, true);
   assert.deepEqual(capabilities.optionalTools, {
@@ -68,9 +68,9 @@ test("CBM v0.9.0 reports missing optional tools without making the runtime incom
   assert.match(capabilities.summary, /optional tools unavailable: detect_changes, index_repository/);
 });
 
-test("CBM v0.9.0 reports every missing required tool and fails closed", () => {
+test("CBM v0.11.0 reports every missing required tool and fails closed", () => {
   const descriptors = completeDescriptors().filter(({ name }) => name !== "query_graph" && name !== "trace_path");
-  const capabilities = inspectCbmV090Capabilities("0.9.0", descriptors);
+  const capabilities = inspectCbmV0110Capabilities("0.11.0", descriptors);
 
   assert.equal(capabilities.compatible, false);
   assert.deepEqual(capabilities.requiredTools.missing, ["trace_path", "query_graph"]);
@@ -80,8 +80,8 @@ test("CBM v0.9.0 reports every missing required tool and fails closed", () => {
   );
   assert.match(capabilities.summary, /missing required tools: trace_path, query_graph/);
   assert.throws(
-    () => assertCbmV090Compatible("0.9.0", descriptors),
-    (error: unknown) => error instanceof CbmV090CompatibilityError
+    () => assertCbmV0110Compatible("0.11.0", descriptors),
+    (error: unknown) => error instanceof CbmV0110CompatibilityError
       && error.capabilities.requiredTools.missing.join(",") === "trace_path,query_graph"
       && error.message === capabilities.summary
   );
@@ -90,26 +90,26 @@ test("CBM v0.9.0 reports every missing required tool and fails closed", () => {
 for (const version of [
   { reported: "codebase-memory-mcp 0.8.1", detected: "0.8.1" },
   { reported: "codebase-memory-mcp 0.9.1", detected: "0.9.1" },
-  { reported: "codebase-memory-mcp 0.9.0-rc.1", detected: "0.9.0-rc.1" },
+  { reported: "codebase-memory-mcp 0.11.0-rc.1", detected: "0.11.0-rc.1" },
   { reported: "unknown", detected: null }
 ] as const) {
-  test(`CBM v0.9.0 rejects unsupported version '${version.reported}'`, () => {
-    const capabilities = inspectCbmV090Capabilities(version.reported, completeDescriptors());
+  test(`CBM v0.11.0 rejects unsupported version '${version.reported}'`, () => {
+    const capabilities = inspectCbmV0110Capabilities(version.reported, completeDescriptors());
 
     assert.equal(capabilities.compatible, false);
     assert.equal(capabilities.detectedVersion, version.detected);
     assert.equal(capabilities.diagnostics[0]?.code, "unsupported_version");
-    assert.match(capabilities.summary, /expected version 0\.9\.0/);
+    assert.match(capabilities.summary, /expected version 0\.11\.0/);
   });
 }
 
-test("CBM v0.9.0 detects native fields independently from inputSchema.properties", () => {
+test("CBM v0.11.0 detects native fields independently from inputSchema.properties", () => {
   const descriptors = completeDescriptors().map((descriptor) => descriptor.name === "search_graph"
     ? tool("search_graph", ["semantic_query", "relationship", "unrelated_field"])
     : descriptor.name === "trace_path"
       ? tool("trace_path", ["include_tests"])
       : descriptor);
-  const capabilities = inspectCbmV090Capabilities("0.9.0", descriptors);
+  const capabilities = inspectCbmV0110Capabilities("0.11.0", descriptors);
 
   assert.deepEqual(capabilities.nativeFields.search_graph, {
     semantic_query: true,
@@ -128,7 +128,7 @@ test("CBM v0.9.0 detects native fields independently from inputSchema.properties
   assert.equal(capabilities.semanticSearch, true);
 });
 
-test("CBM v0.9.0 disables optional fields and emits diagnostics for absent or malformed schemas", () => {
+test("CBM v0.11.0 disables optional fields and emits diagnostics for absent or malformed schemas", () => {
   const descriptors = completeDescriptors().map((descriptor) => {
     if (descriptor.name === "search_graph") return { name: descriptor.name };
     if (descriptor.name === "search_code") {
@@ -136,7 +136,7 @@ test("CBM v0.9.0 disables optional fields and emits diagnostics for absent or ma
     }
     return descriptor;
   });
-  const capabilities = inspectCbmV090Capabilities("0.9.0", descriptors);
+  const capabilities = inspectCbmV0110Capabilities("0.11.0", descriptors);
 
   assert.equal(capabilities.compatible, true);
   assert.equal(capabilities.semanticSearch, false);
@@ -148,12 +148,12 @@ test("CBM v0.9.0 disables optional fields and emits diagnostics for absent or ma
   );
 });
 
-test("CBM v0.9.0 reports duplicate descriptors and uses the first schema deterministically", () => {
+test("CBM v0.11.0 reports duplicate descriptors and uses the first schema deterministically", () => {
   const descriptors = [
     ...completeDescriptors(),
     tool("search_graph", [])
   ];
-  const capabilities = inspectCbmV090Capabilities("0.9.0", descriptors);
+  const capabilities = inspectCbmV0110Capabilities("0.11.0", descriptors);
 
   assert.equal(capabilities.compatible, true);
   assert.equal(capabilities.semanticSearch, true);
@@ -169,7 +169,7 @@ test("CBM v0.9.0 reports duplicate descriptors and uses the first schema determi
 });
 
 function completeDescriptors(): McpToolDescriptor[] {
-  const descriptors = [...CBM_V090_REQUIRED_TOOLS, ...CBM_V090_OPTIONAL_TOOLS].map((name) => tool(name, []));
+  const descriptors = [...CBM_V0110_REQUIRED_TOOLS, ...CBM_V0110_OPTIONAL_TOOLS].map((name) => tool(name, []));
   return descriptors.map((descriptor) => {
     switch (descriptor.name) {
       case "get_architecture":

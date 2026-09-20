@@ -113,7 +113,7 @@ describe("dashboard event stream", () => {
     const unsubscribe = subscribeToDashboardEvents(onEvent);
     await vi.waitFor(() => expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "ready", eventId: "ready_1" })));
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8787/api/dashboard/events",
+      "http://localhost:8787/api/dashboard/events",
       expect.objectContaining({ headers: { accept: "text/event-stream", authorization: "Bearer control-secret" } })
     );
     unsubscribe();

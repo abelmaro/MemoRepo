@@ -15,7 +15,7 @@ import type {
   CbmService,
   McpToolDescriptor
 } from "../src/services/cbmService.js";
-import { assertCbmV090Compatible } from "../src/services/cbmV090Capabilities.js";
+import { assertCbmV0110Compatible } from "../src/services/cbmV0110Capabilities.js";
 import type { SnapshotManifest } from "../src/services/snapshotService.js";
 import { snapshotSourceIntegrityManifestPath } from "../src/services/snapshotSourceIntegrity.js";
 import { insertRecord, updateRecord } from "../src/db/sql.js";
@@ -71,7 +71,7 @@ test("database exposes a Drizzle client over the SQLite source of truth", () => 
 
 test("managed repository pipeline clones, checks out, indexes, snapshots, and serves MCP tools", async (t) => {
   if (!supportsImmutableCbmConfiguration()) {
-    t.skip("requires codebase-memory-mcp 0.9.0 or newer");
+    t.skip("requires codebase-memory-mcp 0.11.0 or newer");
     return;
   }
   fs.mkdirSync(testsRoot, { recursive: true });
@@ -1196,7 +1196,7 @@ test("active snapshot manifests record the CBM engine version and clean reposito
     assert.equal(manifest.quality, "complete");
     assert.equal(receivedIndexMode, "full");
     assert.deepEqual(manifest.repositories[0]?.cbmIndex, {
-      engineVersion: "codebase-memory-mcp test",
+      engineVersion: "codebase-memory-mcp 0.11.0",
       mode: "full",
       status: "indexed",
       reportedStatus: "indexed",
@@ -4122,7 +4122,7 @@ function stubCbmSnapshots(
     ) => Promise<CbmCrossRepoLinksResult>;
   };
 
-  cbm.version = async () => "codebase-memory-mcp test";
+  cbm.version = async () => "codebase-memory-mcp 0.11.0";
   cbm.indexRepository = async (repoPath, cacheDir, mode = "fast") => {
     if (failingRepositoryPath && path.basename(repoPath) === path.basename(failingRepositoryPath)) {
       throw new Error(`index failed for ${repoPath}`);
@@ -4188,10 +4188,10 @@ function stubCbmCapabilities(cbm: CbmService): void {
   }));
   const runtime = cbm as unknown as {
     version: () => Promise<string>;
-    capabilities: () => Promise<ReturnType<typeof assertCbmV090Compatible>>;
+    capabilities: () => Promise<ReturnType<typeof assertCbmV0110Compatible>>;
   };
-  runtime.version = async () => "codebase-memory-mcp 0.9.0";
-  runtime.capabilities = async () => assertCbmV090Compatible("codebase-memory-mcp 0.9.0", descriptors);
+  runtime.version = async () => "codebase-memory-mcp 0.11.0";
+  runtime.capabilities = async () => assertCbmV0110Compatible("codebase-memory-mcp 0.11.0", descriptors);
 }
 
 function escapeRegExp(value: string): string {

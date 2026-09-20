@@ -1,6 +1,6 @@
 {
   "name": "@memorepo/agent-runtime",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -17,13 +17,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.80.8",
-    "@earendil-works/pi-ai": "0.80.8"
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10"
   },
   "devDependencies": {
-    "@types/node": "^22.17.2",
-    "tsx": "^4.20.4",
-    "typescript": "^5.9.2"
+    "@types/node": "^22.20.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=22.19.0"

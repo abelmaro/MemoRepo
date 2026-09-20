@@ -10,7 +10,7 @@ test("snapshot observability summarizes engine, mode, coverage, and skip reasons
       {
         sourceIntegrity: { fileCount: 40 },
         cbmIndex: {
-          engineVersion: "0.9.0",
+          engineVersion: "0.11.0",
           mode: "fast",
           skippedCount: 2,
           skipped: {
@@ -25,7 +25,7 @@ test("snapshot observability summarizes engine, mode, coverage, and skip reasons
       {
         sourceIntegrity: { fileCount: 10 },
         cbmIndex: {
-          engineVersion: "0.9.0",
+          engineVersion: "0.11.0",
           mode: "fast",
           skippedCount: 0
         }
@@ -35,7 +35,7 @@ test("snapshot observability summarizes engine, mode, coverage, and skip reasons
 
   assert.deepEqual(summary, {
     quality: "partial",
-    engineVersions: ["0.9.0"],
+    engineVersions: ["0.11.0"],
     indexModes: ["fast"],
     sourceFileCount: 50,
     skippedCount: 2,

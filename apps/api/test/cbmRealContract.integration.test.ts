@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/config.js";
-import { CbmService } from "../src/services/cbmService.js";
+import { CbmService, createCbmEnvironment } from "../src/services/cbmService.js";
+import { runProcess } from "../src/services/process.js";
 import { createCbmBenchmarkCorpus } from "./cbmBenchmarkCorpus.js";
 
 const EXPECTED_GATEWAY_NATIVE_TOOLS = [
@@ -21,9 +22,9 @@ const EXPECTED_GATEWAY_NATIVE_TOOLS = [
   "trace_path"
 ] as const;
 
-test("pinned CBM v0.9 contract discovers every page and executes every gateway native tool", {
+test("pinned CBM v0.11 contract discovers every page and executes every gateway native tool", {
   skip: process.env.MEMOREPO_RUN_CBM_CONTRACT !== "1"
-}, async () => {
+}, async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memorepo-cbm-contract-"));
   const corpus = createCbmBenchmarkCorpus(root);
   const managedHome = path.join(root, "managed");
@@ -37,8 +38,10 @@ test("pinned CBM v0.9 contract discovers every page and executes every gateway n
   const cbm = new CbmService(config);
 
   try {
-    assert.match(await cbm.version(), /\b0\.9\.0\b/u);
-    await cbm.indexRepository(corpus.root, cacheDir, "fast");
+    assert.match(await cbm.version(), /\b0\.11\.0\b/u);
+    const indexed = await cbm.indexRepository(corpus.root, cacheDir, "fast");
+    assert.equal(indexed.quality, "clean");
+    assert.equal(indexed.indexStatus?.quality, "complete");
     const descriptors = await cbm.listToolDescriptors(cacheDir);
     const names = descriptors.map((descriptor) => descriptor.name);
 
@@ -51,6 +54,14 @@ test("pinned CBM v0.9 contract discovers every page and executes every gateway n
     const projects = await cbm.listProjects(cacheDir);
     const project = projects.projects?.[0]?.name;
     assert.ok(project, "Indexed corpus must expose one project");
+
+    if (process.platform === "win32") {
+      const started = Date.now();
+      const shell = await runProcess({ command: "powershell.exe", args: ["-Command", "Write-Output 'CBM shell ready'"],
+        env: createCbmEnvironment(cacheDir), inheritEnv: false, timeoutMs: 60_000 });
+      context.diagnostic(`Native text-search shell: exit=${shell.exitCode}, duration=${Date.now() - started}ms`);
+      assert.equal(shell.exitCode, 0, shell.stderr);
+    }
 
     const calls: Array<[string, Record<string, unknown>]> = [
       ["list_projects", {}],
@@ -66,9 +77,49 @@ test("pinned CBM v0.9 contract discovers every page and executes every gateway n
     ];
 
     for (const [tool, input] of calls) {
-      const result = await cbm.tool<unknown>(tool, input, cacheDir, 60_000);
+      let result: unknown;
+      try {
+        result = await cbm.tool<unknown>(tool, input, cacheDir, 60_000);
+      } catch (error) {
+        if (process.platform === "win32" && tool === "search_code") {
+          const direct = await runProcess({ command: "codebase-memory-mcp", args: ["cli", "--quiet", "--json", tool],
+            stdin: JSON.stringify({ ...input, format: "json" }), env: createCbmEnvironment(cacheDir), inheritEnv: false, timeoutMs: 60_000 });
+          context.diagnostic(`Native CLI text-search comparison: ${direct.exitCode}: ${direct.stdout} ${direct.stderr}`);
+        }
+        throw error;
+      }
       assert.notEqual(result, undefined, `${tool} returned undefined`);
     }
+
+    const graph = await cbm.tool<{ results: Array<{ qualified_name: string; file_path: string }> }>(
+      "search_graph", { project, query: "validateOrder", limit: 5 }, cacheDir, 60_000);
+    assert.ok(graph.results.some((row) => row.qualified_name.endsWith(".validateOrder") && row.file_path.endsWith("domain.ts")));
+    const trace = await cbm.tool<{ callers: unknown[] }>("trace_path",
+      { project, function_name: "validateOrder", direction: "both" }, cacheDir, 60_000);
+    assert.ok(trace.callers.length > 0);
+
+    const second = createCbmBenchmarkCorpus(root);
+    const secondSource = path.join(second.root, "alpha", "src", "domain.ts");
+    fs.writeFileSync(secondSource, fs.readFileSync(secondSource, "utf8").replace("order.total < 0", "order.total < -100"));
+    initializeRepository(second.root);
+    const secondCache = path.join(managedHome, "second-index");
+    const rebuilding = cbm.indexRepository(second.root, secondCache, "fast");
+    const snippetInput = { project, qualified_name: "validateOrder" };
+    const firstWhileBuilding = await cbm.tool<{ source: string }>("get_code_snippet", snippetInput, cacheDir, 60_000);
+    assert.match(firstWhileBuilding.source, /order.total < 0/u);
+    const secondIndexed = await rebuilding;
+    assert.equal(secondIndexed.indexStatus?.quality, "complete");
+    const secondProject = (await cbm.listProjects(secondCache)).projects?.[0]?.name;
+    assert.ok(secondProject);
+    const [firstSnippet, secondSnippet] = await Promise.all([
+      cbm.tool<{ source: string }>("get_code_snippet", snippetInput, cacheDir, 60_000),
+      cbm.tool<{ source: string }>("get_code_snippet", { ...snippetInput, project: secondProject }, secondCache, 60_000)
+    ]);
+    assert.match(firstSnippet.source, /order.total < 0/u);
+    assert.match(secondSnippet.source, /order.total < -100/u);
+    await cbm.closeSession(secondCache);
+    assert.match((await cbm.tool<{ source: string }>("get_code_snippet", snippetInput, cacheDir, 60_000)).source, /order.total < 0/u);
+    assert.match((await cbm.tool<{ source: string }>("get_code_snippet", { ...snippetInput, project: secondProject }, secondCache, 60_000)).source, /order.total < -100/u);
   } finally {
     await cbm.close();
     fs.rmSync(root, { recursive: true, force: true });
