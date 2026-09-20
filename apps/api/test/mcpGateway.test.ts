@@ -9,7 +9,7 @@ import type { AppDatabase } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
 import { sha256 } from "../src/domain/ids.js";
 import type { CbmService, McpToolDescriptor } from "../src/services/cbmService.js";
-import { assertCbmV090Compatible } from "../src/services/cbmV090Capabilities.js";
+import { assertCbmV0110Compatible } from "../src/services/cbmV0110Capabilities.js";
 import { McpGateway } from "../src/services/mcpGateway.js";
 import { SpaceService } from "../src/services/spaceService.js";
 import {
@@ -63,7 +63,7 @@ test("snapshot chats neither advertise nor execute mutable change detection", as
   }
 });
 
-test("snapshot tool schemas match the supported CBM v0.9 read contract", async () => {
+test("snapshot tool schemas match the supported CBM v0.11 read contract", async () => {
   const fixture = createGatewayFixture();
 
   try {
@@ -634,7 +634,7 @@ test("snapshot_index_coverage is local, scoped, integrity-verified, and explicit
       ...manifest.repositories[0],
       sourceIntegrity: snapshotSourceIntegritySummary(integrity),
       cbmIndex: {
-        engineVersion: "codebase-memory-mcp 0.9.0",
+        engineVersion: "codebase-memory-mcp 0.11.0",
         mode: "fast",
         status: "indexed",
         quality: "clean",
@@ -714,6 +714,26 @@ test("CSS search results from CBM remain visible alongside snapshot inventory", 
 
 const TEST_TIME = "2026-01-01T00:00:00.000Z";
 
+test("older snapshot indexes never open a new engine and retain source tools", async () => {
+  for (const engineVersion of ["codebase-memory-mcp 0.9.0", undefined]) {
+    const fixture = createGatewayFixture();
+    try {
+      const row = fixture.database.sqlite.prepare("SELECT manifest_json AS manifest FROM space_snapshots WHERE id = 'snp_gateway'").get() as { manifest: string };
+      const manifest = JSON.parse(row.manifest);
+      manifest.repositories[0].cbmIndex.engineVersion = engineVersion;
+      fixture.database.sqlite.prepare("UPDATE space_snapshots SET manifest_json = ? WHERE id = 'snp_gateway'").run(JSON.stringify(manifest));
+      const definitions = await fixture.gateway.toolDefinitionsForSnapshot("spc_gateway", "snp_gateway");
+      assert.ok(definitions.some((tool) => tool.name === "read_snapshot_file"));
+      assert.equal(definitions.some((tool) => tool.name === "search_graph"), false);
+      await assert.rejects(() => fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "search_graph", { query: "run" }), /requires an index rebuild/u);
+      const source = await fixture.gateway.callSnapshotTool("spc_gateway", "snp_gateway", "read_snapshot_file", { project: "pinned-project", path: "README.md" });
+      assert.match(JSON.stringify(source), /Pinned repository/u);
+      assert.deepEqual(fixture.cbmListToolsCalls, []);
+      assert.deepEqual(fixture.cbmToolCalls, []);
+    } finally { fixture.close(); }
+  }
+});
+
 interface GatewayFixtureOptions {
   indexMode?: "fast" | "moderate" | "full";
   reportedVersion?: string;
@@ -742,8 +762,8 @@ function createGatewayFixture(options: GatewayFixtureOptions = {}) {
   const cbm = {
     async capabilities(cacheDir: string) {
       cbmListToolsCalls.push(cacheDir);
-      return assertCbmV090Compatible(
-        options.reportedVersion ?? "codebase-memory-mcp 0.9.0",
+      return assertCbmV0110Compatible(
+        options.reportedVersion ?? "codebase-memory-mcp 0.11.0",
         gatewayToolDescriptors(options.descriptorFields, options.omitTools)
       );
     },
@@ -833,15 +853,15 @@ function seedPinnedSnapshot(
         commit: "pinned-commit",
         projectName: "pinned-project",
         localPath: paths.snapshotSourcePath,
-        ...(indexMode ? {
+        ...{
           cbmIndex: {
-            engineVersion: "codebase-memory-mcp 0.9.0",
-            mode: indexMode,
+            engineVersion: "codebase-memory-mcp 0.11.0",
+            mode: indexMode ?? "fast",
             status: "indexed",
             quality: "clean",
             skippedCount: 0
           }
-        } : {})
+        }
       }
     ]
   };

@@ -28,12 +28,15 @@ test("CBM receives only allowlisted system variables and explicit overrides", ()
     TEMP: "/tmp",
     HOME: "/home/memorepo",
     CBM_CACHE_DIR: "/tmp/cbm-cache",
+    CBM_RUNTIME_DIR: environment.CBM_RUNTIME_DIR,
     CBM_LOG_LEVEL: "warn"
   });
   assert.equal(environment.GITHUB_ACCESS_TOKEN, undefined);
   assert.equal(environment.MEMOREPO_CONTROL_TOKEN, undefined);
   assert.equal(environment.AWS_SECRET_ACCESS_KEY, undefined);
   assert.equal(environment.SSH_AUTH_SOCK, undefined);
+  assert.ok(environment.CBM_RUNTIME_DIR);
+  assert.notEqual(environment.CBM_RUNTIME_DIR, createCbmEnvironment("/tmp/another-cache").CBM_RUNTIME_DIR);
 });
 
 test("CBM disables automatic indexing and watching before opening a snapshot cache", async () => {
@@ -50,7 +53,7 @@ test("CBM disables automatic indexing and watching before opening a snapshot cac
       return processResult("");
     }
     return processResult(
-      `Configuration:\n  auto_index = ${String(autoIndex)}\n  auto_watch = ${String(autoWatch)}\n`
+      `Configuration:\n  auto_index = ${String(autoIndex)}\n  auto_watch = ${String(autoWatch)}\n  watcher_enabled = false\n  ui_enabled = false\n`
     );
   });
 
@@ -81,9 +84,9 @@ test("CBM sends CLI input through stdin instead of deprecated raw JSON arguments
   const service = new CbmService({ memorepoHome: root } as AppConfig, async (options) => {
     calls.push({ args: options.args, stdin: options.stdin });
     if (options.args[0] === "config") {
-      return processResult("Configuration:\n  auto_index = false\n  auto_watch = false\n");
+      return immutableConfigRunner();
     }
-    return processResult(JSON.stringify({ status: "indexed" }));
+    return processResult(JSON.stringify({ content: [{ type: "text", text: JSON.stringify({ status: "indexed" }) }] }));
   });
 
   try {
@@ -91,10 +94,10 @@ test("CBM sends CLI input through stdin instead of deprecated raw JSON arguments
     const runCli = (service as unknown as {
       cli<T>(tool: string, value: Record<string, unknown>, options: { cacheDir: string }): Promise<T>;
     }).cli.bind(service);
-    await runCli("index_repository", input, { cacheDir: path.join(root, "cache") });
+    assert.deepEqual(await runCli("index_repository", input, { cacheDir: path.join(root, "cache") }), { status: "indexed" });
 
     const cliCall = calls.find((call) => call.args[0] === "cli");
-    assert.deepEqual(cliCall?.args, ["cli", "index_repository"]);
+    assert.deepEqual(cliCall?.args, ["cli", "--quiet", "--json", "index_repository"]);
     assert.equal(cliCall?.stdin, JSON.stringify(input));
   } finally {
     await service.close();
@@ -209,7 +212,7 @@ test("CBM capability preflight combines the cached runtime version with the pagi
     async (options) => {
       if (options.args[0] === "--version") {
         versionCalls += 1;
-        return processResult("codebase-memory-mcp 0.9.0");
+        return processResult("codebase-memory-mcp 0.11.0");
       }
       return immutableConfigRunner();
     },
@@ -241,7 +244,7 @@ test("CBM capability preflight fails closed when a required paginated tool is ab
   const service = new CbmService(
     { memorepoHome: root } as AppConfig,
     async (options) => options.args[0] === "--version"
-      ? processResult("codebase-memory-mcp 0.9.0")
+      ? processResult("codebase-memory-mcp 0.11.0")
       : immutableConfigRunner(),
     () => server.child
   );
@@ -808,7 +811,7 @@ test("CBM serializes background indexing while leaving interactive capacity inde
   const service = new CbmService(
     { memorepoHome: root, cbmIndexConcurrency: 1, cbmInteractiveConcurrency: 2 } as AppConfig,
     async (options) => {
-      if (options.args[0] === "cli" && options.args[1] === "index_repository") {
+      if (options.args[0] === "cli" && options.args.at(-1) === "index_repository") {
         indexCalls += 1;
         if (indexCalls === 1) {
           firstStarted.resolve();
@@ -817,10 +820,10 @@ test("CBM serializes background indexing while leaving interactive capacity inde
         secondStarted.resolve();
         return secondIndex.promise;
       }
-      if (options.args[0] === "cli" && options.args[1] === "list_projects") {
+      if (options.args[0] === "cli" && options.args.at(-1) === "list_projects") {
         return processResult(JSON.stringify({ projects: [{ name: "fixture", root_path: path.join(root, "fixture"), nodes: 1, edges: 0 }] }));
       }
-      if (options.args[0] === "cli" && options.args[1] === "index_status") {
+      if (options.args[0] === "cli" && options.args.at(-1) === "index_status") {
         return processResult(JSON.stringify({ project: "fixture", nodes: 1, edges: 0 }));
       }
       return immutableConfigRunner();
@@ -883,7 +886,7 @@ function processResult(stdout: string) {
 }
 
 async function immutableConfigRunner() {
-  return processResult("Configuration:\n  auto_index = false\n  auto_watch = false\n");
+  return processResult("Configuration:\n  auto_index = false\n  auto_watch = false\n  watcher_enabled = false\n  ui_enabled = false\n");
 }
 
 async function withScriptedToolList(

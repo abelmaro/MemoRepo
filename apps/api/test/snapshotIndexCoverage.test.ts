@@ -166,7 +166,7 @@ async function coverageFixture(files: Record<string, string>) {
         localPath: sourcePath,
         sourceIntegrity: snapshotSourceIntegritySummary(integrity),
         cbmIndex: {
-          engineVersion: "codebase-memory-mcp 0.9.0",
+          engineVersion: "codebase-memory-mcp 0.11.0",
           mode: "fast",
           status: "indexed",
           quality: "clean",

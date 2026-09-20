@@ -27,7 +27,7 @@ import {
   type AgentRuntimePort
 } from "../src/services/agentService.js";
 import type { CbmService } from "../src/services/cbmService.js";
-import { inspectCbmV090Capabilities } from "../src/services/cbmV090Capabilities.js";
+import { inspectCbmV0110Capabilities } from "../src/services/cbmV0110Capabilities.js";
 import { McpGateway } from "../src/services/mcpGateway.js";
 import { SnapshotQueryService } from "../src/services/snapshotQueryService.js";
 import { SnapshotService } from "../src/services/snapshotService.js";
@@ -1121,7 +1121,7 @@ test("interrupt waits for stalled snapshot query cancellation and ignores late r
   const config = testConfig(root);
   const cbm = {
     async capabilities() {
-      return inspectCbmV090Capabilities("codebase-memory-mcp 0.9.0", [
+      return inspectCbmV0110Capabilities("codebase-memory-mcp 0.11.0", [
         "list_projects", "index_status", "get_architecture", "get_graph_schema", "search_graph",
         "search_code", "trace_path", "get_code_snippet", "query_graph"
       ].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })));
@@ -2078,6 +2078,7 @@ function seedSpace(database: AppDatabase, root = "C:\\private"): void {
         branch: "main",
         commit: "abc123",
         projectName: "memo",
+        cbmIndex: { engineVersion: "codebase-memory-mcp 0.11.0", mode: "fast" },
         localPath: path.join(artifactPath, "sources", "memo")
       }
     ]

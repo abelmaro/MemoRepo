@@ -68,6 +68,7 @@ export interface CbmBenchmarkReport {
 export class CbmBenchmarkInputError extends Error {}
 
 export function parseCbmBenchmarkArguments(args: string[], now = new Date()): CbmBenchmarkConfig {
+  if (args[0] === "--") args = args.slice(1);
   const stamp = now.toISOString().replace(/[:.]/gu, "-");
   const config: CbmBenchmarkConfig = {
     outputPath: path.join(os.tmpdir(), "memorepo-cbm", `benchmark-${stamp}.json`),
@@ -132,7 +133,7 @@ export async function runCbmBenchmark(config: CbmBenchmarkConfig): Promise<CbmBe
   const cbm = new CbmService(appConfig);
   try {
     const version = await cbm.version();
-    if (!/0\.9\./u.test(version)) throw new Error(`perf:cbm requires codebase-memory-mcp v0.9.x; detected: ${version || "unknown"}`);
+    if (!/0\.11\./u.test(version)) throw new Error(`perf:cbm requires codebase-memory-mcp v0.11.x; detected: ${version || "unknown"}`);
     const indexStarted = performance.now();
     const indexResult = await cbm.indexRepository(corpus.root, cacheDir, config.mode);
     const indexDurationMs = round(performance.now() - indexStarted);

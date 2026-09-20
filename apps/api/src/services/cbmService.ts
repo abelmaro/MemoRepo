@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AppConfig } from "../config.js";
 import { ensureInsideDir } from "../domain/paths.js";
 import { sanitizePublicMessage } from "../domain/publicSanitize.js";
 import { redactSensitive } from "../domain/sanitize.js";
-import { assertCbmV090Compatible, type CbmV090Capabilities } from "./cbmV090Capabilities.js";
+import { assertCbmV0110Compatible, type CbmV0110Capabilities } from "./cbmV0110Capabilities.js";
+import { normalizeCbmV0110Result } from "./cbmV0110Results.js";
 import { createSafeProcessEnvironment, runProcess, type ProcessResult } from "./process.js";
 
 const DEFAULT_INTERACTIVE_CBM_CONCURRENCY = 2;
@@ -114,9 +117,17 @@ export function createCbmEnvironment(
   environment.CBM_LOG_LEVEL = "warn";
   if (cacheDir !== undefined) {
     environment.CBM_CACHE_DIR = cacheDir;
+    environment.CBM_RUNTIME_DIR = cbmRuntimeDirectory(cacheDir);
   }
 
   return environment;
+}
+
+function cbmRuntimeDirectory(cacheDir: string): string {
+  // Unix sockets have a small path limit, independent of the snapshot path length.
+  if (process.platform === "win32") return path.join(cacheDir, ".cbm-runtime");
+  const identity = createHash("sha256").update(path.resolve(cacheDir)).digest("hex").slice(0, 24);
+  return path.join(os.tmpdir(), `mr-cbm-${process.getuid?.() ?? "user"}`, identity);
 }
 
 export class CbmService {
@@ -127,6 +138,7 @@ export class CbmService {
   private readonly isolatedPermits: AbortablePermitPool;
   private readonly indexPermits: AbortablePermitPool;
   private readonly immutableCacheConfiguration = new Map<string, Promise<void>>();
+  private readonly configuredCaches = new Map<string, string>();
   private runtimeVersion: Promise<string> | null = null;
 
   constructor(
@@ -164,12 +176,12 @@ export class CbmService {
     return (result.stdout || result.stderr).trim();
   }
 
-  async capabilities(cacheDir: string): Promise<CbmV090Capabilities> {
+  async capabilities(cacheDir: string): Promise<CbmV0110Capabilities> {
     const [version, descriptors] = await Promise.all([
       this.version(),
       this.listToolDescriptors(cacheDir)
     ]);
-    return assertCbmV090Compatible(version, descriptors);
+    return assertCbmV0110Compatible(version, descriptors);
   }
 
   async indexRepository(
@@ -312,6 +324,7 @@ export class CbmService {
     const sessions = Array.from(this.trackedSessions, ([session, sessionKey]) => sessionKey === key ? session : null)
       .filter((session): session is CbmMcpSession => session !== null);
     await Promise.all(sessions.map((session) => session.close()));
+    await this.stopDaemon(cacheDir);
   }
 
   async closeTurnSession(turnSessionId: string): Promise<void> {
@@ -329,6 +342,22 @@ export class CbmService {
     this.turnSessions.clear();
     await Promise.all(Array.from(sessions, (session) => session.close()));
     this.trackedSessions.clear();
+    await Promise.all(Array.from(this.configuredCaches.values(), (cacheDir) => this.stopDaemon(cacheDir)));
+  }
+
+  private async stopDaemon(cacheDir: string): Promise<void> {
+    const key = normalizePath(path.resolve(cacheDir));
+    if (!this.configuredCaches.has(key)) return;
+    const result = await this.runCbmProcess({
+      command: "codebase-memory-mcp",
+      args: ["daemon", "stop"],
+      env: createCbmEnvironment(cacheDir),
+      inheritEnv: false,
+      timeoutMs: 15_000
+    });
+    if (result.exitCode !== 0) throw new Error("Unable to stop snapshot CBM daemon");
+    this.configuredCaches.delete(key);
+    this.immutableCacheConfiguration.delete(key);
   }
 
   private session(cacheDir: string): CbmMcpSession {
@@ -409,8 +438,8 @@ export class CbmService {
     try {
       result = await this.runCbmProcess({
         command: "codebase-memory-mcp",
-        args: ["cli", tool],
-        stdin: JSON.stringify(input),
+        args: ["cli", "--quiet", "--json", tool],
+        stdin: JSON.stringify(cbmStructuredInput(tool, input)),
         env: createCbmEnvironment(cacheDir),
         inheritEnv: false,
         timeoutMs: options.timeoutMs,
@@ -436,7 +465,7 @@ export class CbmService {
     }
 
     try {
-      return JSON.parse(stdout) as T;
+      return parseCbmToolResult<T>(tool, JSON.parse(stdout) as McpToolCallResult);
     } catch (error) {
       throw new Error(
         `Unable to parse codebase-memory-mcp output for ${tool}: ${sanitizePublicMessage(stdout, [this.config.memorepoHome])}`
@@ -457,6 +486,7 @@ export class CbmService {
   }
 
   private async configureImmutableCache(cacheDir: string): Promise<void> {
+    fs.mkdirSync(cbmRuntimeDirectory(cacheDir), { recursive: true, mode: 0o700 });
     const readSettings = async () => {
       const result = await this.runCbmProcess({
         command: "codebase-memory-mcp",
@@ -465,12 +495,14 @@ export class CbmService {
         inheritEnv: false,
         timeoutMs: 10_000
       });
-      if (result.exitCode !== 0) throw new Error("Unable to verify snapshot query configuration");
+      if (result.exitCode !== 0) {
+        throw new Error(`Unable to verify snapshot query configuration: ${sanitizePublicMessage(result.stderr || result.stdout, [this.config.memorepoHome])}`);
+      }
       return cbmBooleanSettings(result.stdout || result.stderr);
     };
 
     const settings = await readSettings();
-    for (const name of ["auto_index", "auto_watch"] as const) {
+    for (const name of ["auto_index", "auto_watch", "watcher_enabled", "ui_enabled"] as const) {
       if (!settings.has(name)) throw new Error("CBM does not support immutable snapshot query configuration");
       if (settings.get(name) === false) continue;
       const result = await this.runCbmProcess({
@@ -484,11 +516,12 @@ export class CbmService {
     }
 
     const verified = await readSettings();
-    for (const name of ["auto_index", "auto_watch"] as const) {
+    for (const name of ["auto_index", "auto_watch", "watcher_enabled", "ui_enabled"] as const) {
       if (verified.get(name) !== false) {
         throw new Error("Immutable snapshot query configuration could not be verified");
       }
     }
+    this.configuredCaches.set(normalizePath(path.resolve(cacheDir)), cacheDir);
   }
 }
 
@@ -772,7 +805,7 @@ class CbmMcpSession {
 
   async callTool<T>(tool: string, input: Record<string, unknown>, timeoutMs: number): Promise<T> {
     await this.ready;
-    const response = await this.request<McpToolCallResult>("tools/call", { name: tool, arguments: input }, timeoutMs);
+    const response = await this.request<McpToolCallResult>("tools/call", { name: tool, arguments: cbmStructuredInput(tool, input) }, timeoutMs);
     return parseCbmToolResult<T>(tool, response);
   }
 
@@ -1218,6 +1251,18 @@ function normalizeMcpToolDescriptor(candidate: unknown): McpToolDescriptor | nul
   return descriptor;
 }
 
+function cbmStructuredInput(tool: string, input: Record<string, unknown>): Record<string, unknown> {
+  if (tool === "index_repository") return input;
+  return {
+    ...input,
+    format: "json",
+    ...(tool === "list_projects" ? { include_details: true } : {}),
+    ...(tool === "index_status" ? { verbose: true, diagnostics: "full" } : {}),
+    ...(tool === "trace_path" ? { include_evidence: true } : {}),
+    ...(tool === "get_code_snippet" ? { source_mode: "full" } : {})
+  };
+}
+
 export function parseCbmToolResult<T>(tool: string, response: McpToolCallResult): T {
   const text = response.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text;
   if (!text) {
@@ -1241,7 +1286,7 @@ export function parseCbmToolResult<T>(tool: string, response: McpToolCallResult)
   if (response.isError || embeddedError) {
     throw new CbmToolExecutionError(tool, embeddedError ?? text);
   }
-  return parsed as T;
+  return normalizeCbmV0110Result(tool, parsed) as T;
 }
 
 function recordErrorMessage(value: unknown): string | undefined {

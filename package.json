@@ -1,8 +1,8 @@
 {
   "name": "memorepo",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
-  "packageManager": "pnpm@10.28.2",
+  "packageManager": "pnpm@10.34.5",
   "scripts": {
     "dev": "pnpm --filter @memorepo/api dev",
     "dev:api": "pnpm --filter @memorepo/api dev",
@@ -19,6 +19,6 @@
     "node": ">=22.19.0"
   },
   "devDependencies": {
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.3"
   }
 }

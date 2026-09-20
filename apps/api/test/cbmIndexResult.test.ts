@@ -11,7 +11,7 @@ import {
 } from "../src/services/cbmService.js";
 import type { ProcessResult, RunProcessOptions } from "../src/services/process.js";
 
-test("CBM index results normalize the complete v0.9 quality metadata", () => {
+test("CBM index results normalize the complete v0.11 quality metadata", () => {
   assert.deepEqual(
     normalizeCbmIndexRepositoryResult({
       project: "sample-project",
@@ -134,7 +134,7 @@ test("CBM index status skipped remains explicitly non-activatable", () => {
   );
 });
 
-test("CBM index_status normalizes the complete v0.9 ready response", () => {
+test("CBM index_status normalizes the complete v0.11 ready response", () => {
   assert.deepEqual(
     normalizeCbmIndexStatusResult({
       project: "sample-project",
@@ -209,9 +209,9 @@ test("CBM verifies index_status after both primary indexing and cross-repository
   const cliCalls: string[] = [];
   const runner = async (options: RunProcessOptions): Promise<ProcessResult> => {
     if (options.args[0] === "config") {
-      return processResult("auto_index = false\nauto_watch = false\n");
+      return processResult("auto_index = false\nauto_watch = false\nwatcher_enabled = false\nui_enabled = false\n");
     }
-    const tool = options.args[1]!;
+    const tool = options.args.at(-1)!;
     cliCalls.push(tool);
     if (tool === "index_repository") {
       const input = JSON.parse(String(options.stdin)) as { mode?: string };

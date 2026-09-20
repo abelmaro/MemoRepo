@@ -26,6 +26,11 @@ test("duration summaries use nearest-rank percentiles", () => {
   assert.deepEqual(summarizeDurations([]), { count: 0, minMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 });
 });
 
+test("CBM benchmark accepts the package manager argument separator", () => {
+  const args = ["--mode", "fast", "--output", path.join(os.tmpdir(), "cbm-fast.json"), "--warm-repetitions", "5"];
+  assert.deepEqual(parseCbmBenchmarkArguments(["--", ...args]), parseCbmBenchmarkArguments(args));
+});
+
 test("retrieval aggregation computes hit at one and five from deterministic rankings", () => {
   const aggregate = aggregateRetrievalRankings([
     { results: [{ qualified_name: "validateOrder" }] },

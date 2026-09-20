@@ -6,6 +6,11 @@ try {
   process.stdout.write(`Running deterministic CBM benchmark in ${config.mode} mode.\n`);
   const report = await runCbmBenchmark(config);
   await writeCbmBenchmarkReport(report, config.outputPath);
+  if (report.index.quality !== "clean" || report.coverage.indexedFiles === 0
+    || report.retrieval.hitAt5 !== report.retrieval.queries
+    || report.snippets.exact !== report.snippets.attempted) {
+    throw new Error("CBM benchmark failed the indexing, retrieval, or exact-source quality gate; inspect the report");
+  }
   process.stdout.write(`CBM benchmark completed. Report: ${config.outputPath}\n`);
   process.stdout.write(`Index ${report.index.durationMs} ms; coverage ${report.coverage.indexedFiles}/${report.coverage.sourceFiles}; `
     + `retrieval hit@1 ${report.retrieval.hitAt1}/${report.retrieval.queries}; hit@5 ${report.retrieval.hitAt5}/${report.retrieval.queries}.\n`);

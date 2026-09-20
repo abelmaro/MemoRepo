@@ -7,7 +7,7 @@ import { insertRecord, updateRecord } from "../src/db/sql.js";
 import { createId, sha256 } from "../src/domain/ids.js";
 import { nowIso } from "../src/domain/time.js";
 import { createServices } from "../src/services/appServices.js";
-import { inspectCbmV090Capabilities } from "../src/services/cbmV090Capabilities.js";
+import { inspectCbmV0110Capabilities } from "../src/services/cbmV0110Capabilities.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const testsRoot = path.join(repoRoot, ".tmp-memorepo-tests");
@@ -111,7 +111,7 @@ test("managed deletion gates new work, waits for MCP readers, and revalidates jo
 });
 
 function testCapabilities() {
-  return inspectCbmV090Capabilities("codebase-memory-mcp 0.9.0", [
+  return inspectCbmV0110Capabilities("codebase-memory-mcp 0.11.0", [
     "list_projects", "index_status", "get_architecture", "get_graph_schema", "search_graph",
     "search_code", "trace_path", "get_code_snippet", "query_graph"
   ].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })));
@@ -411,6 +411,7 @@ function createSnapshotFixture(services: ReturnType<typeof createServices>, name
         branch: "main",
         commit: "0123456789abcdef",
         projectName: "delete-fixture",
+        cbmIndex: { engineVersion: "codebase-memory-mcp 0.11.0", mode: "fast" },
         localPath: sourcePath
       }]
     }),

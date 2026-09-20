@@ -50,7 +50,7 @@ test("operational metrics migration and recorder persist metadata without source
     }
     recordCbmOperationMetric(database, {
       operation: "index_repository", status: "indexed", durationMs: 12.6, spaceId: "spc_test",
-      projectName: "fixture", engineVersion: "0.9.0", indexMode: "fast", nodes: 37, edges: 44,
+      projectName: "fixture", engineVersion: "0.11.0", indexMode: "fast", nodes: 37, edges: 44,
       skippedCount: 0, artifactBytes: 1024, cgroupPeakBytes: 2048, terminationKind: "completed"
     });
     const row = sqlite.prepare("SELECT * FROM cbm_operation_metrics").get() as Record<string, unknown>;

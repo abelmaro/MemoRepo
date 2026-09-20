@@ -18,6 +18,8 @@ MemoRepo is designed for local Docker Compose usage.
 
 The Node workspaces can be run directly for development, but productive local use should use Docker Compose. The Docker runtime keeps the API, dashboard, `git`, and `codebase-memory-mcp` environment consistent.
 
+Each CBM cache has an independent runtime directory, so snapshot queries and background indexing do not share a daemon across caches. MemoRepo disables engine-managed watchers and automatic indexing, and stops its managed daemons when closing a snapshot cache or shutting down. CBM 0.11 indexes must be rebuilt from captured sources when upgrading from older formats; the gateway refuses to open incompatible indexes and keeps historical source tools available. See the quickstart upgrade notes before installing 0.3.4.
+
 ## Configuration Contract
 
 MemoRepo accepts these runtime inputs:
@@ -57,7 +59,7 @@ MemoRepo accepts these runtime inputs:
 
 Official builds include MemoRepo's public GitHub OAuth Client ID. End users do not register an OAuth App or configure a Client Secret. They may optionally provide an existing personal access token through `GH_TOKEN`; fork maintainers and local contributors may set `GITHUB_OAUTH_CLIENT_ID` as a development override.
 
-The API Docker image pins `codebase-memory-mcp` v0.9.0. Direct Node development requires that release on `PATH`. Before a snapshot cache is indexed or queried for the first time in a process, MemoRepo verifies and, when needed, disables `auto_index` and `auto_watch`. If either setting is unavailable or cannot be confirmed as disabled, the operation fails closed rather than allowing the snapshot to follow mutable source state.
+The API Docker image pins `codebase-memory-mcp` v0.11.0. Direct Node development requires that release on `PATH`. Before a snapshot cache is indexed or queried for the first time in a process, MemoRepo verifies and, when needed, disables `auto_index` and `auto_watch`. If either setting is unavailable or cannot be confirmed as disabled, the operation fails closed rather than allowing the snapshot to follow mutable source state.
 
 The optional **Ask this Space** integration is included in the API image. The adapter exposes OAuth-capable providers and models from the bundled Pi catalog, initializes its selection from the environment, and permits a dashboard selection change only when no provider login or answer is active. The catalog also declares supported verbosity and reasoning-effort values per model; the dashboard renders only declared controls and keeps the advanced section closed by default. The global selection is persisted in SQLite and restored after API restarts, with a safe fallback to the configured initial selection when a saved catalog entry is no longer available. OAuth flows that Pi can complete through an external verification URL are supported; flows that require an interactive prompt inside MemoRepo, API keys, and ambient provider credentials are unsupported. External credentials are rejected; removing a MemoRepo-managed credential still completes local sign-out even if unsupported ambient authentication remains. `AgentService` uses provider-neutral contracts with the in-process `agent-runtime`, and the runtime adapter remains the provider boundary. No separate runtime service or IPC configuration is required.
 
