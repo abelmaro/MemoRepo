@@ -2,6 +2,10 @@
 export function normalizeCbmV0110Result(tool: string, value: unknown): unknown {
   if (!isRecord(value)) return value;
   if (tool === "search_graph" || tool === "search_code") {
+    if (isRecord(value.semantic)) {
+      const { semantic, groups, ...metadata } = value;
+      return { ...metadata, results: expandTable(semantic) };
+    }
     const { cols, rows, groups, qn_rule, ...metadata } = value;
     if (!Array.isArray(cols)) return value;
     return {

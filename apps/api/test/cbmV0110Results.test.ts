@@ -34,3 +34,9 @@ test("graph query columns remain compatible without rewriting user projections",
     columns: ["qn"], rows: [["value"]]
   });
 });
+
+test("semantic graph tables expose ranked results without losing scores", () => {
+  assert.deepEqual(normalizeCbmV0110Result("search_graph", {
+    groups: [], semantic: { cols: ["qn", "label", "file", "score"], rows: [["sample.validate", "Function", "src/main.ts", 0.9]] }, semantic_total: 1
+  }), { results: [{ name: "validate", qualified_name: "sample.validate", label: "Function", file_path: "src/main.ts", score: 0.9 }], semantic_total: 1 });
+});

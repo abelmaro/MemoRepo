@@ -52,4 +52,5 @@ jobs:
           persist-credentials: false
       - run: docker build --target cbm-test -t memorepo-cbm-test -f apps/api/Dockerfile .
       - run: docker run --rm -e MEMOREPO_RUN_CBM_CONTRACT=1 memorepo-cbm-test pnpm --filter @memorepo/api test:cbm-contract
+      - run: docker run --rm memorepo-cbm-test pnpm --filter @memorepo/api perf:cbm --mode moderate --warm-repetitions 1 --output /tmp/cbm-moderate.json
       - run: docker run --rm memorepo-cbm-test pnpm --filter @memorepo/api exec node --import tsx --test test/snapshotSourceTools.test.ts test/cbmBenchmarkCorpus.test.ts

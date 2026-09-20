@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/config.js";
-import { CbmService } from "../src/services/cbmService.js";
+import { CbmService, createCbmEnvironment } from "../src/services/cbmService.js";
+import { runProcess } from "../src/services/process.js";
 import { createCbmBenchmarkCorpus } from "./cbmBenchmarkCorpus.js";
 
 const EXPECTED_GATEWAY_NATIVE_TOOLS = [
@@ -23,7 +24,7 @@ const EXPECTED_GATEWAY_NATIVE_TOOLS = [
 
 test("pinned CBM v0.11 contract discovers every page and executes every gateway native tool", {
   skip: process.env.MEMOREPO_RUN_CBM_CONTRACT !== "1"
-}, async () => {
+}, async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memorepo-cbm-contract-"));
   const corpus = createCbmBenchmarkCorpus(root);
   const managedHome = path.join(root, "managed");
@@ -54,6 +55,14 @@ test("pinned CBM v0.11 contract discovers every page and executes every gateway 
     const project = projects.projects?.[0]?.name;
     assert.ok(project, "Indexed corpus must expose one project");
 
+    if (process.platform === "win32") {
+      const started = Date.now();
+      const shell = await runProcess({ command: "powershell.exe", args: ["-Command", "Write-Output 'CBM shell ready'"],
+        env: createCbmEnvironment(cacheDir), inheritEnv: false, timeoutMs: 60_000 });
+      context.diagnostic(`Native text-search shell: exit=${shell.exitCode}, duration=${Date.now() - started}ms`);
+      assert.equal(shell.exitCode, 0, shell.stderr);
+    }
+
     const calls: Array<[string, Record<string, unknown>]> = [
       ["list_projects", {}],
       ["index_status", { project }],
@@ -68,7 +77,17 @@ test("pinned CBM v0.11 contract discovers every page and executes every gateway 
     ];
 
     for (const [tool, input] of calls) {
-      const result = await cbm.tool<unknown>(tool, input, cacheDir, 60_000);
+      let result: unknown;
+      try {
+        result = await cbm.tool<unknown>(tool, input, cacheDir, 60_000);
+      } catch (error) {
+        if (process.platform === "win32" && tool === "search_code") {
+          const direct = await runProcess({ command: "codebase-memory-mcp", args: ["cli", "--quiet", "--json", tool],
+            stdin: JSON.stringify({ ...input, format: "json" }), env: createCbmEnvironment(cacheDir), inheritEnv: false, timeoutMs: 60_000 });
+          context.diagnostic(`Native CLI text-search comparison: ${direct.exitCode}: ${direct.stdout} ${direct.stderr}`);
+        }
+        throw error;
+      }
       assert.notEqual(result, undefined, `${tool} returned undefined`);
     }
 
