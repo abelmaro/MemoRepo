@@ -464,13 +464,15 @@ export class CbmService {
       return {} as T;
     }
 
+    let response: McpToolCallResult;
     try {
-      return parseCbmToolResult<T>(tool, JSON.parse(stdout) as McpToolCallResult);
-    } catch (error) {
+      response = JSON.parse(stdout) as McpToolCallResult;
+    } catch {
       throw new Error(
         `Unable to parse codebase-memory-mcp output for ${tool}: ${sanitizePublicMessage(stdout, [this.config.memorepoHome])}`
       );
     }
+    return parseCbmToolResult<T>(tool, response);
   }
 
   private ensureImmutableCacheConfiguration(cacheDir: string): Promise<void> {

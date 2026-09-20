@@ -19,6 +19,12 @@ jobs:
       - run: mkdir -p artifacts && sudo chown 1000:1000 artifacts
       - run: docker run --rm -e MEMOREPO_RUN_CBM_CONTRACT=1 memorepo-cbm-test pnpm --filter @memorepo/api test:cbm-contract
       - run: docker run --rm -v "${{ github.workspace }}/artifacts:/artifacts" memorepo-cbm-test pnpm --filter @memorepo/api perf:cbm --output /artifacts/cbm-fast.json --mode fast --warm-repetitions 5
+      - name: Restore report ownership for artifact upload
+        if: always()
+        run: |
+          if [ -f artifacts/cbm-fast.json ]; then
+            sudo chown "$(id -u):$(id -g)" artifacts/cbm-fast.json
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

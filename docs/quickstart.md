@@ -180,6 +180,8 @@ MemoRepo assigns a separate CBM runtime directory to every index cache. On Unix 
 
 Native Windows installations require a managed-data path whose ancestors pass CBM's private-directory checks. A directory writable by another untrusted account can be refused even when MemoRepo itself can write there. The error includes the engine diagnostic. Choose a suitably protected data location or use Docker Compose; do not weaken permissions or disable CBM's checks to bypass the refusal.
 
+Native Windows development also has a cold-start limitation: CBM text search launches Windows PowerShell with an internal 30-second deadline. Hosted validation observed initial shell startup exceeding that deadline; the native contract passes after shell initialization. This does not establish cold-start reliability. Docker Compose remains the supported deployment path and does not use this Windows search subprocess.
+
 ### Troubleshooting
 
 Use the preflight panel first. It checks GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.

@@ -105,6 +105,26 @@ test("CBM sends CLI input through stdin instead of deprecated raw JSON arguments
   }
 });
 
+test("CBM CLI preserves tool errors separately from malformed JSON", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-cbm-cli-errors-"));
+  let output = JSON.stringify({ isError: true, content: [{ type: "text", text: "project not found" }] });
+  const service = new CbmService({ memorepoHome: root } as AppConfig, async (options) =>
+    options.args[0] === "config" ? immutableConfigRunner() : processResult(output));
+  try {
+    const runCli = (service as unknown as {
+      cli<T>(tool: string, value: Record<string, unknown>, options: { cacheDir: string }): Promise<T>;
+    }).cli.bind(service);
+    const options = { cacheDir: path.join(root, "cache") };
+    await assert.rejects(runCli("search_code", {}, options),
+      (error: unknown) => error instanceof CbmToolExecutionError && error.message === "project not found");
+    output = "invalid JSON";
+    await assert.rejects(runCli("search_code", {}, options), /Unable to parse codebase-memory-mcp output/);
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CBM tool execution errors preserve plain-text feedback", () => {
   assert.throws(
     () => parseCbmToolResult("detect_changes", {
