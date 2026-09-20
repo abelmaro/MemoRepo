@@ -1,4 +1,6 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8787";
+import { resolveApiUrl } from "./apiUrl";
+
+const API_URL = resolveApiUrl(import.meta.env.VITE_API_URL, window.location.hostname);
 const CONTROL_TOKEN_STORAGE_KEY = "memorepo.control-token";
 const CONTROL_UNAUTHORIZED_EVENT = "memorepo:control-unauthorized";
 const CSRF_HEADER = "x-memorepo-csrf";
@@ -545,9 +547,14 @@ export function clearControlToken(): void {
 }
 
 export async function validateControlToken(token: string): Promise<boolean> {
-  const response = await fetch(`${API_URL}/api/auth/status`, {
-    headers: { authorization: `Bearer ${token}` }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/auth/status`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+  } catch {
+    throw new Error(`Cannot reach the MemoRepo API at ${API_URL}. Check that the API is running and that the dashboard and API use the same local hostname (localhost or 127.0.0.1).`);
+  }
   if (response.status === 401) {
     return false;
   }

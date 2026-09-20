@@ -184,6 +184,10 @@ Native Windows development also has a cold-start limitation: CBM text search lau
 
 ### Troubleshooting
 
+If a Docker build reports **self-signed certificate in certificate chain**, your network may use HTTPS inspection. Add the public CA certificates already trusted by your computer to `docker/certs/` as described in [corporate CA setup](../docker/certs/README.md), then rebuild the containers. MemoRepo uses these certificates for build downloads and API runtime HTTPS requests. Native dependencies can also compile from source using the build image's Python, C++ tools, and bundled Node headers.
+
+If unlocking shows **Failed to fetch**, open `http://127.0.0.1:5173` and retry. Older dashboard builds call `127.0.0.1` even when opened through `localhost`, which the API rejects as a cross-site request before checking the token. Rebuild the dashboard with `docker compose up -d --build --no-deps web` to support both local hostnames. If the error persists, check `docker compose ps` and `http://127.0.0.1:8787/api/health` (use your configured ports). An invalid control token is reported separately from a connection failure.
+
 Use the preflight panel first. It checks GitHub connection and access, reported scopes, `codebase-memory-mcp`, `MEMOREPO_HOME` writability, disk space, and the Docker container target used by generated MCP configs.
 
 Then open the failed job log. Job logs show phase timings and usually contain the failing GitHub, Git, indexing, or snapshot operation. Job-runner failures carry stable `MR-*` codes. Errors handled by the central API application handler return a stable code and request ID that API clients can match with server logs. A GitHub 502, 503, or 504 response is reduced to a retryable message instead of exposing an upstream HTML page.

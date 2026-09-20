@@ -23,6 +23,8 @@ AGENTS.md
 *.pfx
 *.jks
 *.keystore
+docker/certs/*
+!docker/certs/README.md
 coverage/
 .DS_Store
 Thumbs.db

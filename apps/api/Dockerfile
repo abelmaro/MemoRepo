@@ -1,13 +1,23 @@
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
 
-FROM ${NODE_IMAGE} AS cbm
+FROM ${NODE_IMAGE} AS trusted-base
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY docker/certs/ /usr/local/share/ca-certificates/memorepo/
+RUN update-ca-certificates
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+FROM trusted-base AS cbm
 
 ARG CODEBASE_MEMORY_MCP_VERSION=v0.11.0
 ARG CODEBASE_MEMORY_MCP_SHA256_AMD64=1f9e8293eb2bc5c05cfa27a7e8fc033da6d729ffad525ccfcdaa3fd606306683
 ARG CODEBASE_MEMORY_MCP_SHA256_ARM64=d62eeb224d5ee3eba3070938ec62cf1033f10b041ec1c4b2fb67f7aef390cc7b
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl tar gzip \
+  && apt-get install -y --no-install-recommends curl tar gzip \
   && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -24,8 +34,13 @@ RUN set -eux; \
   find /tmp/cbm -type f -name codebase-memory-mcp -exec cp {} /codebase-memory-mcp \; ; \
   chmod 0755 /codebase-memory-mcp
 
-FROM ${NODE_IMAGE} AS build
+FROM trusted-base AS build
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV npm_config_nodedir=/usr/local
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 
@@ -62,10 +77,10 @@ ENV MEMOREPO_HOME=/tmp/memorepo-test
 
 USER node
 
-FROM ${NODE_IMAGE} AS runtime
+FROM trusted-base AS runtime
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && apt-get install -y --no-install-recommends curl git \
   && rm -rf /var/lib/apt/lists/* \
     /usr/local/lib/node_modules/npm \
     /usr/local/lib/node_modules/corepack \
