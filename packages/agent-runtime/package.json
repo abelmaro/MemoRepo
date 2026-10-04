@@ -17,8 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.80.10",
-    "@earendil-works/pi-ai": "0.80.10"
+    "@earendil-works/pi-agent-core": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
