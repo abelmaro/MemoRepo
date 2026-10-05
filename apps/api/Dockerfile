@@ -3,7 +3,7 @@ ARG NODE_IMAGE=node:22-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56c
 FROM ${NODE_IMAGE} AS trusted-base
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates libpcre2-8-0=10.42-1+deb12u2 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY docker/certs/ /usr/local/share/ca-certificates/memorepo/
