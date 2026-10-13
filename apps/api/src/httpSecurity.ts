@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { loadOrCreatePrivateFile } from "./domain/permissions.js";
 import { normalizedRequestPathname } from "./httpPath.js";
 
 const API_PREFIX = "/api";
@@ -9,9 +10,13 @@ const HEALTH_PATH = "/api/health";
 const CSRF_HEADER = "x-memorepo-csrf";
 const CSRF_VALUE = "1";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const CONTROL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
+
+export type ControlTokenSource = "environment" | "created" | "stored";
 
 export interface HttpSecurityConfig {
   controlToken: string;
+  controlTokenSource: ControlTokenSource;
   rateLimitWindowMs: number;
   authRateLimitMax: number;
   apiReadRateLimitMax: number;
@@ -20,14 +25,15 @@ export interface HttpSecurityConfig {
   mcpRateLimitMax: number;
 }
 
-export function loadHttpSecurityConfig(environment: NodeJS.ProcessEnv = process.env): HttpSecurityConfig {
-  const controlToken = environment.MEMOREPO_CONTROL_TOKEN;
-  if (!controlToken || !/^[A-Za-z0-9_-]{43,128}$/.test(controlToken)) {
-    throw new Error("MEMOREPO_CONTROL_TOKEN must contain 43 to 128 URL-safe characters");
-  }
+export function loadHttpSecurityConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+  generatedTokenPath?: string
+): HttpSecurityConfig {
+  const { controlToken, controlTokenSource } = resolveControlToken(environment.MEMOREPO_CONTROL_TOKEN, generatedTokenPath);
 
   return {
     controlToken,
+    controlTokenSource,
     rateLimitWindowMs: positiveInt(environment.MEMOREPO_RATE_LIMIT_WINDOW_MS, 60_000),
     authRateLimitMax: positiveInt(environment.MEMOREPO_AUTH_RATE_LIMIT_MAX, 10),
     apiReadRateLimitMax: positiveInt(environment.MEMOREPO_API_READ_RATE_LIMIT_MAX, 300),
@@ -76,6 +82,42 @@ export function registerControlAccessBoundary(app: FastifyInstance, config: Http
       return reply.code(403).send({ error: `State-changing API requests require ${CSRF_HEADER}: ${CSRF_VALUE}` });
     }
   });
+}
+
+export function controlTokenStartupMessage(
+  config: HttpSecurityConfig,
+  frontendOrigin: string,
+  generatedTokenPath: string
+): string | null {
+  switch (config.controlTokenSource) {
+    case "created":
+      return `Unlock the MemoRepo dashboard: ${frontendOrigin}/#token=${config.controlToken}`;
+    case "stored":
+      return `The MemoRepo control token is stored in ${generatedTokenPath}. Paste it into the dashboard unlock screen.`;
+    case "environment":
+      return null;
+  }
+}
+
+function resolveControlToken(
+  configuredToken: string | undefined,
+  generatedTokenPath: string | undefined
+): { controlToken: string; controlTokenSource: ControlTokenSource } {
+  if (configuredToken || !generatedTokenPath) {
+    if (!configuredToken || !CONTROL_TOKEN_PATTERN.test(configuredToken)) {
+      throw new Error("MEMOREPO_CONTROL_TOKEN must contain 43 to 128 URL-safe characters");
+    }
+    return { controlToken: configuredToken, controlTokenSource: "environment" };
+  }
+
+  const { content, created } = loadOrCreatePrivateFile(generatedTokenPath, () =>
+    Buffer.from(randomBytes(32).toString("base64url"), "utf8")
+  );
+  const controlToken = content.toString("utf8").trim();
+  if (!CONTROL_TOKEN_PATTERN.test(controlToken)) {
+    throw new Error(`The generated control token in ${generatedTokenPath} is invalid; delete the file and restart MemoRepo`);
+  }
+  return { controlToken, controlTokenSource: created ? "created" : "stored" };
 }
 
 function positiveInt(raw: string | undefined, fallback: number): number {

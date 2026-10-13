@@ -32,13 +32,17 @@ export function AuthGate({ children }: AuthGateProps) {
       }
     });
 
-    const storedToken = getControlToken();
-    if (!storedToken) {
-      setAuthState("unauthenticated");
-    } else {
+    let latestCheck = 0;
+    function checkStoredToken() {
+      const check = ++latestCheck;
+      const storedToken = getControlToken();
+      if (!storedToken) {
+        setAuthState("unauthenticated");
+        return;
+      }
       void validateControlToken(storedToken)
         .then((valid) => {
-          if (!active) {
+          if (!active || check !== latestCheck) {
             return;
           }
           if (valid) {
@@ -47,20 +51,33 @@ export function AuthGate({ children }: AuthGateProps) {
             clearControlToken();
             queryClient.clear();
             setAuthState("unauthenticated");
-            setError("The saved control token is no longer valid.");
+            setError("The control token is no longer valid.");
           }
         })
         .catch((validationError: unknown) => {
-          if (active) {
+          if (active && check === latestCheck) {
             setAuthState("unauthenticated");
             setError(validationError instanceof Error ? validationError.message : String(validationError));
           }
         });
     }
 
+    function unlockFromChangedLink() {
+      if (storeUnlockLinkToken()) {
+        setError(null);
+        setAuthState("checking");
+        checkStoredToken();
+      }
+    }
+
+    storeUnlockLinkToken();
+    checkStoredToken();
+    window.addEventListener("hashchange", unlockFromChangedLink);
+
     return () => {
       active = false;
       unsubscribe();
+      window.removeEventListener("hashchange", unlockFromChangedLink);
     };
   }, [queryClient]);
 
@@ -68,7 +85,7 @@ export function AuthGate({ children }: AuthGateProps) {
     event.preventDefault();
     const candidate = token.trim();
     if (!candidate) {
-      setError("Enter MEMOREPO_CONTROL_TOKEN.");
+      setError("Enter the control token.");
       return;
     }
 
@@ -114,7 +131,8 @@ export function AuthGate({ children }: AuthGateProps) {
           <p className="auth-eyebrow">Local control access</p>
           <h1>Unlock MemoRepo</h1>
           <p className="auth-copy">
-            Enter <code>MEMOREPO_CONTROL_TOKEN</code> from your local environment. It stays in this browser tab and is never added to URLs.
+            Open the unlock link MemoRepo printed when it created your token, or paste the token from the API secrets directory or{" "}
+            <code>MEMOREPO_CONTROL_TOKEN</code>. It stays in this browser tab.
           </p>
         </div>
         <label className="auth-field">
@@ -138,4 +156,16 @@ export function AuthGate({ children }: AuthGateProps) {
       </form>
     </main>
   );
+}
+
+function storeUnlockLinkToken(): boolean {
+  const token = new URLSearchParams(window.location.hash.slice(1)).get("token")?.trim();
+  if (token === undefined) {
+    return false;
+  }
+  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+  if (token) {
+    setControlToken(token);
+  }
+  return Boolean(token);
 }

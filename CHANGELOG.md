@@ -7,6 +7,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-13
+
+### Changed
+
+- Generate and persist the local control token on first start when `MEMOREPO_CONTROL_TOKEN` is empty, and print a one-time dashboard unlock link; a `.env` file is no longer required.
+- Create the first Space from the empty dashboard, select new Spaces automatically, and open the repository picker when GitHub is already connected.
+
+### Fixed
+
+- Remove a partially written secret file when its first write fails, and document control-token rotation and recovery that work while the API is stopped.
+- Show Space creation errors instead of ignoring them, and keep the new Space selected even when refreshing the Space list fails.
+
+### Security
+
+- Upgrade landing dependencies to resolve high-severity advisories in `sharp`, `http-cache-semantics`, and `source-map-js`, plus a moderate advisory in `smol-toml`.
+- Apply operating-system security updates in the API and web runtime images.
+
 ## [0.3.4] - 2026-09-20
 
 ### Changed
@@ -331,7 +348,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Add snapshot retention and local maintenance workflows.
 - Add Docker Compose support for productive local use on Windows, macOS, and Linux.
 
-[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/abelmaro/MemoRepo/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/abelmaro/MemoRepo/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/abelmaro/MemoRepo/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/abelmaro/MemoRepo/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/abelmaro/MemoRepo/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/abelmaro/MemoRepo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/abelmaro/MemoRepo/compare/v0.2.1...v0.3.0

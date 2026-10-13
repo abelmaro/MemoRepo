@@ -288,18 +288,10 @@ function analyticsFor(label: string) {
           <a class="text-link" href={quickstart.action.href} data-analytics="quickstart_click">{quickstart.action.label}</a>
         </div>
         <div class="quickstart__commands">
-          {quickstart.blocks.slice(0, 3).map((block, index) => (
+          {quickstart.blocks.map((block, index) => (
             <CodeBlock id={`quickstart-${index + 1}`} {...block} />
           ))}
-          <p class="quickstart__note">{quickstart.tokenNote}</p>
-          <CodeBlock id="quickstart-4" {...quickstart.blocks[3]} />
-          <details class="platform-details" data-motion-item>
-            <summary><span>{quickstart.powershellTitle}</span><span class="details-marker" aria-hidden="true">+</span></summary>
-            <p>{quickstart.powershellIntro}</p>
-            {quickstart.powershellBlocks.map((block, index) => (
-              <CodeBlock id={`powershell-${index + 1}`} {...block} />
-            ))}
-          </details>
+          <p class="quickstart__note">{quickstart.unlockNote}</p>
           <details class="platform-details" data-motion-item>
             <summary><span>{quickstart.optionalTokenTitle}</span><span class="details-marker" aria-hidden="true">+</span></summary>
             <p>{quickstart.optionalTokenBody}</p>

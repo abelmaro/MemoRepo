@@ -27,41 +27,28 @@ MemoRepo turns related GitHub repositories into reproducible context for coding 
 - Docker Desktop on Windows or macOS, or Docker Engine/Desktop on Linux.
 - A GitHub account with access to the repositories you want to index.
 
-Clone the project and create your environment file:
+Clone the project and start MemoRepo:
 
 ```bash
 git clone https://github.com/abelmaro/MemoRepo.git
 cd MemoRepo
-cp .env.example .env
-```
-
-Generate a control token from at least 32 random bytes:
-
-```bash
-openssl rand -hex 32
-```
-
-Set the result in `.env`:
-
-```bash
-MEMOREPO_CONTROL_TOKEN=your-generated-token
-```
-
-Start MemoRepo:
-
-```bash
 docker compose up --build
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173), then:
+On first start, the API generates a local control token and prints an unlock link:
 
-1. Unlock the dashboard with your control token.
-2. Connect GitHub from **System health**, or configure `GH_TOKEN` in `.env`.
-3. Create a space and add one or more repositories.
-4. Wait for the immutable snapshot to become active.
-5. Create a read-only connection and copy the generated MCP configuration into your coding agent.
+```text
+Unlock the MemoRepo dashboard: http://127.0.0.1:5173/#token=...
+```
 
-For PowerShell token generation, storage options, agent connection modes, and troubleshooting, follow the [complete quickstart](docs/quickstart.md).
+Open that link, then:
+
+1. Create a space.
+2. Sign in with GitHub when prompted, or configure `GH_TOKEN` in `.env`.
+3. Add one or more repositories and wait for the immutable snapshot to become active.
+4. Create a read-only connection and copy the generated MCP configuration into your coding agent.
+
+The link is printed only when the token is created. To unlock another tab later, paste the token shown by `docker compose exec api cat /var/lib/memorepo-secrets/control-token`. A `.env` file is optional; copy `.env.example` only to override defaults. For storage options, agent connection modes, and troubleshooting, follow the [complete quickstart](docs/quickstart.md).
 
 ## How it works
 

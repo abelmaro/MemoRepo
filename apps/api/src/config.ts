@@ -14,6 +14,7 @@ export interface AppConfig {
   githubOAuthClientId: string;
   memorepoHome: string;
   secretsDir: string;
+  controlTokenPath: string;
   githubCredentialKeyPath: string;
   dataDir: string;
   spacesDir: string;
@@ -122,6 +123,7 @@ export function loadConfig(): AppConfig {
     githubOAuthClientId: process.env.GITHUB_OAUTH_CLIENT_ID?.trim() || MEMOREPO_GITHUB_OAUTH_CLIENT_ID,
     memorepoHome,
     secretsDir,
+    controlTokenPath: path.join(secretsDir, "control-token"),
     githubCredentialKeyPath: path.join(secretsDir, "github-credentials.key"),
     dataDir,
     spacesDir,

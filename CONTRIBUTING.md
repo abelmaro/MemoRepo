@@ -27,7 +27,7 @@ Install dependencies from the repository root:
 pnpm install
 ```
 
-Copy `.env.example` to `.env` and provide the required local values. The
+Copy `.env.example` to `.env` only when you need to override a default. The
 `.env` file is ignored by Git and must never be committed. For a complete
 runtime walkthrough, see the [quickstart](docs/quickstart.md).
 

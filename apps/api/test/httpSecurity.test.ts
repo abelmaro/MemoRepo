@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import Fastify from "fastify";
 import {
+  controlTokenStartupMessage,
   loadHttpSecurityConfig,
   registerControlAccessBoundary,
   registerRateLimiting,
@@ -26,6 +30,45 @@ test("HTTP security configuration requires a strong control token", () => {
   assert.equal(config.controlToken, CONTROL_TOKEN);
   assert.equal(config.apiReadRateLimitMax, 300);
   assert.equal(config.apiWriteRateLimitMax, 30);
+});
+
+test("HTTP security configuration generates, reuses, and rotates a control token when none is configured", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memorepo-control-token-"));
+  const tokenPath = path.join(root, "secrets", "control-token");
+  const origin = "http://127.0.0.1:5173";
+  try {
+    const created = loadHttpSecurityConfig({}, tokenPath);
+    assert.match(created.controlToken, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(created.controlTokenSource, "created");
+    assert.equal(await readFile(tokenPath, "utf8"), created.controlToken);
+    assert.equal(controlTokenStartupMessage(created, origin, tokenPath), `Unlock the MemoRepo dashboard: ${origin}/#token=${created.controlToken}`);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(tokenPath)).mode & 0o777, 0o600);
+    }
+
+    const stored = loadHttpSecurityConfig({ MEMOREPO_CONTROL_TOKEN: "" }, tokenPath);
+    assert.equal(stored.controlToken, created.controlToken);
+    assert.equal(stored.controlTokenSource, "stored");
+    const storedMessage = controlTokenStartupMessage(stored, origin, tokenPath);
+    assert.ok(storedMessage?.includes(tokenPath));
+    assert.ok(!storedMessage?.includes(created.controlToken));
+
+    const configured = loadHttpSecurityConfig({ MEMOREPO_CONTROL_TOKEN: CONTROL_TOKEN }, tokenPath);
+    assert.equal(configured.controlToken, CONTROL_TOKEN);
+    assert.equal(configured.controlTokenSource, "environment");
+    assert.equal(controlTokenStartupMessage(configured, origin, tokenPath), null);
+    assert.throws(() => loadHttpSecurityConfig({ MEMOREPO_CONTROL_TOKEN: "too-short" }, tokenPath), /URL-safe characters/);
+
+    await rm(tokenPath);
+    const rotated = loadHttpSecurityConfig({}, tokenPath);
+    assert.equal(rotated.controlTokenSource, "created");
+    assert.notEqual(rotated.controlToken, created.controlToken);
+
+    await writeFile(tokenPath, "corrupted");
+    assert.throws(() => loadHttpSecurityConfig({}, tokenPath), /delete the file and restart/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("control API requires bearer authentication and CSRF without changing MCP authentication", async () => {
@@ -170,6 +213,7 @@ test("rate limiting isolates request classes and ignores spoofed forwarding head
 function securityConfig(overrides: Partial<HttpSecurityConfig> = {}): HttpSecurityConfig {
   return {
     controlToken: CONTROL_TOKEN,
+    controlTokenSource: "environment",
     rateLimitWindowMs: 60_000,
     authRateLimitMax: 10,
     apiReadRateLimitMax: 300,
