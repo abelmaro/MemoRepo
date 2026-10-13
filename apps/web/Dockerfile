@@ -29,6 +29,11 @@ RUN pnpm --filter @memorepo/web build
 
 FROM nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:daa17b944bac2b578e962da4c61ad72a59233b3c63abea17113acaf4e6b9aea4
 
+USER root
+COPY docker/certs/ /usr/local/share/ca-certificates/memorepo/
+RUN update-ca-certificates && apk upgrade --no-cache
+USER 101
+
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 

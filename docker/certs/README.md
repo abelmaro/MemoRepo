@@ -8,8 +8,9 @@ intermediate CA certificates. Do not include private keys.
 
 This directory can remain empty apart from this README on networks that use
 public certificate authorities. Local certificate files are ignored by Git.
-They are included in both build stages for dependency downloads and in the API
-runtime for Git, curl, and Node HTTPS requests; TLS verification remains enabled.
+They are included in both build stages for dependency downloads, in the web
+runtime for OS package updates, and in the API runtime for Git, curl, and Node
+HTTPS requests; TLS verification remains enabled.
 
 After adding, replacing, or removing a certificate, rebuild and recreate the containers:
 

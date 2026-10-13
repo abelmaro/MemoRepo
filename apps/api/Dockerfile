@@ -80,6 +80,7 @@ USER node
 FROM trusted-base AS runtime
 
 RUN apt-get update \
+  && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends curl git \
   && rm -rf /var/lib/apt/lists/* \
     /usr/local/lib/node_modules/npm \
