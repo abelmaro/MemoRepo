@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply the 72-hour dependency release-age policy to local pnpm resolution so Dependabot can update the lockfile.
+
 ## [0.3.5] - 2026-10-13
 
 ### Changed
