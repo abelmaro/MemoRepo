@@ -13,7 +13,7 @@
     "typecheck": "astro check"
   },
   "dependencies": {
-    "@astrojs/react": "^6.0.6",
+    "@astrojs/react": "^7.0.1",
     "astro": "^7.3.8",
     "motion": "^12.43.0",
     "react": "^19.3.0",
