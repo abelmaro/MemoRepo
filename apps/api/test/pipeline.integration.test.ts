@@ -3778,6 +3778,7 @@ test("HTTP rate limits run before authentication and preserve CORS error details
   const services = createServices();
   const app = await createApp(services, {
     controlToken: TEST_CONTROL_TOKEN,
+    controlTokenSource: "environment",
     rateLimitWindowMs: 60_000,
     authRateLimitMax: 2,
     apiReadRateLimitMax: 10,

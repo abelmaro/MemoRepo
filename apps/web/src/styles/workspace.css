@@ -211,6 +211,19 @@
   background: var(--color-surface-primary);
 }
 
+.new-space-inline-form {
+  width: min(100%, 480px);
+  text-align: left;
+}
+
+.new-space-inline-form label {
+  display: grid;
+}
+
+.new-space-inline-form .inline-alert {
+  grid-column: 1 / -1;
+}
+
 .repo-section {
   overflow: visible;
 }

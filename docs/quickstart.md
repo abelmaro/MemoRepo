@@ -6,13 +6,13 @@ This guide takes a local user from a clean checkout to a working read-only MCP c
 
 Install Docker Desktop or Docker Engine.
 
-Create an environment file:
+A `.env` file is optional. Docker Compose runs without it; create one only when you want to override a default:
 
 ```bash
 cp .env.example .env
 ```
 
-Generate a random control token, for example:
+By default, the API generates the local control token on first start and stores it in the private `memorepo-secrets` volume. To manage the token yourself instead, generate a random value, for example:
 
 ```bash
 openssl rand -hex 32
@@ -24,7 +24,7 @@ PowerShell 7:
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 ```
 
-Edit `.env` and set the local control secret:
+Then set it in `.env`. A configured `MEMOREPO_CONTROL_TOKEN` always takes priority over the generated token:
 
 ```bash
 MEMOREPO_CONTROL_TOKEN=your-random-control-token
@@ -54,13 +54,30 @@ Keep `MEMOREPO_API_CONTAINER_NAME=memorepo-api` unless you also change `containe
 docker compose up --build
 ```
 
-Open:
+When `MEMOREPO_CONTROL_TOKEN` is empty, the API prints an unlock link after it starts:
 
 ```text
-http://127.0.0.1:5173
+Unlock the MemoRepo dashboard: http://127.0.0.1:5173/#token=...
 ```
 
-Paste `MEMOREPO_CONTROL_TOKEN` into the unlock screen. The dashboard keeps it only in `sessionStorage` for that browser tab.
+Open that link. The token travels only in the URL fragment, which browsers do not send to servers; the dashboard moves it into `sessionStorage` for that browser tab and removes it from the address bar. Treat the link as a secret.
+
+The link is printed only when the token is created; later starts log where the token is stored instead. To unlock another tab or browser, paste the token into the unlock screen:
+
+```bash
+docker compose exec api cat /var/lib/memorepo-secrets/control-token
+```
+
+To rotate the generated token, or to recover when the API reports that the stored token is invalid, delete it and restart the API. `docker compose run` works even while the API container is stopped or restarting:
+
+```bash
+docker compose run --rm --no-deps api rm -f /var/lib/memorepo-secrets/control-token
+docker compose restart api
+```
+
+The restarted API creates a new token and prints a new unlock link.
+
+If you configured `MEMOREPO_CONTROL_TOKEN`, no link is printed. Open `http://127.0.0.1:5173` and paste the token into the unlock screen.
 
 The dashboard preflight panel should show the local runtime checks. Fix failed local checks before adding repositories; when `GH_TOKEN` is empty, a GitHub connection warning is expected until the next step.
 
@@ -89,13 +106,13 @@ MemoRepo stores repository metadata in SQLite. It does not clone repositories du
 
 ## 5. Create A Space
 
-Click `New Space` and choose a name that matches the agent context you want, such as:
+Enter a name in the **Create your first Space** form, or use the `+` button next to **Spaces** for later spaces. Choose a name that matches the agent context you want, such as:
 
 ```text
 analytics
 ```
 
-A space isolates repository membership, snapshots, and MCP connections.
+A space isolates repository membership, snapshots, and MCP connections. MemoRepo selects the new space and opens the repository picker when GitHub is already connected; otherwise, sign in with GitHub from the prompt in the space first.
 
 ## 6. Add Repositories
 

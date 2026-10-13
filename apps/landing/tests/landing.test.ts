@@ -287,12 +287,13 @@ describe("landing build output", () => {
       new RegExp(`\\b(?:v)?${EXPECTED_VERSION.replaceAll(".", "\\.")}\\b`),
     );
     expect(bodyText).toContain("Free and open source under the MIT License.");
-    const generateTokenIndex = bodyText.indexOf("Generate the control token");
-    const setTokenIndex = bodyText.indexOf("Set the generated value in .env");
+    const cloneIndex = bodyText.indexOf("Clone the repository");
     const startIndex = bodyText.indexOf("Start MemoRepo");
-    expect(generateTokenIndex).toBeGreaterThanOrEqual(0);
-    expect(setTokenIndex).toBeGreaterThan(generateTokenIndex);
-    expect(startIndex).toBeGreaterThan(setTokenIndex);
+    const unlockIndex = bodyText.indexOf("prints an unlock link in the API logs");
+    expect(cloneIndex).toBeGreaterThanOrEqual(0);
+    expect(startIndex).toBeGreaterThan(cloneIndex);
+    expect(unlockIndex).toBeGreaterThan(startIndex);
+    expect(bodyText).not.toContain("Generate the control token");
   });
 
   it("ships motion as progressive enhancement over complete static content", async () => {

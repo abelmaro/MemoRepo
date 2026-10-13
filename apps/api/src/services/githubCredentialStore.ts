@@ -1,8 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import type { AppDatabase } from "../db/connection.js";
-import { ensurePrivateDir, restrictPrivateFile } from "../domain/permissions.js";
+import { loadOrCreatePrivateFile } from "../domain/permissions.js";
 
 const CREDENTIAL_ID = "github";
 const KEY_BYTES = 32;
@@ -219,24 +217,7 @@ export class GitHubCredentialStore {
 }
 
 function loadOrCreateKey(keyPath: string): Buffer {
-  ensurePrivateDir(path.dirname(keyPath));
-
-  try {
-    const descriptor = fs.openSync(keyPath, "wx", 0o600);
-    try {
-      fs.writeFileSync(descriptor, randomBytes(KEY_BYTES));
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-  }
-
-  restrictPrivateFile(keyPath);
-  const key = fs.readFileSync(keyPath);
+  const key = loadOrCreatePrivateFile(keyPath, () => randomBytes(KEY_BYTES)).content;
   if (key.length !== KEY_BYTES) {
     throw new Error("GitHub credential encryption key must contain exactly 32 bytes");
   }

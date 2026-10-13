@@ -9,14 +9,14 @@ import { JobsPanel } from "./components/JobsPanel";
 import { LifecyclePanel } from "./components/LifecyclePanel";
 import { McpModal } from "./components/McpModal";
 import { Modal } from "./components/Modal";
-import { NewSpaceModal } from "./components/NewSpaceModal";
+import { NewSpaceForm, NewSpaceModal } from "./components/NewSpaceModal";
 import { PreflightPanel } from "./components/PreflightPanel";
 import { QueryErrorState } from "./components/QueryErrorState";
 import { RemovedRepositoryRow } from "./components/RemovedRepositoryRow";
 import { RepositoryRow } from "./components/RepositoryRow";
 import { RepositoryBatchProgress } from "./components/RepositoryBatchProgress";
 import { StatusStrip } from "./components/StatusStrip";
-import { api, type Job, type Space, type SpaceRepository } from "./lib/api";
+import { api, type GitHubConnectionStatus, type Job, type Space, type SpaceRepository } from "./lib/api";
 import { useDashboardEvents } from "./lib/dashboardEvents";
 import { matchesRepositoryKind, REPOSITORY_KIND_FILTERS, type RepositoryKindFilter } from "./lib/repositoryKinds";
 import { snapshotStateSummary } from "./lib/snapshotState";
@@ -67,6 +67,11 @@ export function App() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
     queryFn: () => api<{ jobs: Job[] }>("/api/jobs")
+  });
+
+  const githubConnectionQuery = useQuery({
+    queryKey: ["github-auth-status"],
+    queryFn: () => api<GitHubConnectionStatus>("/api/github/auth/status")
   });
 
   const updateSpaceMutation = useMutation({
@@ -130,6 +135,14 @@ export function App() {
     setRepoSearch("");
     setRepoKindFilter("all");
     setManagementView(null);
+  }
+
+  function openCreatedSpace(space: Space) {
+    setNewSpaceOpen(false);
+    selectSpace(space);
+    if (githubConnectionQuery.data?.connected) {
+      setAddRepoOpen(true);
+    }
   }
 
   function setAskSpaceOpen(open: boolean) {
@@ -249,10 +262,7 @@ export function App() {
             <Layers size={38} />
             <h2>Create your first Space</h2>
             <p>A Space groups repositories into one isolated, read-only context for coding agents.</p>
-            <button className="primary-button" type="button" onClick={() => setNewSpaceOpen(true)}>
-              <Plus size={18} />
-              <span>Create Space</span>
-            </button>
+            <NewSpaceForm inline onCreated={openCreatedSpace} />
           </section>
         ) : (
           <>
@@ -487,7 +497,7 @@ export function App() {
         )}
       </main>
 
-      {newSpaceOpen ? <NewSpaceModal onClose={() => setNewSpaceOpen(false)} /> : null}
+      {newSpaceOpen ? <NewSpaceModal onClose={() => setNewSpaceOpen(false)} onCreated={openCreatedSpace} /> : null}
       {addRepoOpen && selectedSpace ? (
         <AddRepoModal
           space={selectedSpace}

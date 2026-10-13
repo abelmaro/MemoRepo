@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Generate and persist the local control token on first start when `MEMOREPO_CONTROL_TOKEN` is empty, and print a one-time dashboard unlock link; a `.env` file is no longer required.
+- Create the first Space from the empty dashboard, select new Spaces automatically, and open the repository picker when GitHub is already connected.
+
 ## [0.3.4] - 2026-09-20
 
 ### Changed

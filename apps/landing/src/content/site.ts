@@ -17,7 +17,7 @@ type TitledCopy = {
 
 type CodeBlock = {
   readonly title: string;
-  readonly language: "bash" | "dotenv" | "powershell";
+  readonly language: "bash" | "dotenv";
   readonly code: string;
   readonly description?: string;
 };
@@ -136,11 +136,8 @@ export interface SiteContent {
     readonly intro: string;
     readonly requirementsLabel: string;
     readonly requirements: readonly [string, string];
-    readonly blocks: readonly [CodeBlock, CodeBlock, CodeBlock, CodeBlock];
-    readonly powershellTitle: string;
-    readonly powershellIntro: string;
-    readonly powershellBlocks: readonly [CodeBlock, CodeBlock];
-    readonly tokenNote: string;
+    readonly blocks: readonly [CodeBlock, CodeBlock];
+    readonly unlockNote: string;
     readonly optionalTokenTitle: string;
     readonly optionalTokenBody: string;
     readonly optionalTokenBlock: CodeBlock;
@@ -469,48 +466,23 @@ export const siteContent = {
         code: "git clone https://github.com/abelmaro/MemoRepo.git\ncd MemoRepo",
       },
       {
-        title: "Prepare the environment",
-        language: "bash",
-        code: "cp .env.example .env",
-      },
-      {
-        title: "Generate the control token",
-        language: "bash",
-        code: "openssl rand -hex 32",
-      },
-      {
         title: "Start MemoRepo",
         language: "bash",
         code: "docker compose up --build",
       },
     ],
-    powershellTitle: "PowerShell 7",
-    powershellIntro:
-      "Use the native file-copy command and cryptographic token generator on Windows.",
-    powershellBlocks: [
-      {
-        title: "Prepare the environment",
-        language: "powershell",
-        code: "Copy-Item .env.example .env",
-      },
-      {
-        title: "Generate the control token",
-        language: "powershell",
-        code: "[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()",
-      },
-    ],
-    tokenNote:
-      "Set the generated value in .env as MEMOREPO_CONTROL_TOKEN. Treat the control token and generated MCP configurations as local secrets.",
+    unlockNote:
+      "On first start, MemoRepo generates a local control token and prints an unlock link in the API logs. Open that link to unlock the dashboard. Treat the unlock link and generated MCP configurations as local secrets.",
     optionalTokenTitle: "Optional: use an existing GitHub token",
     optionalTokenBody:
-      "Set GH_TOKEN only when you want to skip the default OAuth Device Flow. It must be able to read every repository you plan to index and takes priority over a stored OAuth credential.",
+      "Copy .env.example to .env and set GH_TOKEN only when you want to skip the default OAuth Device Flow. It must be able to read every repository you plan to index and takes priority over a stored OAuth credential.",
     optionalTokenBlock: {
       title: "Set an existing GitHub token",
       language: "dotenv",
       code: "GH_TOKEN=your-github-token",
     },
     afterStart:
-      "Open http://127.0.0.1:5173, unlock the dashboard with the control token, connect GitHub, create a Space, add repositories, wait for the immutable snapshot to become active, and generate a read-only MCP connection.",
+      "Open http://127.0.0.1:5173, create a Space, sign in with GitHub when prompted, add repositories, wait for the immutable snapshot to become active, and generate a read-only MCP connection.",
     action: {
       label: "Open the complete quickstart",
       href: "https://github.com/abelmaro/MemoRepo/blob/main/docs/quickstart.md",

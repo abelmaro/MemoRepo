@@ -57,6 +57,7 @@ test("dashboard stream is authenticated, sends ready and invalidations, and clea
   } as never);
   registerControlAccessBoundary(app, {
     controlToken: CONTROL_TOKEN,
+    controlTokenSource: "environment",
     rateLimitWindowMs: 60_000,
     authRateLimitMax: 10,
     apiReadRateLimitMax: 300,

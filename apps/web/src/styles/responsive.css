@@ -296,6 +296,7 @@
     grid-template-columns: 1fr;
   }
 
+  .inline-form .primary-button,
   .inline-form .secondary-button {
     width: 100%;
   }
