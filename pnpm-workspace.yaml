@@ -5,3 +5,6 @@ packages:
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
+
+# Match the Dependabot release-age policy so local updates resolve the same mature versions.
+minimumReleaseAge: 4320
