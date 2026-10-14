@@ -13,7 +13,7 @@
     "typecheck": "astro check"
   },
   "dependencies": {
-    "@astrojs/react": "^6.0.6",
+    "@astrojs/react": "^7.0.1",
     "astro": "^7.3.8",
     "motion": "^12.43.0",
     "react": "^19.3.0",
@@ -25,7 +25,7 @@
     "@astrojs/check": "^0.9.10",
     "@types/node": "^22.20.4",
     "axe-core": "^4.13.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.1.2",
     "lighthouse": "^13.5.0",
     "playwright": "^1.63.0",
     "typescript": "^5.9.3",

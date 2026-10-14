@@ -122,8 +122,12 @@ export function aggregateRetrievalRankings(rankings: readonly unknown[], expecte
 
 export async function runCbmBenchmark(config: CbmBenchmarkConfig): Promise<CbmBenchmarkReport> {
   const startedAt = new Date();
-  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "memorepo-cbm-run-"));
-  const corpus = createCbmBenchmarkCorpus(runRoot);
+  // CBM derives the project name from the corpus path, and that name affects semantic ranking.
+  // A fixed path keeps semantic results comparable across runs.
+  const runRoot = path.join(os.tmpdir(), "memorepo-cbm-benchmark");
+  fs.rmSync(runRoot, { recursive: true, force: true });
+  fs.mkdirSync(runRoot, { recursive: true });
+  const corpus = createCbmBenchmarkCorpus(runRoot, "corpus");
   const managedHome = path.join(runRoot, "managed");
   const cacheDir = path.join(managedHome, "index");
   const previousHome = process.env.MEMOREPO_HOME;

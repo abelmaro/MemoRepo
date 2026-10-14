@@ -92,8 +92,9 @@ router.put("/profiles/:id", () => ({ updated: true }));
   "beta/README.md": "A second project intentionally contains homonymous symbols.\n"
 };
 
-export function createCbmBenchmarkCorpus(parent = os.tmpdir()): BenchmarkCorpus {
-  const root = fs.mkdtempSync(path.join(parent, "memorepo-cbm-corpus-"));
+export function createCbmBenchmarkCorpus(parent = os.tmpdir(), directoryName?: string): BenchmarkCorpus {
+  const root = directoryName ? path.join(parent, directoryName) : fs.mkdtempSync(path.join(parent, "memorepo-cbm-corpus-"));
+  if (directoryName) fs.mkdirSync(root);
   for (const [relativePath, contents] of Object.entries(FILES)) {
     const target = path.join(root, ...relativePath.split("/"));
     fs.mkdirSync(path.dirname(target), { recursive: true });

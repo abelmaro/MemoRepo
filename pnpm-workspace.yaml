@@ -3,8 +3,11 @@ packages:
   - packages/*
 
 onlyBuiltDependencies:
-  - better-sqlite3
   - esbuild
+
+# better-sqlite3 ships prebuilt binaries; skip its implicit node-gyp rebuild.
+ignoredBuiltDependencies:
+  - better-sqlite3
 
 # Match the Dependabot release-age policy so local updates resolve the same mature versions.
 minimumReleaseAge: 4320

@@ -17,3 +17,7 @@ updates:
       - /apps/web
     schedule:
       interval: weekly
+    ignore:
+      # Stay on the Node.js LTS line used by CI and the API image.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
