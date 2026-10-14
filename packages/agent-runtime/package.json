@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.10",
-    "@earendil-works/pi-ai": "0.80.10"
+    "@earendil-works/pi-ai": "1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
