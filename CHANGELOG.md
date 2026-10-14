@@ -7,9 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Update jsdom to 30, Vite to 8, better-sqlite3 to 13, `@astrojs/react` to 7, the Nginx runtime image to 1.31.5, and pinned GitHub Actions.
+- Use the prebuilt binaries bundled with better-sqlite3 13 instead of compiling it during installation.
+- Keep Docker images on the Node.js LTS line used by CI and the API; Dependabot no longer proposes Node.js major upgrades.
+
 ### Fixed
 
 - Apply the 72-hour dependency release-age policy to local pnpm resolution so Dependabot can update the lockfile.
+- Make the CBM benchmark corpus path deterministic so the semantic retrieval gate no longer fails intermittently.
 
 ## [0.3.5] - 2026-10-13
 
