@@ -7,6 +7,10 @@ updates:
     groups:
       compatible-updates:
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 is the native compiler without the JavaScript API that astro check and the CBM test oracles use.
+      - dependency-name: typescript
+        versions: [">=7"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

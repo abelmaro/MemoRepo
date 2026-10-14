@@ -11,7 +11,7 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AgentProviderFailureError } from "../src/agentRuntimeAdapter.js";
-import { PiAgentRuntimeAdapter } from "../src/piAgentRuntimeAdapter.js";
+import { agentStopReason, PiAgentRuntimeAdapter } from "../src/piAgentRuntimeAdapter.js";
 
 test("keeps the account key stable when OAuth tokens rotate for the same stored account", async () => {
   const store = new MutableCredentialStore(
@@ -724,3 +724,11 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test("maps provider stop reasons onto the runtime contract", () => {
+  for (const reason of ["stop", "length", "toolUse", "error", "aborted"] as const) {
+    assert.equal(agentStopReason(reason), reason);
+  }
+  assert.equal(agentStopReason("pending"), "error");
+  assert.equal(agentStopReason("deferred"), "error");
+});

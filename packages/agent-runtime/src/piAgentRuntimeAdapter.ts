@@ -13,6 +13,7 @@ import type {
   Model,
   Models,
   ProviderResponse,
+  StopReason,
   TSchema,
   Usage
 } from "@earendil-works/pi-ai";
@@ -34,6 +35,7 @@ import type {
   AgentRunFailureDiagnostic,
   AgentRunFailureStage,
   AgentRunSettings,
+  AgentStopReason,
   AgentToolDefinition,
   AgentVerbosity,
   JsonValue
@@ -387,7 +389,7 @@ export class PiAgentRuntimeAdapter implements AgentRuntimeAdapter {
         if (event.type === "message_end" && event.message.role === "assistant") {
           latestAssistantMessage = event.message;
           await input.onProviderTurn({
-            stopReason: event.message.stopReason,
+            stopReason: agentStopReason(event.message.stopReason),
             usage: {
               input: event.message.usage.input,
               output: event.message.usage.output,
@@ -1226,4 +1228,9 @@ function piTransport(value: unknown): AgentProviderTransport {
   if (value === "sse") return "sse";
   if (value === "websocket" || value === "websocket-cached") return "websocket";
   return "unknown";
+}
+
+// A completed message should never be "pending" or "deferred"; treat either as a failed turn.
+export function agentStopReason(reason: StopReason): AgentStopReason {
+  return reason === "pending" || reason === "deferred" ? "error" : reason;
 }
