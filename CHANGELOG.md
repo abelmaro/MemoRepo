@@ -12,11 +12,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Update jsdom to 30, Vite to 8, better-sqlite3 to 13, `@astrojs/react` to 7, the Nginx runtime image to 1.31.5, and pinned GitHub Actions.
 - Use the prebuilt binaries bundled with better-sqlite3 13 instead of compiling it during installation.
 - Keep Docker images on the Node.js LTS line used by CI and the API; Dependabot no longer proposes Node.js major upgrades.
+- Update the Pi agent runtime to 1.1, Vitest to 5, Motion to 14, the Node.js 22 base image, and compatible API, dashboard, and landing dependencies.
+- Make GPT-5.5 the default Ask this Space model because Pi 1.1 no longer offers GPT-5.4. Installations that set `MEMOREPO_AGENT_MODEL_ID=gpt-5.4` should change it to `gpt-5.5` or pick another model in the dashboard.
+- Stay on TypeScript 5.9; TypeScript 7 lacks the compiler API used by `astro check` and the CBM test oracles.
 
 ### Fixed
 
 - Apply the 72-hour dependency release-age policy to local pnpm resolution so Dependabot can update the lockfile.
 - Make the CBM benchmark corpus path deterministic so the semantic retrieval gate no longer fails intermittently.
+- Allow the native Windows CBM contract up to 180 seconds for the PowerShell cold start observed on hosted runners.
 
 ## [0.3.5] - 2026-10-13
 

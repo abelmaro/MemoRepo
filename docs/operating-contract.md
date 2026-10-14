@@ -32,7 +32,7 @@ MemoRepo accepts these runtime inputs:
 - `WEB_PORT`: the local dashboard port, defaulting to `5173`.
 - `MEMOREPO_API_CONTAINER_NAME`: the Docker container name used by generated stdio MCP configs, defaulting to `memorepo-api`.
 - `MEMOREPO_AGENT_CREDENTIAL_FILE`: an optional credential-store path override. By default it is `agent-credentials.json` under `MEMOREPO_SECRETS_DIR`; Docker Compose therefore persists it in the existing private `memorepo-secrets` volume.
-- `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`: the initial Ask this Space selection. They are read from the environment; `.env.example` supplies `openai-codex` and `gpt-5.4`. Dashboard changes to the global provider, model, verbosity, and reasoning-effort selection are persisted in SQLite and restored after API restarts. If the saved selection is absent from the current catalog, MemoRepo falls back to the configured initial selection.
+- `MEMOREPO_AGENT_PROVIDER_ID` and `MEMOREPO_AGENT_MODEL_ID`: the initial Ask this Space selection. They are read from the environment; `.env.example` supplies `openai-codex` and `gpt-5.5`. Dashboard changes to the global provider, model, verbosity, and reasoning-effort selection are persisted in SQLite and restored after API restarts. If the saved selection is absent from the current catalog, MemoRepo falls back to the configured initial selection.
 - `MEMOREPO_AGENT_MAX_RUN_SECONDS`: the per-attempt wall-clock safety ceiling, defaulting to `1800`.
 - `MEMOREPO_AGENT_MAX_TOOL_CALLS`: the per-attempt tool-call safety ceiling, defaulting to `200`.
 - `MEMOREPO_AGENT_MAX_PROVIDER_ROUNDS`: the per-attempt provider-round safety ceiling, defaulting to `50`.
