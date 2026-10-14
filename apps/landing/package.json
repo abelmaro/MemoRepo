@@ -28,7 +28,7 @@
     "jsdom": "^30.1.2",
     "lighthouse": "^13.5.0",
     "playwright": "^1.63.0",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   }
 }
