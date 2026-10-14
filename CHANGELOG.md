@@ -20,7 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Apply the 72-hour dependency release-age policy to local pnpm resolution so Dependabot can update the lockfile.
 - Make the CBM benchmark corpus path deterministic so the semantic retrieval gate no longer fails intermittently.
-- Warm up Windows PowerShell before the native CBM contract in CI so its cold start no longer times out.
+- Allow the native Windows CBM contract up to 180 seconds for the PowerShell cold start observed on hosted runners.
 
 ## [0.3.5] - 2026-10-13
 
