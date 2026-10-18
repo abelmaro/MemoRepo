@@ -14,7 +14,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.104.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "lucide-react": "^0.539.0",
+    "lucide-react": "^1.57.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
