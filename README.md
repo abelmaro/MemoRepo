@@ -4,6 +4,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/abelmaro/MemoRepo)](https://github.com/abelmaro/MemoRepo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/abelmaro/badge.svg)](https://hub.xerj.org/contributors/abelmaro)
+[![memorepo MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/abelmaro/MemoRepo/badges/score.svg)](https://glama.ai/mcp/servers/abelmaro/MemoRepo)
 
 ![MemoRepo banner](docs/assets/banner.png)
 
