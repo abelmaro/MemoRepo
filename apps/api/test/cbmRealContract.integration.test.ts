@@ -57,7 +57,7 @@ test("pinned CBM v0.11 contract discovers every page and executes every gateway 
 
     if (process.platform === "win32") {
       const started = Date.now();
-      const shell = await runProcess({ command: "powershell.exe", args: ["-Command", "Write-Output 'CBM shell ready'"],
+      const shell = await runProcess({ command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", "Write-Output 'CBM shell ready'"],
         env: createCbmEnvironment(cacheDir), inheritEnv: false, timeoutMs: 180_000 });
       context.diagnostic(`Native text-search shell: exit=${shell.exitCode}, duration=${Date.now() - started}ms`);
       assert.equal(shell.exitCode, 0, shell.stderr);
