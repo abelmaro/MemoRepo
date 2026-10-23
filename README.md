@@ -3,6 +3,7 @@
 [![CI](https://github.com/abelmaro/MemoRepo/actions/workflows/ci.yml/badge.svg)](https://github.com/abelmaro/MemoRepo/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/abelmaro/MemoRepo)](https://github.com/abelmaro/MemoRepo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/abelmaro/badge.svg)](https://hub.xerj.org/contributors/abelmaro)
 
 ![MemoRepo banner](docs/assets/banner.png)
 
