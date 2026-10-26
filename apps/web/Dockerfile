@@ -27,7 +27,7 @@ ENV VITE_API_URL=${VITE_API_URL}
 
 RUN pnpm --filter @memorepo/web build
 
-FROM nginxinc/nginx-unprivileged:1.31.5-alpine@sha256:19c132c9ab02d3b783f478743dafc7a7f42e27aa7d2bdcbec1bb1128ca8f2a07
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:378d0c32f6562f7fd9629170797f57d2b953aa09be983b3daaf4809bb039ca00
 
 USER root
 COPY docker/certs/ /usr/local/share/ca-certificates/memorepo/
